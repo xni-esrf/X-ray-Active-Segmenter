@@ -1,0 +1,6 @@
+numpy
+tifffile
+zarr
+h5py
+PySide6
+vispy
