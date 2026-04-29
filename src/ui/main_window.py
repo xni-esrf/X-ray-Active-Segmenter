@@ -9,8 +9,15 @@ from typing import Dict, Literal, Mapping, Optional, Sequence, Set, Tuple, cast
 import numpy as np
 
 from PySide6.QtCore import QObject, QEvent, QThread, Qt, QTimer, Signal, Slot
-from PySide6.QtGui import QCloseEvent, QKeySequence, QShortcut
-from PySide6.QtWidgets import QApplication, QGridLayout, QMainWindow, QWidget
+from PySide6.QtGui import QCloseEvent, QKeySequence, QResizeEvent, QShortcut
+from PySide6.QtWidgets import (
+    QApplication,
+    QGridLayout,
+    QMainWindow,
+    QScrollArea,
+    QSplitter,
+    QWidget,
+)
 
 from ..annotation import BrushRadius, EditOperation, SegmentationEditor, SegmentationKind
 from ..bbox import (
@@ -714,6 +721,10 @@ class _LearningInferenceWorker(QObject):
 
 
 class MainWindow(QMainWindow):
+    _CONTROL_PANEL_MIN_WIDTH_FRACTION = 0.10
+    _CONTROL_PANEL_MAX_WIDTH_FRACTION = 0.50
+    _CONTROL_PANEL_INITIAL_WIDTH_FRACTION = 0.25
+
     def __init__(
         self,
         renderer: Renderer,
@@ -835,20 +846,41 @@ class MainWindow(QMainWindow):
             ),
         }
 
-        container = QWidget()
-        layout = QGridLayout()
-        layout.addWidget(self.views["axial"], 0, 0)
-        layout.addWidget(self.views["coronal"], 0, 1)
-        layout.addWidget(self.views["sagittal"], 1, 0, 1, 2)
-        layout.setColumnStretch(0, 1)
-        layout.setColumnStretch(1, 1)
-        layout.setColumnStretch(2, 0)
-        layout.setRowStretch(0, 1)
-        layout.setRowStretch(1, 1)
-        layout.setColumnMinimumWidth(2, 320)
-        layout.addWidget(self.bottom_panel, 0, 2, 2, 1)
-        container.setLayout(layout)
-        self.setCentralWidget(container)
+        left_panel = QWidget()
+        left_layout = QGridLayout()
+        left_layout.addWidget(self.views["axial"], 0, 0)
+        left_layout.addWidget(self.views["coronal"], 0, 1)
+        left_layout.addWidget(self.views["sagittal"], 1, 0, 1, 2)
+        left_layout.setColumnStretch(0, 1)
+        left_layout.setColumnStretch(1, 1)
+        left_layout.setRowStretch(0, 1)
+        left_layout.setRowStretch(1, 1)
+        left_panel.setLayout(left_layout)
+
+        control_scroll_area = QScrollArea()
+        control_scroll_area.setWidget(self.bottom_panel)
+        control_scroll_area.setWidgetResizable(False)
+        control_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        control_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+
+        right_panel = QWidget()
+        right_layout = QGridLayout()
+        right_layout.addWidget(control_scroll_area, 0, 0)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_panel.setLayout(right_layout)
+
+        splitter = QSplitter(Qt.Horizontal)
+        splitter.addWidget(left_panel)
+        splitter.addWidget(right_panel)
+        splitter.setChildrenCollapsible(False)
+        splitter.splitterMoved.connect(self._handle_main_splitter_moved)
+
+        self._main_splitter = splitter
+        self._left_panel = left_panel
+        self._right_panel = right_panel
+        self._main_splitter_initial_sizes_applied = False
+
+        self.setCentralWidget(splitter)
         self.setWindowTitle("3D Volume Viewer")
 
         self.bottom_panel.on_open_requested(self._handle_open_request)
@@ -933,6 +965,8 @@ class MainWindow(QMainWindow):
         self._sync_bounding_boxes_ui()
         self._refresh_learning_training_ui_state()
         self._refresh_annotation_ui_state()
+        self._apply_main_splitter_width_constraints()
+        QTimer.singleShot(0, self._initialize_main_splitter_sizes)
 
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
         if not self._maybe_resolve_unsaved_data_before_close():
@@ -953,6 +987,76 @@ class MainWindow(QMainWindow):
                 app_instance.removeEventFilter(self)
             self._app_event_filter_installed = False
         event.accept()
+
+    def resizeEvent(self, event: QResizeEvent) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        if not self._main_splitter_initial_sizes_applied:
+            self._initialize_main_splitter_sizes()
+        self._apply_main_splitter_width_constraints()
+
+    def _main_splitter_total_width(self) -> int:
+        sizes = tuple(int(size) for size in self._main_splitter.sizes())
+        total_width = int(sum(sizes))
+        if total_width > 0:
+            return total_width
+        return max(0, int(self._main_splitter.width()))
+
+    def _main_splitter_control_panel_width_bounds(self) -> Tuple[int, int]:
+        total_width = self._main_splitter_total_width()
+        if total_width <= 1:
+            return (0, total_width)
+
+        min_width = max(
+            1,
+            int(round(total_width * self._CONTROL_PANEL_MIN_WIDTH_FRACTION)),
+        )
+        max_width = max(
+            1,
+            int(round(total_width * self._CONTROL_PANEL_MAX_WIDTH_FRACTION)),
+        )
+        max_width = min(max_width, total_width - 1)
+        min_width = min(min_width, max_width)
+        return (min_width, max_width)
+
+    def _apply_main_splitter_width_constraints(self) -> None:
+        sizes = tuple(int(size) for size in self._main_splitter.sizes())
+        if len(sizes) < 2:
+            return
+
+        total_width = int(sum(sizes))
+        if total_width <= 0:
+            return
+
+        min_width, max_width = self._main_splitter_control_panel_width_bounds()
+        self._right_panel.setMinimumWidth(min_width)
+        self._right_panel.setMaximumWidth(max_width)
+
+        current_right_width = int(sizes[1])
+        clamped_right_width = max(min_width, min(current_right_width, max_width))
+        if clamped_right_width == current_right_width:
+            return
+
+        self._main_splitter.setSizes([total_width - clamped_right_width, clamped_right_width])
+
+    def _initialize_main_splitter_sizes(self) -> None:
+        if self._main_splitter_initial_sizes_applied:
+            return
+
+        total_width = self._main_splitter_total_width()
+        if total_width <= 1:
+            return
+
+        min_width, max_width = self._main_splitter_control_panel_width_bounds()
+        target_right_width = int(
+            round(total_width * self._CONTROL_PANEL_INITIAL_WIDTH_FRACTION)
+        )
+        target_right_width = max(min_width, min(target_right_width, max_width))
+        self._main_splitter.setSizes([total_width - target_right_width, target_right_width])
+        self._main_splitter_initial_sizes_applied = True
+        self._apply_main_splitter_width_constraints()
+
+    def _handle_main_splitter_moved(self, _pos: int, _index: int) -> None:
+        self._apply_main_splitter_width_constraints()
 
     def _maybe_resolve_unsaved_data_before_close(self) -> bool:
         if not self._maybe_resolve_unsaved_segmentation(context="closing the application"):
