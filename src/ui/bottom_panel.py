@@ -21,6 +21,7 @@ from PySide6.QtWidgets import (
     QLineEdit,
     QPushButton,
     QSlider,
+    QSizePolicy,
     QSpinBox,
     QTableWidget,
     QTableWidgetItem,
@@ -117,7 +118,7 @@ class BottomPanel(QWidget):
     _COMPACT_BUTTON_MAX_WIDTH = 170
     _COMPACT_INPUT_MAX_WIDTH = 130
     _COMPACT_SLIDER_MAX_WIDTH = 180
-    _COMPACT_BBOX_TABLE_MAX_WIDTH = 520
+    _COMPACT_BBOX_TABLE_MAX_WIDTH = 420
 
     def __init__(self) -> None:
         super().__init__()
@@ -265,6 +266,7 @@ class BottomPanel(QWidget):
         self._bbox_table.setAlternatingRowColors(True)
         self._bbox_table.verticalHeader().setVisible(False)
         bbox_header = self._bbox_table.horizontalHeader()
+        bbox_header.setStretchLastSection(False)
         bbox_header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         bbox_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         bbox_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
@@ -394,7 +396,6 @@ class BottomPanel(QWidget):
         navigation_layout.addWidget(self._manual_level_spin, 5, 1)
         navigation_layout.addWidget(self._pyramid_status, 6, 0, 1, 2)
         navigation_layout.addWidget(self._level_status, 7, 0, 1, 2)
-        navigation_layout.setColumnStretch(1, 1)
         navigation_group.setLayout(navigation_layout)
 
         contrast_group = QGroupBox("Contrast")
@@ -405,7 +406,6 @@ class BottomPanel(QWidget):
         contrast_layout.addWidget(self._contrast_max_label, 1, 0)
         contrast_layout.addWidget(self._contrast_max_slider, 1, 1)
         contrast_layout.addWidget(self._contrast_max_value, 1, 2)
-        contrast_layout.setColumnStretch(1, 1)
         contrast_group.setLayout(contrast_layout)
 
         annotation_group = QGroupBox("Annotation")
@@ -423,7 +423,6 @@ class BottomPanel(QWidget):
         annotation_layout.addWidget(self._flood_fill_target_spin, 5, 1)
         annotation_layout.addWidget(self._flood_fill_button, 6, 0, 1, 2)
         annotation_layout.addWidget(self._next_available_button, 7, 0, 1, 2)
-        annotation_layout.setColumnStretch(1, 1)
         annotation_group.setLayout(annotation_layout)
 
         bounding_boxes_group = QGroupBox("Bounding Boxes")
@@ -435,7 +434,6 @@ class BottomPanel(QWidget):
         bbox_label_layout.setContentsMargins(0, 0, 0, 0)
         bbox_label_layout.addWidget(self._bbox_label_label)
         bbox_label_layout.addWidget(self._bbox_label_combo)
-        bbox_label_layout.addStretch(1)
         bbox_label_row.setLayout(bbox_label_layout)
         bounding_boxes_layout.addWidget(bbox_label_row)
         bbox_controls_row = QWidget()
@@ -445,7 +443,6 @@ class BottomPanel(QWidget):
         bbox_controls_layout.addWidget(self._save_bounding_boxes_button)
         bbox_controls_layout.addWidget(self._build_dataset_from_bboxes_button)
         bbox_controls_layout.addWidget(self._delete_bbox_button)
-        bbox_controls_layout.addStretch(1)
         bbox_controls_row.setLayout(bbox_controls_layout)
         bounding_boxes_layout.addWidget(bbox_controls_row)
         bbox_processing_row = QWidget()
@@ -455,7 +452,6 @@ class BottomPanel(QWidget):
         bbox_processing_layout.addWidget(self._erosion_selected_button)
         bbox_processing_layout.addWidget(self._dilation_selected_button)
         bbox_processing_layout.addWidget(self._erase_bbox_segmentation_button)
-        bbox_processing_layout.addStretch(1)
         bbox_processing_row.setLayout(bbox_processing_layout)
         bounding_boxes_layout.addWidget(bbox_processing_row)
         bounding_boxes_group.setLayout(bounding_boxes_layout)
@@ -469,7 +465,6 @@ class BottomPanel(QWidget):
         learning_controls_layout_1.addWidget(self._save_model_button)
         learning_controls_layout_1.addWidget(self._segment_inference_button)
         learning_controls_layout_1.addWidget(self._stop_inference_button)
-        learning_controls_layout_1.addStretch(1)
         learning_controls_row_1.setLayout(learning_controls_layout_1)
         learning_layout.addWidget(learning_controls_row_1)
 
@@ -479,7 +474,6 @@ class BottomPanel(QWidget):
         learning_controls_layout_2.addWidget(self._train_model_button)
         learning_controls_layout_2.addWidget(self._stop_training_button)
         learning_controls_layout_2.addWidget(self._learning_training_status)
-        learning_controls_layout_2.addStretch(1)
         learning_controls_row_2.setLayout(learning_controls_layout_2)
         learning_layout.addWidget(learning_controls_row_2)
         learning_group.setLayout(learning_layout)
@@ -517,8 +511,11 @@ class BottomPanel(QWidget):
         self._update_learning_controls_state()
         self._update_history_controls_state()
         self._apply_compact_right_panel_widths()
+        self._update_bbox_table_width()
 
     def _apply_compact_right_panel_widths(self) -> None:
+        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+
         file_buttons = (
             self._open_button,
             self._open_semantic_button,
@@ -558,6 +555,7 @@ class BottomPanel(QWidget):
         for widget in annotation_compact_widgets:
             widget.setMaximumWidth(self._COMPACT_BUTTON_MAX_WIDTH)
 
+        self._bbox_table.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Expanding)
         self._bbox_table.setMaximumWidth(self._COMPACT_BBOX_TABLE_MAX_WIDTH)
 
         history_buttons = (
@@ -566,6 +564,16 @@ class BottomPanel(QWidget):
         )
         for button in history_buttons:
             button.setMaximumWidth(self._COMPACT_BUTTON_MAX_WIDTH)
+
+    def _update_bbox_table_width(self) -> None:
+        self._bbox_table.resizeColumnsToContents()
+        frame = int(self._bbox_table.frameWidth()) * 2
+        vertical_header = int(self._bbox_table.verticalHeader().width())
+        column_widths = sum(int(self._bbox_table.columnWidth(i)) for i in range(self._bbox_table.columnCount()))
+        padding = 12
+        content_width = frame + vertical_header + column_widths + padding
+        clamped_width = max(220, min(self._COMPACT_BBOX_TABLE_MAX_WIDTH, int(content_width)))
+        self._bbox_table.setFixedWidth(clamped_width)
 
     def set_file_path(self, path: str) -> None:
         self._file_path = path
@@ -902,6 +910,7 @@ class BottomPanel(QWidget):
             self._bbox_table.setItem(row_index, 2, size_item)
             self._bbox_table.setItem(row_index, 3, center_item)
         self._bbox_table.blockSignals(False)
+        self._update_bbox_table_width()
 
         self.set_selected_bounding_boxes(self.state.bbox_selected_ids)
         self._update_bounding_box_controls_state()
