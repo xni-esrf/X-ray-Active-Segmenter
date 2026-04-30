@@ -204,10 +204,54 @@ class GLBackend:
         except Exception:
             pass
         self._view.camera = "panzoom"
+        self._disable_vispy_backspace_camera_reset()
         if hasattr(self._view.camera, "aspect"):
             self._view.camera.aspect = 1
         self._log_gl_context_info()
         self._ready = True
+
+    @staticmethod
+    def _is_backspace_key(key: object) -> bool:
+        if key is None:
+            return False
+        try:
+            if key == "Backspace":
+                return True
+        except Exception:
+            pass
+        if isinstance(key, str) and key.strip().lower() == "backspace":
+            return True
+        key_name = getattr(key, "name", None)
+        if isinstance(key_name, str) and key_name.strip().lower() == "backspace":
+            return True
+        return False
+
+    @staticmethod
+    def _disable_camera_backspace_reset(camera: object) -> None:
+        if camera is None:
+            return
+        if bool(getattr(camera, "_backspace_reset_disabled", False)):
+            return
+        original_handler = getattr(camera, "viewbox_key_event", None)
+        if not callable(original_handler):
+            return
+
+        def _wrapped_viewbox_key_event(event, _original=original_handler):
+            if GLBackend._is_backspace_key(getattr(event, "key", None)):
+                try:
+                    setattr(event, "handled", True)
+                except Exception:
+                    pass
+                return None
+            return _original(event)
+
+        setattr(camera, "viewbox_key_event", _wrapped_viewbox_key_event)
+        setattr(camera, "_backspace_reset_disabled", True)
+
+    def _disable_vispy_backspace_camera_reset(self) -> None:
+        if self._view is None:
+            return
+        self._disable_camera_backspace_reset(getattr(self._view, "camera", None))
 
     def is_ready(self) -> bool:
         return self._ready

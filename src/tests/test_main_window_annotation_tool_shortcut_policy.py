@@ -16,11 +16,12 @@ except Exception:  # pragma: no cover - environment dependent
 
 try:
     from PySide6.QtCore import QEvent, Qt
-    from PySide6.QtWidgets import QApplication, QWidget
+    from PySide6.QtWidgets import QApplication, QLineEdit, QWidget
 except Exception:  # pragma: no cover - environment dependent
     QEvent = None  # type: ignore[assignment]
     Qt = None  # type: ignore[assignment]
     QApplication = None  # type: ignore[assignment]
+    QLineEdit = None  # type: ignore[assignment]
     QWidget = None  # type: ignore[assignment]
 
 
@@ -375,6 +376,150 @@ class MainWindowAnnotationToolShortcutPolicyTests(unittest.TestCase):
         self.assertFalse(consumed)
         self.assertEqual(applied, [])
         self.assertEqual(event.accept_count, 0)
+
+    @unittest.skipUnless(
+        Qt is not None and QEvent is not None and QWidget is not None,
+        "Qt widgets/key enums are unavailable",
+    )
+    def test_bbox_delete_key_consumer_consumes_backspace_for_left_panel_widgets(self) -> None:
+        class _Event:
+            def __init__(self, key: int) -> None:
+                self._key = key
+                self.accept_count = 0
+
+            def type(self):
+                return QEvent.Type.KeyPress
+
+            def key(self) -> int:
+                return self._key
+
+            def accept(self) -> None:
+                self.accept_count += 1
+
+        delete_calls: list[str] = []
+        left_panel = QWidget()
+        child = QWidget(left_panel)
+        window_like = SimpleNamespace(
+            _left_panel=left_panel,
+            isActiveWindow=lambda: True,
+            isAncestorOf=lambda _obj: True,
+            _handle_bounding_box_delete_shortcut_requested=lambda: delete_calls.append("delete"),
+        )
+        event = _Event(int(Qt.Key_Backspace))
+
+        consumed = MainWindow._maybe_consume_bbox_delete_shortcut_event(
+            window_like,
+            child,
+            event,
+        )
+
+        self.assertTrue(consumed)
+        self.assertEqual(delete_calls, ["delete"])
+        self.assertEqual(event.accept_count, 1)
+
+    @unittest.skipUnless(
+        Qt is not None and QEvent is not None and QWidget is not None and QLineEdit is not None,
+        "Qt widgets/key enums are unavailable",
+    )
+    def test_bbox_delete_key_consumer_ignores_text_input_widgets(self) -> None:
+        class _Event:
+            def __init__(self, key: int) -> None:
+                self._key = key
+                self.accept_count = 0
+
+            def type(self):
+                return QEvent.Type.KeyPress
+
+            def key(self) -> int:
+                return self._key
+
+            def accept(self) -> None:
+                self.accept_count += 1
+
+        delete_calls: list[str] = []
+        left_panel = QWidget()
+        line_edit = QLineEdit(left_panel)
+        window_like = SimpleNamespace(
+            _left_panel=left_panel,
+            isActiveWindow=lambda: True,
+            isAncestorOf=lambda _obj: True,
+            _handle_bounding_box_delete_shortcut_requested=lambda: delete_calls.append("delete"),
+        )
+        event = _Event(int(Qt.Key_Delete))
+
+        consumed = MainWindow._maybe_consume_bbox_delete_shortcut_event(
+            window_like,
+            line_edit,
+            event,
+        )
+
+        self.assertFalse(consumed)
+        self.assertEqual(delete_calls, [])
+        self.assertEqual(event.accept_count, 0)
+
+    @unittest.skipUnless(
+        Qt is not None and QEvent is not None and QWidget is not None,
+        "Qt widgets/key enums are unavailable",
+    )
+    def test_bbox_delete_key_consumer_ignores_widgets_outside_left_panel(self) -> None:
+        class _Event:
+            def __init__(self, key: int) -> None:
+                self._key = key
+                self.accept_count = 0
+
+            def type(self):
+                return QEvent.Type.KeyPress
+
+            def key(self) -> int:
+                return self._key
+
+            def accept(self) -> None:
+                self.accept_count += 1
+
+        delete_calls: list[str] = []
+        left_panel = QWidget()
+        external_widget = QWidget()
+        window_like = SimpleNamespace(
+            _left_panel=left_panel,
+            isActiveWindow=lambda: True,
+            isAncestorOf=lambda _obj: True,
+            _handle_bounding_box_delete_shortcut_requested=lambda: delete_calls.append("delete"),
+        )
+        event = _Event(int(Qt.Key_Backspace))
+
+        consumed = MainWindow._maybe_consume_bbox_delete_shortcut_event(
+            window_like,
+            external_widget,
+            event,
+        )
+
+        self.assertFalse(consumed)
+        self.assertEqual(delete_calls, [])
+        self.assertEqual(event.accept_count, 0)
+
+    def test_eventfilter_prioritizes_bbox_delete_consumer(self) -> None:
+        calls: list[str] = []
+        window_like = SimpleNamespace(
+            _maybe_consume_bbox_delete_shortcut_event=lambda obj, event: calls.append("bbox") or True,
+            _maybe_consume_annotation_tool_shortcut_event=lambda obj, event: calls.append("annot") or True,
+        )
+
+        consumed = MainWindow.eventFilter(window_like, object(), object())
+
+        self.assertTrue(consumed)
+        self.assertEqual(calls, ["bbox"])
+
+    def test_eventfilter_uses_annotation_consumer_when_bbox_not_consumed(self) -> None:
+        calls: list[str] = []
+        window_like = SimpleNamespace(
+            _maybe_consume_bbox_delete_shortcut_event=lambda obj, event: calls.append("bbox") or False,
+            _maybe_consume_annotation_tool_shortcut_event=lambda obj, event: calls.append("annot") or True,
+        )
+
+        consumed = MainWindow.eventFilter(window_like, object(), object())
+
+        self.assertTrue(consumed)
+        self.assertEqual(calls, ["bbox", "annot"])
 
     @unittest.skipUnless(MainWindow is not None and QApplication is not None, "Qt/MainWindow unavailable")
     def test_close_event_removes_app_event_filter_when_close_is_accepted(self) -> None:

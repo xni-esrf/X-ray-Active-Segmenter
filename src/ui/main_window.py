@@ -11,11 +11,16 @@ import numpy as np
 from PySide6.QtCore import QObject, QEvent, QThread, Qt, QTimer, Signal, Slot
 from PySide6.QtGui import QCloseEvent, QKeySequence, QResizeEvent, QShortcut
 from PySide6.QtWidgets import (
+    QAbstractSpinBox,
     QApplication,
+    QComboBox,
     QGridLayout,
+    QLineEdit,
     QMainWindow,
+    QPlainTextEdit,
     QScrollArea,
     QSplitter,
+    QTextEdit,
     QWidget,
 )
 
@@ -805,6 +810,7 @@ class MainWindow(QMainWindow):
                 on_bounding_box_translate=self._handle_bounding_box_translated,
                 on_bounding_box_drag_started=self._handle_bounding_box_drag_started,
                 on_bounding_box_drag_finished=self._handle_bounding_box_drag_finished,
+                on_bounding_box_delete_requested=self._handle_bounding_box_delete_shortcut_requested,
             ),
             "coronal": OrthogonalView(
                 "coronal",
@@ -824,6 +830,7 @@ class MainWindow(QMainWindow):
                 on_bounding_box_translate=self._handle_bounding_box_translated,
                 on_bounding_box_drag_started=self._handle_bounding_box_drag_started,
                 on_bounding_box_drag_finished=self._handle_bounding_box_drag_finished,
+                on_bounding_box_delete_requested=self._handle_bounding_box_delete_shortcut_requested,
             ),
             "sagittal": OrthogonalView(
                 "sagittal",
@@ -843,6 +850,7 @@ class MainWindow(QMainWindow):
                 on_bounding_box_translate=self._handle_bounding_box_translated,
                 on_bounding_box_drag_started=self._handle_bounding_box_drag_started,
                 on_bounding_box_drag_finished=self._handle_bounding_box_drag_finished,
+                on_bounding_box_delete_requested=self._handle_bounding_box_delete_shortcut_requested,
             ),
         }
 
@@ -1125,7 +1133,62 @@ class MainWindow(QMainWindow):
             accept()
         return True
 
+    @staticmethod
+    def _is_text_editing_widget(widget: object) -> bool:
+        if isinstance(widget, (QLineEdit, QTextEdit, QPlainTextEdit, QAbstractSpinBox)):
+            return True
+        if isinstance(widget, QComboBox) and bool(widget.isEditable()):
+            return True
+        return False
+
+    def _maybe_consume_bbox_delete_shortcut_event(self, obj: object, event: object) -> bool:
+        event_type = getattr(event, "type", None)
+        if not callable(event_type):
+            return False
+        if event_type() != QEvent.Type.KeyPress:
+            return False
+
+        key_getter = getattr(event, "key", None)
+        if not callable(key_getter):
+            return False
+        key_value = int(key_getter())
+        if key_value not in (int(Qt.Key_Backspace), int(Qt.Key_Delete)):
+            return False
+
+        candidate_widget: Optional[QWidget] = obj if isinstance(obj, QWidget) else None
+        app_instance = QApplication.instance()
+        focus_widget: Optional[QWidget] = None
+        if app_instance is not None:
+            candidate_focus = app_instance.focusWidget()
+            if isinstance(candidate_focus, QWidget):
+                focus_widget = candidate_focus
+                if candidate_widget is None:
+                    candidate_widget = candidate_focus
+
+        if candidate_widget is None or not self.isActiveWindow():
+            return False
+        if candidate_widget is not self and not self.isAncestorOf(candidate_widget):
+            return False
+        if MainWindow._is_text_editing_widget(candidate_widget):
+            return False
+        if focus_widget is not None and MainWindow._is_text_editing_widget(focus_widget):
+            return False
+
+        left_panel = getattr(self, "_left_panel", None)
+        if not isinstance(left_panel, QWidget):
+            return False
+        if candidate_widget is not left_panel and not left_panel.isAncestorOf(candidate_widget):
+            return False
+
+        self._handle_bounding_box_delete_shortcut_requested()
+        accept = getattr(event, "accept", None)
+        if callable(accept):
+            accept()
+        return True
+
     def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
+        if self._maybe_consume_bbox_delete_shortcut_event(obj, event):
+            return True
         if self._maybe_consume_annotation_tool_shortcut_event(obj, event):
             return True
         return super().eventFilter(obj, event)
@@ -1531,6 +1594,24 @@ class MainWindow(QMainWindow):
         if not normalized_box_id:
             return
         self._handle_bounding_boxes_delete_requested((normalized_box_id,))
+
+    def _handle_bounding_box_delete_shortcut_requested(self) -> None:
+        if MainWindow._inference_navigation_lock_active(self):
+            return
+        selected_ids: Tuple[str, ...] = tuple()
+        selected_ids_getter = getattr(self.bottom_panel, "selected_bounding_boxes", None)
+        if callable(selected_ids_getter):
+            try:
+                selected_ids = tuple(selected_ids_getter())
+            except Exception:
+                selected_ids = tuple()
+        if not selected_ids:
+            selected_id = self._bbox_manager.selected_id
+            if selected_id:
+                selected_ids = (selected_id,)
+        if not selected_ids:
+            return
+        self._handle_bounding_boxes_delete_requested(selected_ids)
 
     def _handle_bounding_box_drag_started(self, source_view_id: ViewId) -> None:
         if MainWindow._inference_navigation_lock_active(self):

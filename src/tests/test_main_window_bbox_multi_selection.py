@@ -16,6 +16,55 @@ except Exception:  # pragma: no cover - environment dependent
 
 @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
 class MainWindowBoundingBoxMultiSelectionTests(unittest.TestCase):
+    def test_handle_bounding_box_delete_shortcut_uses_bottom_panel_multi_selection(self) -> None:
+        delete_requests = []
+        window_like = SimpleNamespace(
+            bottom_panel=SimpleNamespace(selected_bounding_boxes=lambda: ("bbox_0001", "bbox_0002")),
+            _bbox_manager=SimpleNamespace(selected_id="bbox_0003"),
+            _handle_bounding_boxes_delete_requested=lambda box_ids: delete_requests.append(tuple(box_ids)),
+        )
+
+        MainWindow._handle_bounding_box_delete_shortcut_requested(window_like)
+
+        self.assertEqual(delete_requests, [("bbox_0001", "bbox_0002")])
+
+    def test_handle_bounding_box_delete_shortcut_falls_back_to_manager_selection(self) -> None:
+        delete_requests = []
+        window_like = SimpleNamespace(
+            bottom_panel=SimpleNamespace(selected_bounding_boxes=lambda: tuple()),
+            _bbox_manager=SimpleNamespace(selected_id="bbox_0003"),
+            _handle_bounding_boxes_delete_requested=lambda box_ids: delete_requests.append(tuple(box_ids)),
+        )
+
+        MainWindow._handle_bounding_box_delete_shortcut_requested(window_like)
+
+        self.assertEqual(delete_requests, [("bbox_0003",)])
+
+    def test_handle_bounding_box_delete_shortcut_noop_when_no_selection(self) -> None:
+        delete_requests = []
+        window_like = SimpleNamespace(
+            bottom_panel=SimpleNamespace(selected_bounding_boxes=lambda: tuple()),
+            _bbox_manager=SimpleNamespace(selected_id=None),
+            _handle_bounding_boxes_delete_requested=lambda box_ids: delete_requests.append(tuple(box_ids)),
+        )
+
+        MainWindow._handle_bounding_box_delete_shortcut_requested(window_like)
+
+        self.assertEqual(delete_requests, [])
+
+    def test_handle_bounding_box_delete_shortcut_noop_when_inference_navigation_locked(self) -> None:
+        delete_requests = []
+        window_like = SimpleNamespace(
+            _inference_running=True,
+            bottom_panel=SimpleNamespace(selected_bounding_boxes=lambda: ("bbox_0001",)),
+            _bbox_manager=SimpleNamespace(selected_id="bbox_0002"),
+            _handle_bounding_boxes_delete_requested=lambda box_ids: delete_requests.append(tuple(box_ids)),
+        )
+
+        MainWindow._handle_bounding_box_delete_shortcut_requested(window_like)
+
+        self.assertEqual(delete_requests, [])
+
     def test_handle_bounding_boxes_selected_selects_single_id_in_manager(self) -> None:
         select_calls = []
         window_like = SimpleNamespace(

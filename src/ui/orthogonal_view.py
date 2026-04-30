@@ -7,7 +7,7 @@ from typing import Callable, Iterable, Literal, Optional, Tuple, cast
 
 import numpy as np
 from PySide6.QtCore import QEvent, QPointF, Qt, QTimer
-from PySide6.QtWidgets import QWidget, QVBoxLayout
+from PySide6.QtWidgets import QApplication, QLineEdit, QWidget, QVBoxLayout
 
 from ..bbox import (
     BoundingBox,
@@ -70,6 +70,7 @@ class OrthogonalView(QWidget):
         on_bounding_box_translate: Optional[Callable[[str, int, int, int], None]] = None,
         on_bounding_box_drag_started: Optional[Callable[[ViewId], None]] = None,
         on_bounding_box_drag_finished: Optional[Callable[[ViewId], None]] = None,
+        on_bounding_box_delete_requested: Optional[Callable[[], None]] = None,
     ) -> None:
         super().__init__()
         self.view_id = view_id
@@ -88,6 +89,7 @@ class OrthogonalView(QWidget):
         self._on_bounding_box_translate = on_bounding_box_translate
         self._on_bounding_box_drag_started = on_bounding_box_drag_started
         self._on_bounding_box_drag_finished = on_bounding_box_drag_finished
+        self._on_bounding_box_delete_requested = on_bounding_box_delete_requested
         self.state = ViewState(axis=axis, slice_index=0)
         self._latest: Optional[RenderResult] = None
         self._recenter_on_next_render = False
@@ -886,6 +888,17 @@ class OrthogonalView(QWidget):
 
     def eventFilter(self, obj, event) -> bool:  # type: ignore[override]
         if obj is self._canvas_widget:
+            if event.type() == QEvent.KeyPress:
+                if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+                    focus_widget = QApplication.focusWidget()
+                    if isinstance(focus_widget, QLineEdit):
+                        return False
+                    if self._on_bounding_box_delete_requested is not None:
+                        self._on_bounding_box_delete_requested()
+                    # Block VisPy camera BACKSPACE reset on the focused canvas.
+                    event.accept()
+                    return True
+                return False
             if event.type() == QEvent.Leave:
                 self._clear_hover()
                 self._clear_bounding_box_hover()
@@ -1044,6 +1057,12 @@ class OrthogonalView(QWidget):
             return
 
     def keyPressEvent(self, event) -> None:  # type: ignore[override]
+        if event.key() in (Qt.Key_Backspace, Qt.Key_Delete):
+            if self._on_bounding_box_delete_requested is not None:
+                self._on_bounding_box_delete_requested()
+            # Prevent fallthrough to VisPy's camera reset bound to Backspace.
+            event.accept()
+            return
         if event.key() in (Qt.Key_Up, Qt.Key_Right):
             self.input_handlers.on_scroll(self.state.axis, 1)
             event.accept()
