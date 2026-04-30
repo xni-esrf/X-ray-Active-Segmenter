@@ -900,6 +900,7 @@ class MainWindow(QMainWindow):
         self.bottom_panel.on_auto_level_mode_changed(self._handle_auto_level_mode_changed)
         self.bottom_panel.on_manual_level_requested(self._handle_manual_level_requested)
         self.bottom_panel.on_contrast_window_changed(self._handle_contrast_window_changed)
+        self.bottom_panel.on_segmentation_opacity_changed(self._handle_segmentation_opacity_changed)
         self.bottom_panel.on_annotation_mode_changed(self._handle_annotation_mode_changed)
         self.bottom_panel.on_bounding_box_mode_changed(self._handle_bounding_box_mode_changed)
         self.bottom_panel.on_annotation_tool_changed(self._handle_annotation_tool_changed)
@@ -970,6 +971,7 @@ class MainWindow(QMainWindow):
             app_instance.installEventFilter(self)
             self._app_event_filter_installed = True
         self.sync_manager.on_state_changed(self._on_sync_state_changed)
+        self._handle_segmentation_opacity_changed(self.bottom_panel.segmentation_opacity())
         self._sync_bounding_boxes_ui()
         self._refresh_learning_training_ui_state()
         self._refresh_annotation_ui_state()
@@ -4258,6 +4260,19 @@ class MainWindow(QMainWindow):
             show_warning(str(exc), parent=self)
             return
         self._queue_contrast_rerender()
+
+    def _handle_segmentation_opacity_changed(self, opacity: float) -> None:
+        try:
+            normalized = float(opacity)
+        except (TypeError, ValueError):
+            normalized = 0.3
+        if not np.isfinite(normalized):
+            normalized = 0.3
+        normalized = max(0.0, min(1.0, normalized))
+        for view in self.views.values():
+            setter = getattr(view, "set_segmentation_opacity", None)
+            if callable(setter):
+                setter(normalized)
 
     def _handle_auto_level_mode_changed(self, enabled: bool) -> None:
         if not self.state.volume_loaded:

@@ -178,6 +178,12 @@ class OrthogonalView(QWidget):
         self._update_picker_marker(self._latest.image)
         self._update_bounding_boxes_overlay(self._latest)
 
+    def set_segmentation_opacity(self, opacity: float) -> None:
+        self._gl_backend.set_segmentation_opacity(opacity)
+
+    def segmentation_opacity(self) -> float:
+        return self._gl_backend.segmentation_opacity()
+
     def set_picker_selection(
         self,
         indices: Optional[Tuple[int, int, int]],

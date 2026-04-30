@@ -16,8 +16,8 @@ from ..utils import maybe_profile
 
 logger = logging.getLogger(__name__)
 SegmentationROI = Tuple[int, int, int, int]
-_SEGMENTATION_ALPHA = 0.3
-_SEGMENTATION_ALPHA_U8 = int((_SEGMENTATION_ALPHA * 255.0) + 0.5)
+_DEFAULT_SEGMENTATION_OPACITY = 0.3
+_OPAQUE_ALPHA_U8 = 255
 
 
 @dataclass
@@ -54,6 +54,7 @@ class GLBackend:
         self._seg_labels: Optional[np.ndarray] = None
         self._seg_palette: Optional[np.ndarray] = None
         self._seg_rgba_cache: Optional[np.ndarray] = None
+        self._segmentation_opacity = float(_DEFAULT_SEGMENTATION_OPACITY)
         self._seg_texture = None
         self._seg_subupload_supported: Optional[bool] = None
         self._seg_subupload_mode: Optional[str] = None
@@ -113,6 +114,7 @@ class GLBackend:
         if hasattr(self._seg_node, "set_gl_state"):
             self._seg_node.set_gl_state(blend=True, depth_test=False)
         self._seg_node.visible = False
+        self._seg_node.opacity = self._segmentation_opacity
         self._image_dtype = np.dtype(np.uint8)
         self._crosshair_h = scene.Line(
             np.array([[0.0, 0.0], [1.0, 0.0]], dtype=np.float32),
@@ -255,6 +257,23 @@ class GLBackend:
 
     def is_ready(self) -> bool:
         return self._ready
+
+    def set_segmentation_opacity(self, opacity: float) -> None:
+        try:
+            normalized = float(opacity)
+        except (TypeError, ValueError):
+            normalized = _DEFAULT_SEGMENTATION_OPACITY
+        if not np.isfinite(normalized):
+            normalized = _DEFAULT_SEGMENTATION_OPACITY
+        normalized = max(0.0, min(1.0, normalized))
+        self._segmentation_opacity = normalized
+        if self._seg_node is not None:
+            self._seg_node.opacity = normalized
+        if self._canvas is not None:
+            self._canvas.update()
+
+    def segmentation_opacity(self) -> float:
+        return float(self._segmentation_opacity)
 
     def widget(self):
         if not self._ready:
@@ -719,7 +738,7 @@ class GLBackend:
                 continue
             hue = self._label_hue(label)
             r, g, b = colorsys.hsv_to_rgb(hue, 0.65, 0.95)
-            colors.append((r, g, b, _SEGMENTATION_ALPHA))
+            colors.append((r, g, b, 1.0))
         return Colormap(colors)
 
     def _build_seg_palette(self, labels: np.ndarray) -> np.ndarray:
@@ -1087,7 +1106,7 @@ class GLBackend:
             int(np.clip(round(r * 255), 0, 255)),
             int(np.clip(round(g * 255), 0, 255)),
             int(np.clip(round(b * 255), 0, 255)),
-            _SEGMENTATION_ALPHA_U8,
+            _OPAQUE_ALPHA_U8,
         )
 
     def _label_rgba(self, label: int) -> np.ndarray:

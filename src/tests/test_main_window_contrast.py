@@ -228,6 +228,29 @@ class MainWindowContrastFlowTests(unittest.TestCase):
         self.assertEqual(manual_calls, [])
         self.assertEqual(queue_calls, [])
 
+    def test_handle_segmentation_opacity_changed_applies_to_all_views(self) -> None:
+        applied: list[tuple[str, float]] = []
+        window_like = SimpleNamespace(
+            views={
+                "axial": SimpleNamespace(
+                    set_segmentation_opacity=lambda value: applied.append(("axial", float(value)))
+                ),
+                "coronal": SimpleNamespace(
+                    set_segmentation_opacity=lambda value: applied.append(("coronal", float(value)))
+                ),
+                "sagittal": SimpleNamespace(
+                    set_segmentation_opacity=lambda value: applied.append(("sagittal", float(value)))
+                ),
+            }
+        )
+
+        MainWindow._handle_segmentation_opacity_changed(window_like, 0.42)
+
+        self.assertEqual(
+            applied,
+            [("axial", 0.42), ("coronal", 0.42), ("sagittal", 0.42)],
+        )
+
     def test_update_active_levels_status_marks_manual_forced_mode(self) -> None:
         calls: list[dict[str, object]] = []
         renderer = SimpleNamespace(

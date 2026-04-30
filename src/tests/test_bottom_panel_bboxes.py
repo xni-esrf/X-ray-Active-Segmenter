@@ -678,6 +678,20 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertEqual(self.panel._contrast_min_value.text(), "Min: 7")
         self.assertEqual(self.panel._contrast_max_value.text(), "Max: 7")
 
+    def test_segmentation_opacity_slider_updates_state_and_emits_callback(self) -> None:
+        changes: list[float] = []
+        self.panel.on_segmentation_opacity_changed(lambda opacity: changes.append(float(opacity)))
+
+        self.assertAlmostEqual(self.panel.segmentation_opacity(), 0.3, places=6)
+        self.assertEqual(self.panel._segmentation_opacity_value.text(), "30%")
+
+        self.panel._segmentation_opacity_slider.setValue(65)
+        QApplication.processEvents()
+
+        self.assertAlmostEqual(self.panel.segmentation_opacity(), 0.65, places=6)
+        self.assertEqual(self.panel._segmentation_opacity_value.text(), "65%")
+        self.assertAlmostEqual(changes[-1], 0.65, places=6)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -101,6 +101,7 @@ class BottomPanelState:
     redo_depth: int = 0
     contrast_data_range: Optional[Tuple[float, float]] = None
     contrast_window: Optional[Tuple[float, float]] = None
+    segmentation_opacity: float = 0.3
     auto_level_enabled: bool = True
     manual_level: int = 0
     manual_level_max: int = 0
@@ -116,6 +117,8 @@ class BottomPanelState:
 class BottomPanel(QWidget):
     _CONTRAST_STEPS = 1_000
     _CONTRAST_MAX_STEP = _CONTRAST_STEPS - 1
+    _SEGMENTATION_OPACITY_DEFAULT = 0.3
+    _SEGMENTATION_OPACITY_MAX_STEP = 100
     _COMPACT_BUTTON_MAX_WIDTH = 170
     _COMPACT_INPUT_MAX_WIDTH = 130
     _COMPACT_SLIDER_MAX_WIDTH = 180
@@ -135,6 +138,7 @@ class BottomPanel(QWidget):
         self._on_auto_level_mode_changed: Optional[Callable[[bool], None]] = None
         self._on_manual_level_requested: Optional[Callable[[int], None]] = None
         self._on_contrast_window_changed: Optional[Callable[[float, float], None]] = None
+        self._on_segmentation_opacity_changed: Optional[Callable[[float], None]] = None
         self._on_annotation_mode_changed: Optional[Callable[[bool], None]] = None
         self._on_bounding_box_mode_changed: Optional[Callable[[bool], None]] = None
         self._on_annotation_tool_changed: Optional[Callable[[AnnotationTool], None]] = None
@@ -258,6 +262,12 @@ class BottomPanel(QWidget):
         self._contrast_max_slider.setPageStep(10)
         self._contrast_min_value = QLabel("Min: -")
         self._contrast_max_value = QLabel("Max: -")
+        self._segmentation_opacity_label = QLabel("Seg Alpha")
+        self._segmentation_opacity_slider = QSlider(Qt.Orientation.Horizontal)
+        self._segmentation_opacity_slider.setRange(0, self._SEGMENTATION_OPACITY_MAX_STEP)
+        self._segmentation_opacity_slider.setSingleStep(1)
+        self._segmentation_opacity_slider.setPageStep(5)
+        self._segmentation_opacity_value = QLabel("30%")
         self._pyramid_status = QLabel("Pyramid: -")
         self._level_status = QLabel("Level: L0 (x1)")
         self._bbox_table = QTableWidget(0, 4)
@@ -328,6 +338,7 @@ class BottomPanel(QWidget):
             self._manual_level_spin.editingFinished.connect(self._handle_manual_level_requested)
         self._contrast_min_slider.valueChanged.connect(self._handle_contrast_min_changed)
         self._contrast_max_slider.valueChanged.connect(self._handle_contrast_max_changed)
+        self._segmentation_opacity_slider.valueChanged.connect(self._handle_segmentation_opacity_changed)
         self._open_bounding_boxes_button.clicked.connect(self._handle_open_bounding_boxes_requested)
         self._save_bounding_boxes_button.clicked.connect(self._handle_save_bounding_boxes_requested)
         self._build_dataset_from_bboxes_button.clicked.connect(
@@ -409,8 +420,15 @@ class BottomPanel(QWidget):
         contrast_max_row_layout.addWidget(self._contrast_max_slider)
         contrast_max_row_layout.addWidget(self._contrast_max_value)
         contrast_max_row.setLayout(contrast_max_row_layout)
+        segmentation_alpha_row = QWidget()
+        segmentation_alpha_row_layout = QHBoxLayout()
+        segmentation_alpha_row_layout.setContentsMargins(0, 0, 0, 0)
+        segmentation_alpha_row_layout.addWidget(self._segmentation_opacity_slider)
+        segmentation_alpha_row_layout.addWidget(self._segmentation_opacity_value)
+        segmentation_alpha_row.setLayout(segmentation_alpha_row_layout)
         contrast_layout.addRow(self._contrast_min_label, contrast_min_row)
         contrast_layout.addRow(self._contrast_max_label, contrast_max_row)
+        contrast_layout.addRow(self._segmentation_opacity_label, segmentation_alpha_row)
         contrast_group.setLayout(contrast_layout)
 
         annotation_group = QGroupBox("Annotation")
@@ -496,6 +514,7 @@ class BottomPanel(QWidget):
         self.set_annotation_controls_enabled(False)
         self._set_contrast_sliders_from_window()
         self._update_contrast_labels()
+        self.set_segmentation_opacity(self.state.segmentation_opacity)
         self._update_file_controls_state()
         self._update_interaction_tool_controls_state()
         self._update_bounding_box_controls_state()
@@ -534,6 +553,7 @@ class BottomPanel(QWidget):
 
         self._contrast_min_slider.setMaximumWidth(self._COMPACT_SLIDER_MAX_WIDTH)
         self._contrast_max_slider.setMaximumWidth(self._COMPACT_SLIDER_MAX_WIDTH)
+        self._segmentation_opacity_slider.setMaximumWidth(self._COMPACT_SLIDER_MAX_WIDTH)
 
         annotation_compact_widgets = (
             self._annotation_tool_label,
@@ -672,6 +692,25 @@ class BottomPanel(QWidget):
 
     def contrast_window(self) -> Optional[Tuple[float, float]]:
         return self.state.contrast_window
+
+    def set_segmentation_opacity(self, opacity: float) -> None:
+        try:
+            normalized = float(opacity)
+        except (TypeError, ValueError):
+            normalized = self._SEGMENTATION_OPACITY_DEFAULT
+        if not np.isfinite(normalized):
+            normalized = self._SEGMENTATION_OPACITY_DEFAULT
+        normalized = max(0.0, min(1.0, normalized))
+        self.state.segmentation_opacity = normalized
+        step = int(round(normalized * float(self._SEGMENTATION_OPACITY_MAX_STEP)))
+        step = max(0, min(self._SEGMENTATION_OPACITY_MAX_STEP, step))
+        self._segmentation_opacity_slider.blockSignals(True)
+        self._segmentation_opacity_slider.setValue(step)
+        self._segmentation_opacity_slider.blockSignals(False)
+        self._segmentation_opacity_value.setText(f"{int(round(normalized * 100.0))}%")
+
+    def segmentation_opacity(self) -> float:
+        return float(self.state.segmentation_opacity)
 
     def set_annotation_mode(self, enabled: bool) -> None:
         self.state.annotation_enabled = bool(enabled)
@@ -1027,6 +1066,9 @@ class BottomPanel(QWidget):
     def on_contrast_window_changed(self, callback: Callable[[float, float], None]) -> None:
         self._on_contrast_window_changed = callback
 
+    def on_segmentation_opacity_changed(self, callback: Callable[[float], None]) -> None:
+        self._on_segmentation_opacity_changed = callback
+
     def on_annotation_mode_changed(self, callback: Callable[[bool], None]) -> None:
         self._on_annotation_mode_changed = callback
 
@@ -1202,6 +1244,14 @@ class BottomPanel(QWidget):
             self._contrast_max_slider.setValue(max_step)
             self._contrast_max_slider.blockSignals(False)
         self._set_contrast_window_from_steps(min_step, max_step, emit_change=True)
+
+    def _handle_segmentation_opacity_changed(self, value: int) -> None:
+        normalized_step = max(0, min(self._SEGMENTATION_OPACITY_MAX_STEP, int(value)))
+        normalized = float(normalized_step) / float(self._SEGMENTATION_OPACITY_MAX_STEP)
+        self.state.segmentation_opacity = normalized
+        self._segmentation_opacity_value.setText(f"{int(round(normalized * 100.0))}%")
+        if self._on_segmentation_opacity_changed is not None:
+            self._on_segmentation_opacity_changed(normalized)
 
     def _handle_annotation_mode_changed(self, enabled: bool) -> None:
         self.state.annotation_enabled = bool(enabled)
@@ -1429,6 +1479,9 @@ class BottomPanel(QWidget):
         self._contrast_max_slider.setEnabled(sliders_enabled)
         self._contrast_min_value.setEnabled(enabled)
         self._contrast_max_value.setEnabled(enabled)
+        self._segmentation_opacity_label.setEnabled(enabled)
+        self._segmentation_opacity_slider.setEnabled(enabled)
+        self._segmentation_opacity_value.setEnabled(enabled)
 
     def _update_bounding_box_controls_state(self) -> None:
         editing_locked = bool(self._inference_navigation_only_mode)
