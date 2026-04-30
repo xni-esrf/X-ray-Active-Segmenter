@@ -66,6 +66,9 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
                 self.active_label = int(active_label)
                 self.begin_calls: list[str] = []
                 self.erase_calls: list[tuple[np.ndarray, str, bool, object]] = []
+                self.erase_masked_region_calls: list[
+                    tuple[tuple[int, int], tuple[int, int], tuple[int, int], np.ndarray, object, str]
+                ] = []
                 self.assign_calls: list[tuple[np.ndarray, int, str, bool]] = []
                 self.commit_calls = 0
                 self.cancel_calls = 0
@@ -92,6 +95,30 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
                         str(operation_name),
                         bool(ignore_out_of_bounds),
                         target_label,
+                    )
+                )
+                return None
+
+            def erase_masked_region(
+                self,
+                *,
+                z_bounds: tuple[int, int],
+                y_bounds: tuple[int, int],
+                x_bounds: tuple[int, int],
+                region_mask: object,
+                target_label: object = None,
+                operation_name: str = "erase_masked_region",
+            ) -> object:
+                if raise_on_erase:
+                    raise ValueError("erase boom")
+                self.erase_masked_region_calls.append(
+                    (
+                        tuple(int(v) for v in z_bounds),
+                        tuple(int(v) for v in y_bounds),
+                        tuple(int(v) for v in x_bounds),
+                        np.asarray(region_mask, dtype=bool).copy(),
+                        target_label,
+                        str(operation_name),
                     )
                 )
                 return None
@@ -1409,17 +1436,25 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
             refresh_calls,
             ["sync_labels", "hover", "picked", "render", "ui"],
         )
-        self.assertEqual(len(editor.erase_calls), 1)
-        erase_coordinates, erase_operation_name, erase_ignore_out_of_bounds, erase_target_label = (
-            editor.erase_calls[0]
-        )
+        self.assertEqual(len(editor.erase_calls), 0)
+        self.assertEqual(len(editor.erase_masked_region_calls), 1)
+        (
+            erase_z_bounds,
+            erase_y_bounds,
+            erase_x_bounds,
+            erase_region_mask,
+            erase_target_label,
+            erase_operation_name,
+        ) = editor.erase_masked_region_calls[0]
         self.assertEqual(erase_operation_name, "erase_bbox_segmentation_selected")
-        self.assertFalse(erase_ignore_out_of_bounds)
         self.assertIsNone(erase_target_label)
-        self.assertEqual(int(erase_coordinates.shape[0]), 53)
-        self.assertEqual(int(np.unique(erase_coordinates, axis=0).shape[0]), 53)
-        self.assertTrue(np.any(np.all(erase_coordinates == np.asarray([1, 2, 3]), axis=1)))
-        self.assertTrue(np.any(np.all(erase_coordinates == np.asarray([5, 6, 7]), axis=1)))
+        self.assertEqual(erase_z_bounds, (1, 6))
+        self.assertEqual(erase_y_bounds, (2, 7))
+        self.assertEqual(erase_x_bounds, (3, 8))
+        self.assertEqual(erase_region_mask.shape, (5, 5, 5))
+        self.assertEqual(int(np.count_nonzero(erase_region_mask)), 53)
+        self.assertTrue(bool(erase_region_mask[0, 0, 0]))
+        self.assertTrue(bool(erase_region_mask[4, 4, 4]))
         warning_mock.assert_not_called()
         info_mock.assert_not_called()
 
@@ -1467,6 +1502,44 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         self.assertEqual(refresh_calls, ["ui"])
         warning_mock.assert_not_called()
         info_mock.assert_not_called()
+
+    def test_erase_selected_bbox_segmentation_does_not_materialize_absolute_coordinates(self) -> None:
+        box = self._box(box_id="bbox_0001", z0=1, z1=4, y0=2, y1=5, x0=3, x1=6)
+        committed_operation = SimpleNamespace(changed_voxels=27, operation_id=57)
+        editor = self._make_operation_editor(
+            array=np.ones((20, 30, 40), dtype=np.uint16),
+            active_label=4,
+            commit_result=committed_operation,
+        )
+        window_like = SimpleNamespace(
+            bottom_panel=SimpleNamespace(
+                selected_bounding_boxes=lambda: ("bbox_0001",),
+                state=SimpleNamespace(bbox_selected_ids=("bbox_0001",)),
+            ),
+            _bbox_manager=SimpleNamespace(
+                selected_id=None,
+                boxes=lambda: (box,),
+            ),
+            _segmentation_editor=editor,
+            _ensure_editable_segmentation_for_annotation=lambda: True,
+            _end_annotation_modification=lambda: None,
+            _record_global_history_for_segmentation_operation=lambda _operation: None,
+            _sync_renderer_segmentation_labels=lambda: None,
+            _request_hover_readout=lambda: None,
+            _request_picked_readout=lambda: None,
+            render_all=lambda: None,
+            _refresh_annotation_ui_state=lambda: None,
+        )
+
+        with patch.object(
+            MainWindow,
+            "_mask_to_absolute_coordinates",
+            side_effect=AssertionError("absolute coordinate materialization should not be used"),
+        ), patch("src.ui.main_window.show_warning") as warning_mock:
+            MainWindow._erase_selected_bbox_segmentation(window_like)
+
+        self.assertEqual(len(editor.erase_masked_region_calls), 1)
+        warning_mock.assert_not_called()
 
     def test_erase_selected_bbox_segmentation_cancels_and_warns_on_editor_error(self) -> None:
         box = self._box(box_id="bbox_0001", z0=1, z1=4, y0=2, y1=5, x0=3, x1=6)

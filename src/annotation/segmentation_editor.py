@@ -615,6 +615,109 @@ class SegmentationEditor:
         )
         return operation
 
+    def erase_masked_region(
+        self,
+        *,
+        z_bounds: Tuple[int, int],
+        y_bounds: Tuple[int, int],
+        x_bounds: Tuple[int, int],
+        region_mask: np.ndarray,
+        target_label: Optional[int] = None,
+        operation_name: str = "erase_masked_region",
+    ) -> EditOperation:
+        normalized_target: Optional[int] = None
+        if target_label is not None:
+            normalized_target = int(target_label)
+            self._validate_label(normalized_target)
+
+        z0, z1 = int(z_bounds[0]), int(z_bounds[1])
+        y0, y1 = int(y_bounds[0]), int(y_bounds[1])
+        x0, x1 = int(x_bounds[0]), int(x_bounds[1])
+        if not (0 <= z0 <= z1 <= self.shape[0]):
+            raise ValueError(f"z_bounds {z_bounds} are out of bounds for shape {self.shape}")
+        if not (0 <= y0 <= y1 <= self.shape[1]):
+            raise ValueError(f"y_bounds {y_bounds} are out of bounds for shape {self.shape}")
+        if not (0 <= x0 <= x1 <= self.shape[2]):
+            raise ValueError(f"x_bounds {x_bounds} are out of bounds for shape {self.shape}")
+
+        region_shape = (z1 - z0, y1 - y0, x1 - x0)
+        mask_array = np.asarray(region_mask, dtype=bool)
+        if mask_array.shape != region_shape:
+            raise ValueError(
+                f"region_mask shape {mask_array.shape} does not match region shape {region_shape}"
+            )
+        if mask_array.size == 0 or not np.any(mask_array):
+            return self._create_operation(
+                name=operation_name,
+                label=0,
+                changed_voxels=0,
+                bounds=None,
+            )
+
+        subarray = self._array[z0:z1, y0:y1, x0:x1]
+        subarray_flat = subarray.ravel(order="C")
+        mask_flat = mask_array.reshape(-1)
+        masked_local_flat_indices = np.flatnonzero(mask_flat).astype(np.int64, copy=False)
+        if masked_local_flat_indices.size == 0:
+            return self._create_operation(
+                name=operation_name,
+                label=0,
+                changed_voxels=0,
+                bounds=None,
+            )
+
+        masked_old_values = subarray_flat[masked_local_flat_indices]
+        if normalized_target is None:
+            changed_mask = masked_old_values != 0
+        else:
+            changed_mask = (masked_old_values == normalized_target) & (masked_old_values != 0)
+        if not np.any(changed_mask):
+            return self._create_operation(
+                name=operation_name,
+                label=0,
+                changed_voxels=0,
+                bounds=None,
+            )
+
+        changed_local_flat_indices = masked_local_flat_indices[changed_mask]
+        local_y_size = int(region_shape[1])
+        local_x_size = int(region_shape[2])
+        local_plane = int(local_y_size * local_x_size)
+        local_z = changed_local_flat_indices // local_plane
+        local_remainder = changed_local_flat_indices - (local_z * local_plane)
+        local_y = local_remainder // local_x_size
+        local_x = local_remainder - (local_y * local_x_size)
+        changed_old = masked_old_values[changed_mask].astype(self._array.dtype, copy=True)
+        changed_count = int(changed_local_flat_indices.shape[0])
+        subarray[local_z, local_y, local_x] = 0
+        self._update_counts_after_assignment(changed_old, 0)
+        self._mark_uncommitted_change()
+
+        global_z = local_z + int(z0)
+        global_y = local_y + int(y0)
+        global_x = local_x + int(x0)
+        global_x_size = int(self.shape[2])
+        global_plane = int(self.shape[1] * global_x_size)
+        global_flat_indices = (
+            (global_z * global_plane)
+            + (global_y * global_x_size)
+            + global_x
+        ).astype(np.int64, copy=False)
+
+        bounds = self._bounds_from_flat_indices(global_flat_indices)
+        operation = self._create_operation(
+            name=operation_name,
+            label=0,
+            changed_voxels=changed_count,
+            bounds=bounds,
+        )
+        self._record_modification_flat_delta(
+            name=operation_name,
+            flat_indices=global_flat_indices,
+            previous_values=changed_old,
+        )
+        return operation
+
     def assign(
         self,
         coordinates: Sequence[Coordinate],
@@ -1042,8 +1145,25 @@ class SegmentationEditor:
             ),
             self.shape,
         ).astype(np.int64, copy=False)
-        indices_copy = np.asarray(indices, dtype=np.int64).copy()
-        values_copy = np.asarray(previous_values, dtype=self._array.dtype).copy()
+        self._record_modification_flat_delta(
+            name=name,
+            flat_indices=indices,
+            previous_values=previous_values,
+        )
+
+    def _record_modification_flat_delta(
+        self,
+        *,
+        name: str,
+        flat_indices: np.ndarray,
+        previous_values: np.ndarray,
+    ) -> None:
+        indices_copy = np.asarray(flat_indices, dtype=np.int64).reshape(-1).copy()
+        values_copy = np.asarray(previous_values, dtype=self._array.dtype).reshape(-1).copy()
+        if indices_copy.size == 0 or values_copy.size == 0:
+            return
+        if indices_copy.shape[0] != values_copy.shape[0]:
+            raise ValueError("flat_indices and previous_values must have the same length")
         indices_copy.setflags(write=False)
         values_copy.setflags(write=False)
 

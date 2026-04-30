@@ -127,6 +127,129 @@ class SegmentationEditorTests(unittest.TestCase):
         )
         self.assertEqual(no_change.changed_voxels, 0)
 
+    def test_erase_masked_region_clears_masked_nonzero_voxels(self) -> None:
+        array = np.zeros((5, 5, 5), dtype=np.uint8)
+        array[1:4, 1:4, 1:4] = 4
+        editor = SegmentationEditor(array, kind="semantic")
+        editor.mark_clean()
+
+        region_mask = np.zeros((3, 3, 3), dtype=bool)
+        region_mask[0, 0, 0] = True
+        region_mask[1, 1, 1] = True
+        region_mask[2, 2, 2] = True
+        region_mask[0, 1, 2] = True
+
+        operation = editor.erase_masked_region(
+            z_bounds=(1, 4),
+            y_bounds=(1, 4),
+            x_bounds=(1, 4),
+            region_mask=region_mask,
+            operation_name="erase_bbox_mask",
+        )
+
+        self.assertEqual(operation.name, "erase_bbox_mask")
+        self.assertEqual(operation.changed_voxels, 4)
+        self.assertEqual(int(editor.array_view()[1, 1, 1]), 0)
+        self.assertEqual(int(editor.array_view()[2, 2, 2]), 0)
+        self.assertEqual(int(editor.array_view()[3, 3, 3]), 0)
+        self.assertEqual(int(editor.array_view()[1, 2, 3]), 0)
+        self.assertEqual(int(editor.array_view()[1, 1, 2]), 4)
+        self.assertTrue(editor.dirty)
+
+    def test_erase_masked_region_target_label_filters_changes(self) -> None:
+        array = np.zeros((4, 4, 4), dtype=np.uint8)
+        array[1, 1, 1] = 2
+        array[1, 1, 2] = 5
+        array[1, 2, 1] = 2
+        editor = SegmentationEditor(array, kind="instance")
+        editor.mark_clean()
+
+        region_mask = np.zeros((2, 2, 2), dtype=bool)
+        region_mask[0, 0, 0] = True  # (1,1,1) label 2
+        region_mask[0, 0, 1] = True  # (1,1,2) label 5
+        region_mask[0, 1, 0] = True  # (1,2,1) label 2
+
+        operation = editor.erase_masked_region(
+            z_bounds=(1, 3),
+            y_bounds=(1, 3),
+            x_bounds=(1, 3),
+            region_mask=region_mask,
+            target_label=2,
+            operation_name="erase_bbox_mask_target",
+        )
+
+        self.assertEqual(operation.changed_voxels, 2)
+        self.assertEqual(int(editor.array_view()[1, 1, 1]), 0)
+        self.assertEqual(int(editor.array_view()[1, 2, 1]), 0)
+        self.assertEqual(int(editor.array_view()[1, 1, 2]), 5)
+        self.assertTrue(editor.dirty)
+
+    def test_erase_masked_region_rejects_mask_shape_mismatch(self) -> None:
+        editor = SegmentationEditor.create_empty((4, 4, 4), kind="semantic", dtype=np.uint8)
+        bad_mask = np.zeros((2, 2, 3), dtype=bool)
+
+        with self.assertRaisesRegex(ValueError, "does not match region shape"):
+            editor.erase_masked_region(
+                z_bounds=(1, 3),
+                y_bounds=(1, 3),
+                x_bounds=(1, 3),
+                region_mask=bad_mask,
+            )
+
+    def test_erase_masked_region_rejects_out_of_bounds_region(self) -> None:
+        editor = SegmentationEditor.create_empty((4, 4, 4), kind="semantic", dtype=np.uint8)
+        region_mask = np.zeros((2, 2, 2), dtype=bool)
+
+        with self.assertRaisesRegex(ValueError, "z_bounds"):
+            editor.erase_masked_region(
+                z_bounds=(1, 5),
+                y_bounds=(1, 3),
+                x_bounds=(1, 3),
+                region_mask=region_mask,
+            )
+
+    def test_erase_masked_region_supports_undo_and_redo_roundtrip(self) -> None:
+        array = np.zeros((4, 4, 4), dtype=np.uint8)
+        array[1, 1, 1] = 3
+        array[1, 1, 2] = 3
+        array[2, 2, 2] = 3
+        editor = SegmentationEditor(array, kind="semantic")
+        before = np.array(editor.array_view(), copy=True)
+        editor.mark_clean()
+
+        region_mask = np.zeros((2, 2, 2), dtype=bool)
+        region_mask[0, 0, 0] = True
+        region_mask[0, 0, 1] = True
+        region_mask[1, 1, 1] = True
+
+        erase_operation = editor.erase_masked_region(
+            z_bounds=(1, 3),
+            y_bounds=(1, 3),
+            x_bounds=(1, 3),
+            region_mask=region_mask,
+            operation_name="erase_bbox_mask",
+        )
+        self.assertEqual(erase_operation.changed_voxels, 3)
+        self.assertEqual(editor.undo_depth(), 1)
+        self.assertEqual(editor.redo_depth(), 0)
+        self.assertTrue(editor.dirty)
+
+        undo_operation = editor.undo_last_modification()
+        self.assertIsNotNone(undo_operation)
+        np.testing.assert_array_equal(editor.array_view(), before)
+        self.assertEqual(editor.undo_depth(), 0)
+        self.assertEqual(editor.redo_depth(), 1)
+        self.assertFalse(editor.dirty)
+
+        redo_operation = editor.redo_last_modification()
+        self.assertIsNotNone(redo_operation)
+        self.assertEqual(int(editor.array_view()[1, 1, 1]), 0)
+        self.assertEqual(int(editor.array_view()[1, 1, 2]), 0)
+        self.assertEqual(int(editor.array_view()[2, 2, 2]), 0)
+        self.assertEqual(editor.undo_depth(), 1)
+        self.assertEqual(editor.redo_depth(), 0)
+        self.assertTrue(editor.dirty)
+
     def test_next_available_label_reflects_changes(self) -> None:
         editor = SegmentationEditor.create_empty((1, 1, 3), kind="instance", dtype=np.uint8)
         editor.paint_voxel((0, 0, 0), label=1)

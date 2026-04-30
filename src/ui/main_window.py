@@ -2092,10 +2092,6 @@ class MainWindow(QMainWindow):
         z_bounds, y_bounds, x_bounds, union_mask = MainWindow._build_selected_bbox_union_domain(
             selected_boxes
         )
-        erase_coordinates = MainWindow._mask_to_absolute_coordinates(
-            union_mask,
-            origin=(int(z_bounds[0]), int(y_bounds[0]), int(x_bounds[0])),
-        )
 
         end_annotation_modification = getattr(self, "_end_annotation_modification", None)
         if callable(end_annotation_modification):
@@ -2104,12 +2100,13 @@ class MainWindow(QMainWindow):
         operation_name = "erase_bbox_segmentation_selected"
         editor.begin_modification(operation_name)
         try:
-            if erase_coordinates.size > 0:
-                editor.erase(
-                    erase_coordinates,
-                    operation_name=operation_name,
-                    ignore_out_of_bounds=False,
-                )
+            editor.erase_masked_region(
+                z_bounds=(int(z_bounds[0]), int(z_bounds[1])),
+                y_bounds=(int(y_bounds[0]), int(y_bounds[1])),
+                x_bounds=(int(x_bounds[0]), int(x_bounds[1])),
+                region_mask=np.asarray(union_mask, dtype=bool),
+                operation_name=operation_name,
+            )
         except Exception as exc:
             editor.cancel_modification()
             show_warning(str(exc), parent=self)
@@ -2121,7 +2118,7 @@ class MainWindow(QMainWindow):
             getattr(
                 committed_operation,
                 "changed_voxels",
-                int(erase_coordinates.shape[0]),
+                int(np.count_nonzero(union_mask)),
             )
         )
         if changed_voxels < 0:
