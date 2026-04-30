@@ -7,7 +7,7 @@ import numpy as np
 
 from ..bbox import BoundingBox, BoundingBoxLabel
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QCheckBox,
@@ -114,6 +114,10 @@ class BottomPanelState:
 class BottomPanel(QWidget):
     _CONTRAST_STEPS = 1_000
     _CONTRAST_MAX_STEP = _CONTRAST_STEPS - 1
+    _COMPACT_BUTTON_MAX_WIDTH = 170
+    _COMPACT_INPUT_MAX_WIDTH = 130
+    _COMPACT_SLIDER_MAX_WIDTH = 180
+    _COMPACT_BBOX_TABLE_MAX_WIDTH = 520
 
     def __init__(self) -> None:
         super().__init__()
@@ -264,7 +268,7 @@ class BottomPanel(QWidget):
         bbox_header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
         bbox_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         bbox_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        bbox_header.setSectionResizeMode(3, QHeaderView.Stretch)
+        bbox_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         self._bbox_label_label = QLabel("Selected Label")
         self._bbox_label_combo = QComboBox()
         self._bbox_label_combo.addItem("Train", "train")
@@ -458,19 +462,26 @@ class BottomPanel(QWidget):
 
         learning_group = QGroupBox("Learning")
         learning_layout = QVBoxLayout()
-        learning_controls_row = QWidget()
-        learning_controls_layout = QHBoxLayout()
-        learning_controls_layout.setContentsMargins(0, 0, 0, 0)
-        learning_controls_layout.addWidget(self._load_model_button)
-        learning_controls_layout.addWidget(self._save_model_button)
-        learning_controls_layout.addWidget(self._segment_inference_button)
-        learning_controls_layout.addWidget(self._stop_inference_button)
-        learning_controls_layout.addWidget(self._train_model_button)
-        learning_controls_layout.addWidget(self._stop_training_button)
-        learning_controls_layout.addWidget(self._learning_training_status)
-        learning_controls_layout.addStretch(1)
-        learning_controls_row.setLayout(learning_controls_layout)
-        learning_layout.addWidget(learning_controls_row)
+        learning_controls_row_1 = QWidget()
+        learning_controls_layout_1 = QHBoxLayout()
+        learning_controls_layout_1.setContentsMargins(0, 0, 0, 0)
+        learning_controls_layout_1.addWidget(self._load_model_button)
+        learning_controls_layout_1.addWidget(self._save_model_button)
+        learning_controls_layout_1.addWidget(self._segment_inference_button)
+        learning_controls_layout_1.addWidget(self._stop_inference_button)
+        learning_controls_layout_1.addStretch(1)
+        learning_controls_row_1.setLayout(learning_controls_layout_1)
+        learning_layout.addWidget(learning_controls_row_1)
+
+        learning_controls_row_2 = QWidget()
+        learning_controls_layout_2 = QHBoxLayout()
+        learning_controls_layout_2.setContentsMargins(0, 0, 0, 0)
+        learning_controls_layout_2.addWidget(self._train_model_button)
+        learning_controls_layout_2.addWidget(self._stop_training_button)
+        learning_controls_layout_2.addWidget(self._learning_training_status)
+        learning_controls_layout_2.addStretch(1)
+        learning_controls_row_2.setLayout(learning_controls_layout_2)
+        learning_layout.addWidget(learning_controls_row_2)
         learning_group.setLayout(learning_layout)
 
         history_group = QGroupBox("History")
@@ -505,6 +516,56 @@ class BottomPanel(QWidget):
         self._update_bounding_box_controls_state()
         self._update_learning_controls_state()
         self._update_history_controls_state()
+        self._apply_compact_right_panel_widths()
+
+    def _apply_compact_right_panel_widths(self) -> None:
+        file_buttons = (
+            self._open_button,
+            self._open_semantic_button,
+            self._open_instance_button,
+            self._save_segmentation_button,
+        )
+        for button in file_buttons:
+            button.setMaximumWidth(self._COMPACT_BUTTON_MAX_WIDTH)
+
+        navigation_inputs = (
+            self._cursor_z,
+            self._cursor_y,
+            self._cursor_x,
+            self._zoom_spin,
+            self._manual_level_spin,
+        )
+        for widget in navigation_inputs:
+            widget.setMaximumWidth(self._COMPACT_INPUT_MAX_WIDTH)
+
+        self._contrast_min_slider.setMaximumWidth(self._COMPACT_SLIDER_MAX_WIDTH)
+        self._contrast_max_slider.setMaximumWidth(self._COMPACT_SLIDER_MAX_WIDTH)
+
+        annotation_compact_widgets = (
+            self._annotation_tool_label,
+            self._annotation_tool_combo,
+            self._active_label_label,
+            self._active_label_spin,
+            self._brush_radius_label,
+            self._brush_radius_spin,
+            self._eraser_target_label,
+            self._eraser_target_edit,
+            self._flood_fill_target_label,
+            self._flood_fill_target_spin,
+            self._flood_fill_button,
+            self._next_available_button,
+        )
+        for widget in annotation_compact_widgets:
+            widget.setMaximumWidth(self._COMPACT_BUTTON_MAX_WIDTH)
+
+        self._bbox_table.setMaximumWidth(self._COMPACT_BBOX_TABLE_MAX_WIDTH)
+
+        history_buttons = (
+            self._undo_button,
+            self._redo_button,
+        )
+        for button in history_buttons:
+            button.setMaximumWidth(self._COMPACT_BUTTON_MAX_WIDTH)
 
     def set_file_path(self, path: str) -> None:
         self._file_path = path
@@ -866,8 +927,17 @@ class BottomPanel(QWidget):
         self.state.bbox_selected_label = self._shared_bbox_label_for_ids(self.state.bbox_selected_ids)
         self._bbox_table.blockSignals(True)
         self._bbox_table.clearSelection()
+        selection_model = self._bbox_table.selectionModel()
         for row_index in row_indices:
-            self._bbox_table.selectRow(row_index)
+            if selection_model is None:
+                self._bbox_table.selectRow(row_index)
+                continue
+            index = self._bbox_table.model().index(row_index, 0)
+            selection_model.select(
+                index,
+                QItemSelectionModel.SelectionFlag.Select
+                | QItemSelectionModel.SelectionFlag.Rows,
+            )
         self._bbox_table.blockSignals(False)
         self._set_selected_bbox_label_value(self.state.bbox_selected_label)
         self._update_bounding_box_controls_state()

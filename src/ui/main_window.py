@@ -3947,13 +3947,14 @@ class MainWindow(QMainWindow):
         self._deferred_close_checkpoint_path = normalized_path
 
     def _refresh_learning_training_ui_state(self) -> None:
-        self.bottom_panel.set_learning_training_running(self._training_is_running())
-        self.bottom_panel.set_stop_training_enabled(self._training_is_running())
+        training_running = self._training_is_running()
+        self.bottom_panel.set_learning_training_running(training_running)
         refresh_inference = getattr(self, "_refresh_learning_inference_ui_state", None)
         if callable(refresh_inference):
             refresh_inference()
-            return
-        MainWindow._refresh_learning_inference_ui_state(self)
+        else:
+            MainWindow._refresh_learning_inference_ui_state(self)
+        self.bottom_panel.set_stop_training_enabled(training_running)
 
     def _refresh_learning_inference_ui_state(self) -> None:
         inference_running = MainWindow._inference_navigation_lock_active(self)
