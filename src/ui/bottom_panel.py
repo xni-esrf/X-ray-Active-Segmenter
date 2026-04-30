@@ -10,6 +10,7 @@ from ..bbox import BoundingBox, BoundingBoxLabel
 from PySide6.QtCore import QItemSelectionModel, Qt
 from PySide6.QtWidgets import (
     QAbstractItemView,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDoubleSpinBox,
@@ -21,6 +22,7 @@ from PySide6.QtWidgets import (
     QLabel,
     QLineEdit,
     QPushButton,
+    QRadioButton,
     QSlider,
     QSizePolicy,
     QSpinBox,
@@ -105,6 +107,7 @@ class BottomPanelState:
     auto_level_enabled: bool = True
     manual_level: int = 0
     manual_level_max: int = 0
+    view_layout_mode: str = "all"
     bbox_rows: Tuple[BoundingBoxRow, ...] = tuple()
     bbox_selected_ids: Tuple[str, ...] = tuple()
     # Backward-compatible mirror of the first selected id.
@@ -139,6 +142,7 @@ class BottomPanel(QWidget):
         self._on_manual_level_requested: Optional[Callable[[int], None]] = None
         self._on_contrast_window_changed: Optional[Callable[[float, float], None]] = None
         self._on_segmentation_opacity_changed: Optional[Callable[[float], None]] = None
+        self._on_view_layout_mode_changed: Optional[Callable[[str], None]] = None
         self._on_annotation_mode_changed: Optional[Callable[[bool], None]] = None
         self._on_bounding_box_mode_changed: Optional[Callable[[bool], None]] = None
         self._on_annotation_tool_changed: Optional[Callable[[AnnotationTool], None]] = None
@@ -250,6 +254,18 @@ class BottomPanel(QWidget):
         self._manual_level_spin.setPrefix("L:")
         self._manual_level_spin.setRange(0, 0)
         self._manual_level_spin.setValue(0)
+        self._view_layout_label = QLabel("View Layout")
+        self._view_layout_button_group = QButtonGroup(self)
+        self._view_layout_button_group.setExclusive(True)
+        self._view_layout_all_radio = QRadioButton("All (3 views)")
+        self._view_layout_axial_radio = QRadioButton("Axial only")
+        self._view_layout_coronal_radio = QRadioButton("Coronal only")
+        self._view_layout_sagittal_radio = QRadioButton("Sagittal only")
+        self._view_layout_all_radio.setChecked(True)
+        self._view_layout_button_group.addButton(self._view_layout_all_radio)
+        self._view_layout_button_group.addButton(self._view_layout_axial_radio)
+        self._view_layout_button_group.addButton(self._view_layout_coronal_radio)
+        self._view_layout_button_group.addButton(self._view_layout_sagittal_radio)
         self._contrast_min_label = QLabel("Window Min")
         self._contrast_min_slider = QSlider(Qt.Orientation.Horizontal)
         self._contrast_min_slider.setRange(0, self._CONTRAST_MAX_STEP)
@@ -339,6 +355,10 @@ class BottomPanel(QWidget):
         self._contrast_min_slider.valueChanged.connect(self._handle_contrast_min_changed)
         self._contrast_max_slider.valueChanged.connect(self._handle_contrast_max_changed)
         self._segmentation_opacity_slider.valueChanged.connect(self._handle_segmentation_opacity_changed)
+        self._view_layout_all_radio.toggled.connect(self._handle_view_layout_mode_changed)
+        self._view_layout_axial_radio.toggled.connect(self._handle_view_layout_mode_changed)
+        self._view_layout_coronal_radio.toggled.connect(self._handle_view_layout_mode_changed)
+        self._view_layout_sagittal_radio.toggled.connect(self._handle_view_layout_mode_changed)
         self._open_bounding_boxes_button.clicked.connect(self._handle_open_bounding_boxes_requested)
         self._save_bounding_boxes_button.clicked.connect(self._handle_save_bounding_boxes_requested)
         self._build_dataset_from_bboxes_button.clicked.connect(
@@ -402,6 +422,15 @@ class BottomPanel(QWidget):
         navigation_layout.addRow(QLabel("Zoom"), self._zoom_spin)
         navigation_layout.addRow(self._auto_level_checkbox)
         navigation_layout.addRow(self._manual_level_label, self._manual_level_spin)
+        view_layout_row = QWidget()
+        view_layout_grid = QGridLayout()
+        view_layout_grid.setContentsMargins(0, 0, 0, 0)
+        view_layout_grid.addWidget(self._view_layout_all_radio, 0, 0, 1, 2)
+        view_layout_grid.addWidget(self._view_layout_axial_radio, 1, 0)
+        view_layout_grid.addWidget(self._view_layout_coronal_radio, 1, 1)
+        view_layout_grid.addWidget(self._view_layout_sagittal_radio, 2, 0)
+        view_layout_row.setLayout(view_layout_grid)
+        navigation_layout.addRow(self._view_layout_label, view_layout_row)
         navigation_layout.addRow(self._pyramid_status)
         navigation_layout.addRow(self._level_status)
         navigation_group.setLayout(navigation_layout)
@@ -711,6 +740,33 @@ class BottomPanel(QWidget):
 
     def segmentation_opacity(self) -> float:
         return float(self.state.segmentation_opacity)
+
+    def set_view_layout_mode(self, mode: str) -> None:
+        normalized = str(mode).strip().lower()
+        if normalized not in {"all", "axial", "coronal", "sagittal"}:
+            normalized = "all"
+        self.state.view_layout_mode = normalized
+        target_button = self._view_layout_all_radio
+        if normalized == "axial":
+            target_button = self._view_layout_axial_radio
+        elif normalized == "coronal":
+            target_button = self._view_layout_coronal_radio
+        elif normalized == "sagittal":
+            target_button = self._view_layout_sagittal_radio
+        buttons = (
+            self._view_layout_all_radio,
+            self._view_layout_axial_radio,
+            self._view_layout_coronal_radio,
+            self._view_layout_sagittal_radio,
+        )
+        for button in buttons:
+            button.blockSignals(True)
+        target_button.setChecked(True)
+        for button in buttons:
+            button.blockSignals(False)
+
+    def view_layout_mode(self) -> str:
+        return str(self.state.view_layout_mode)
 
     def set_annotation_mode(self, enabled: bool) -> None:
         self.state.annotation_enabled = bool(enabled)
@@ -1069,6 +1125,9 @@ class BottomPanel(QWidget):
     def on_segmentation_opacity_changed(self, callback: Callable[[float], None]) -> None:
         self._on_segmentation_opacity_changed = callback
 
+    def on_view_layout_mode_changed(self, callback: Callable[[str], None]) -> None:
+        self._on_view_layout_mode_changed = callback
+
     def on_annotation_mode_changed(self, callback: Callable[[bool], None]) -> None:
         self._on_annotation_mode_changed = callback
 
@@ -1218,6 +1277,21 @@ class BottomPanel(QWidget):
         self._manual_level_spin.blockSignals(False)
         if self._on_manual_level_requested is not None:
             self._on_manual_level_requested(normalized)
+
+    def _handle_view_layout_mode_changed(self, checked: bool) -> None:
+        if not checked:
+            return
+        next_mode = "all"
+        if self._view_layout_axial_radio.isChecked():
+            next_mode = "axial"
+        elif self._view_layout_coronal_radio.isChecked():
+            next_mode = "coronal"
+        elif self._view_layout_sagittal_radio.isChecked():
+            next_mode = "sagittal"
+        previous_mode = self.state.view_layout_mode
+        self.state.view_layout_mode = next_mode
+        if next_mode != previous_mode and self._on_view_layout_mode_changed is not None:
+            self._on_view_layout_mode_changed(next_mode)
 
     def _handle_contrast_min_changed(self, value: int) -> None:
         data_range = self.state.contrast_data_range

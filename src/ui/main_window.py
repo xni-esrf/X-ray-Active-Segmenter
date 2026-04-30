@@ -99,6 +99,7 @@ DeferredTrainingCloseMode = Literal[
     "stop_and_close",
     "continue_in_background",
 ]
+ViewLayoutMode = Literal["all", "axial", "coronal", "sagittal"]
 
 # Keep annotation tool key handling explicitly scoped so existing Ctrl+Z/Y/S
 # shortcuts continue to flow through their dedicated handlers.
@@ -348,6 +349,7 @@ class MainWindowState:
     picked_label: Optional[int] = None
     pending_bbox_corner: Optional[Tuple[int, int, int]] = None
     flood_fill_target_label: int = 1
+    view_layout_mode: ViewLayoutMode = "all"
 
 
 @dataclass(frozen=True)
@@ -864,6 +866,7 @@ class MainWindow(QMainWindow):
         left_layout.setRowStretch(0, 1)
         left_layout.setRowStretch(1, 1)
         left_panel.setLayout(left_layout)
+        self._left_layout = left_layout
 
         control_scroll_area = QScrollArea()
         control_scroll_area.setWidget(self.bottom_panel)
@@ -899,6 +902,7 @@ class MainWindow(QMainWindow):
         self.bottom_panel.on_zoom_changed(self.sync_manager.set_zoom)
         self.bottom_panel.on_auto_level_mode_changed(self._handle_auto_level_mode_changed)
         self.bottom_panel.on_manual_level_requested(self._handle_manual_level_requested)
+        self.bottom_panel.on_view_layout_mode_changed(self._handle_view_layout_mode_changed)
         self.bottom_panel.on_contrast_window_changed(self._handle_contrast_window_changed)
         self.bottom_panel.on_segmentation_opacity_changed(self._handle_segmentation_opacity_changed)
         self.bottom_panel.on_annotation_mode_changed(self._handle_annotation_mode_changed)
@@ -970,6 +974,10 @@ class MainWindow(QMainWindow):
         if app_instance is not None:
             app_instance.installEventFilter(self)
             self._app_event_filter_installed = True
+        set_view_layout_mode = getattr(self.bottom_panel, "set_view_layout_mode", None)
+        if callable(set_view_layout_mode):
+            set_view_layout_mode(self.state.view_layout_mode)
+        self._apply_view_layout_mode()
         self.sync_manager.on_state_changed(self._on_sync_state_changed)
         self._handle_segmentation_opacity_changed(self.bottom_panel.segmentation_opacity())
         self._sync_bounding_boxes_ui()
@@ -1234,6 +1242,14 @@ class MainWindow(QMainWindow):
         self.bottom_panel.set_cursor_range(volume.info.shape)
         self.sync_manager.set_volume_info(volume.info)
         self.state.volume_loaded = True
+        # New raw volumes always start in the default 3-view layout.
+        self.state.view_layout_mode = "all"
+        set_view_layout_mode = getattr(self.bottom_panel, "set_view_layout_mode", None)
+        if callable(set_view_layout_mode):
+            set_view_layout_mode("all")
+        apply_layout_mode = getattr(self, "_apply_view_layout_mode", None)
+        if callable(apply_layout_mode):
+            apply_layout_mode()
         self.bottom_panel.set_pyramid_levels(len(levels) if levels else 1, kind="Raw")
         self.bottom_panel.set_active_levels(
             axial=(0, 1),
@@ -4292,11 +4308,102 @@ class MainWindow(QMainWindow):
         self.renderer.set_manual_level(int(level))
         self._queue_contrast_rerender()
 
+    def _handle_view_layout_mode_changed(self, mode: str) -> None:
+        normalized = str(mode).strip().lower()
+        if normalized not in {"all", "axial", "coronal", "sagittal"}:
+            normalized = "all"
+        current = str(self.state.view_layout_mode).strip().lower()
+        self.state.view_layout_mode = cast(ViewLayoutMode, normalized)
+        if current != normalized:
+            panel = getattr(self, "bottom_panel", None)
+            setter = getattr(panel, "set_view_layout_mode", None)
+            if callable(setter):
+                setter(normalized)
+        apply_layout_mode = getattr(self, "_apply_view_layout_mode", None)
+        if callable(apply_layout_mode):
+            apply_layout_mode()
+        else:
+            MainWindow._apply_view_layout_mode(self)
+
+    def _apply_view_layout_mode(self) -> None:
+        layout_obj = getattr(self, "_left_layout", None)
+        if not isinstance(layout_obj, QGridLayout):
+            return
+        axial = self.views.get("axial")
+        coronal = self.views.get("coronal")
+        sagittal = self.views.get("sagittal")
+        if not isinstance(axial, QWidget) or not isinstance(coronal, QWidget) or not isinstance(sagittal, QWidget):
+            return
+
+        mode = str(self.state.view_layout_mode).strip().lower()
+        if mode not in {"all", "axial", "coronal", "sagittal"}:
+            mode = "all"
+            self.state.view_layout_mode = cast(ViewLayoutMode, mode)
+
+        # Re-adding widgets to the grid is enough to update their positions/spans.
+        layout_obj.removeWidget(axial)
+        layout_obj.removeWidget(coronal)
+        layout_obj.removeWidget(sagittal)
+
+        if mode == "all":
+            axial.show()
+            coronal.show()
+            sagittal.show()
+            layout_obj.addWidget(axial, 0, 0, 1, 1)
+            layout_obj.addWidget(coronal, 0, 1, 1, 1)
+            layout_obj.addWidget(sagittal, 1, 0, 1, 2)
+            if bool(getattr(self.state, "volume_loaded", False)):
+                self._queue_visible_view_rerender()
+            return
+
+        selected_view = axial
+        hidden_views = (coronal, sagittal)
+        if mode == "coronal":
+            selected_view = coronal
+            hidden_views = (axial, sagittal)
+        elif mode == "sagittal":
+            selected_view = sagittal
+            hidden_views = (axial, coronal)
+        for view in hidden_views:
+            view.hide()
+        selected_view.show()
+        layout_obj.addWidget(selected_view, 0, 0, 2, 2)
+
+        if bool(getattr(self.state, "volume_loaded", False)):
+            self._queue_visible_view_rerender()
+
+    def _visible_view_ids(self) -> Tuple[ViewId, ...]:
+        visible_ids = []
+        for view_id, view in self.views.items():
+            is_hidden = getattr(view, "isHidden", None)
+            if callable(is_hidden):
+                try:
+                    if bool(is_hidden()):
+                        continue
+                except Exception:
+                    pass
+            visible_ids.append(view_id)
+        return tuple(visible_ids)
+
+    def _queue_visible_view_rerender(self) -> None:
+        visible_ids = self._visible_view_ids()
+        if not visible_ids:
+            return
+        for view_id in visible_ids:
+            self._queue_render(view_id)
+
     def _queue_contrast_rerender(self) -> None:
         if not self.views:
             self.render_all()
             return
-        for view_id in self.views:
+        visible_view_ids_getter = getattr(self, "_visible_view_ids", None)
+        if callable(visible_view_ids_getter):
+            visible_view_ids = tuple(visible_view_ids_getter())
+        else:
+            visible_view_ids = tuple(self.views.keys())
+        if not visible_view_ids:
+            visible_view_ids = tuple(self.views.keys())
+        for view_id in visible_view_ids:
             self._queue_render(view_id)
 
     def _queue_render(self, view_id: ViewId) -> None:

@@ -692,6 +692,43 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertEqual(self.panel._segmentation_opacity_value.text(), "65%")
         self.assertAlmostEqual(changes[-1], 0.65, places=6)
 
+    def test_view_layout_mode_defaults_to_all(self) -> None:
+        self.assertEqual(self.panel.view_layout_mode(), "all")
+        self.assertTrue(self.panel._view_layout_all_radio.isChecked())
+
+    def test_set_view_layout_mode_updates_selected_radio(self) -> None:
+        self.panel.set_view_layout_mode("coronal")
+        self.assertEqual(self.panel.view_layout_mode(), "coronal")
+        self.assertTrue(self.panel._view_layout_coronal_radio.isChecked())
+        self.assertFalse(self.panel._view_layout_all_radio.isChecked())
+
+        self.panel.set_view_layout_mode("not-a-mode")
+        self.assertEqual(self.panel.view_layout_mode(), "all")
+        self.assertTrue(self.panel._view_layout_all_radio.isChecked())
+
+    def test_view_layout_mode_callback_emits_on_user_toggle(self) -> None:
+        changes: list[str] = []
+        self.panel.on_view_layout_mode_changed(lambda mode: changes.append(str(mode)))
+
+        self.panel._view_layout_axial_radio.click()
+        QApplication.processEvents()
+        self.assertEqual(changes[-1], "axial")
+
+        # Re-clicking checked button should not emit a redundant change.
+        count_after_first_toggle = len(changes)
+        self.panel._view_layout_axial_radio.click()
+        QApplication.processEvents()
+        self.assertEqual(len(changes), count_after_first_toggle)
+
+    def test_set_view_layout_mode_does_not_emit_callback(self) -> None:
+        changes: list[str] = []
+        self.panel.on_view_layout_mode_changed(lambda mode: changes.append(str(mode)))
+
+        self.panel.set_view_layout_mode("sagittal")
+        QApplication.processEvents()
+
+        self.assertEqual(changes, [])
+
 
 if __name__ == "__main__":
     unittest.main()

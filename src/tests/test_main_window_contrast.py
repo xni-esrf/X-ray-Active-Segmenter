@@ -146,6 +146,25 @@ class MainWindowContrastFlowTests(unittest.TestCase):
         self.assertEqual(queued_view_ids, ["axial", "coronal", "sagittal"])
         self.assertEqual(render_calls, [])
 
+    def test_queue_contrast_rerender_prefers_visible_view_ids_when_available(self) -> None:
+        queued_view_ids: list[str] = []
+        render_calls: list[str] = []
+        window_like = SimpleNamespace(
+            views={
+                "axial": object(),
+                "coronal": object(),
+                "sagittal": object(),
+            },
+            _visible_view_ids=lambda: ("sagittal",),
+            _queue_render=lambda view_id: queued_view_ids.append(str(view_id)),
+            render_all=lambda: render_calls.append("render"),
+        )
+
+        MainWindow._queue_contrast_rerender(window_like)
+
+        self.assertEqual(queued_view_ids, ["sagittal"])
+        self.assertEqual(render_calls, [])
+
     def test_queue_contrast_rerender_falls_back_when_views_missing(self) -> None:
         queued_view_ids: list[str] = []
         render_calls: list[str] = []
@@ -250,6 +269,16 @@ class MainWindowContrastFlowTests(unittest.TestCase):
             applied,
             [("axial", 0.42), ("coronal", 0.42), ("sagittal", 0.42)],
         )
+
+    def test_handle_view_layout_mode_changed_normalizes_and_updates_state(self) -> None:
+        state = SimpleNamespace(view_layout_mode="all")
+        window_like = SimpleNamespace(state=state)
+
+        MainWindow._handle_view_layout_mode_changed(window_like, "coronal")
+        self.assertEqual(state.view_layout_mode, "coronal")
+
+        MainWindow._handle_view_layout_mode_changed(window_like, "invalid")
+        self.assertEqual(state.view_layout_mode, "all")
 
     def test_update_active_levels_status_marks_manual_forced_mode(self) -> None:
         calls: list[dict[str, object]] = []

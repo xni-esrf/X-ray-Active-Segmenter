@@ -32,6 +32,23 @@ class _LargeBottomPanelStub(_BottomPanelStub):
         self.setMinimumSize(1200, 1200)
 
 
+class _TrackingBottomPanelStub(_BottomPanelStub):
+    def __init__(self) -> None:
+        super().__init__()
+        self.view_layout_mode_calls: list[str] = []
+        self._view_layout_mode = "all"
+
+    def set_view_layout_mode(self, mode: str) -> None:
+        normalized = str(mode).strip().lower()
+        if normalized not in {"all", "axial", "coronal", "sagittal"}:
+            normalized = "all"
+        self._view_layout_mode = normalized
+        self.view_layout_mode_calls.append(normalized)
+
+    def view_layout_mode(self) -> str:
+        return self._view_layout_mode
+
+
 class _SyncManagerStub:
     def set_cursor_indices(self, _indices) -> None:
         return None
@@ -192,6 +209,94 @@ class MainWindowLayoutTests(unittest.TestCase):
             tuple(second_window._main_splitter.sizes()),
             (second_total_width - second_target_width, second_target_width),
         )
+
+    def test_view_layout_single_mode_hides_two_views_and_expands_selected_view(self) -> None:
+        window = self._build_window()
+        layout = window._left_panel.layout()
+        self.assertIsInstance(layout, QGridLayout)
+
+        window._handle_view_layout_mode_changed("coronal")
+        self._app.processEvents()
+
+        self.assertFalse(window.views["coronal"].isHidden())
+        self.assertTrue(window.views["axial"].isHidden())
+        self.assertTrue(window.views["sagittal"].isHidden())
+
+        coronal_index = layout.indexOf(window.views["coronal"])
+        self.assertGreaterEqual(coronal_index, 0)
+        coronal_row, coronal_col, coronal_row_span, coronal_col_span = layout.getItemPosition(coronal_index)
+        self.assertEqual((coronal_row, coronal_col, coronal_row_span, coronal_col_span), (0, 0, 2, 2))
+
+    def test_view_layout_all_mode_restores_three_view_grid(self) -> None:
+        window = self._build_window()
+        layout = window._left_panel.layout()
+        self.assertIsInstance(layout, QGridLayout)
+
+        window._handle_view_layout_mode_changed("axial")
+        self._app.processEvents()
+        window._handle_view_layout_mode_changed("all")
+        self._app.processEvents()
+
+        self.assertFalse(window.views["axial"].isHidden())
+        self.assertFalse(window.views["coronal"].isHidden())
+        self.assertFalse(window.views["sagittal"].isHidden())
+
+        axial_index = layout.indexOf(window.views["axial"])
+        coronal_index = layout.indexOf(window.views["coronal"])
+        sagittal_index = layout.indexOf(window.views["sagittal"])
+        self.assertEqual(layout.getItemPosition(axial_index), (0, 0, 1, 1))
+        self.assertEqual(layout.getItemPosition(coronal_index), (0, 1, 1, 1))
+        self.assertEqual(layout.getItemPosition(sagittal_index), (1, 0, 1, 2))
+
+    def test_view_layout_switch_does_not_replace_or_mutate_view_objects(self) -> None:
+        window = self._build_window()
+        axial = window.views["axial"]
+        coronal = window.views["coronal"]
+        sagittal = window.views["sagittal"]
+        axial.custom_state = {"slice": 10, "zoom": 1.7}
+        coronal.custom_state = {"slice": 20, "zoom": 0.8}
+        sagittal.custom_state = {"slice": 30, "zoom": 2.1}
+
+        window._handle_view_layout_mode_changed("sagittal")
+        self._app.processEvents()
+        window._handle_view_layout_mode_changed("all")
+        self._app.processEvents()
+
+        self.assertIs(window.views["axial"], axial)
+        self.assertIs(window.views["coronal"], coronal)
+        self.assertIs(window.views["sagittal"], sagittal)
+        self.assertEqual(axial.custom_state, {"slice": 10, "zoom": 1.7})
+        self.assertEqual(coronal.custom_state, {"slice": 20, "zoom": 0.8})
+        self.assertEqual(sagittal.custom_state, {"slice": 30, "zoom": 2.1})
+
+    def test_view_layout_initialization_syncs_bottom_panel_and_defaults_to_all(self) -> None:
+        window = self._build_window(bottom_panel_cls=_TrackingBottomPanelStub)
+        layout = window._left_panel.layout()
+        self.assertIsInstance(layout, QGridLayout)
+
+        self.assertEqual(window.state.view_layout_mode, "all")
+        self.assertEqual(window.bottom_panel.view_layout_mode(), "all")
+        self.assertEqual(window.bottom_panel.view_layout_mode_calls, ["all"])
+
+        self.assertFalse(window.views["axial"].isHidden())
+        self.assertFalse(window.views["coronal"].isHidden())
+        self.assertFalse(window.views["sagittal"].isHidden())
+        self.assertEqual(layout.getItemPosition(layout.indexOf(window.views["axial"])), (0, 0, 1, 1))
+        self.assertEqual(layout.getItemPosition(layout.indexOf(window.views["coronal"])), (0, 1, 1, 1))
+        self.assertEqual(layout.getItemPosition(layout.indexOf(window.views["sagittal"])), (1, 0, 1, 2))
+
+    def test_view_layout_mode_change_rerenders_only_visible_views_when_volume_loaded(self) -> None:
+        window = self._build_window()
+        window.state.volume_loaded = True
+        queued_view_ids: list[str] = []
+        window._queue_render = lambda view_id: queued_view_ids.append(str(view_id))  # type: ignore[method-assign]
+
+        window._handle_view_layout_mode_changed("coronal")
+        self.assertEqual(queued_view_ids, ["coronal"])
+
+        queued_view_ids.clear()
+        window._handle_view_layout_mode_changed("all")
+        self.assertEqual(queued_view_ids, ["axial", "coronal", "sagittal"])
 
 
 if __name__ == "__main__":

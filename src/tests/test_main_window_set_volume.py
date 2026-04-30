@@ -23,6 +23,7 @@ class MainWindowSetVolumeTests(unittest.TestCase):
         cursor_calls: list[tuple[int, int, int]] = []
         info_calls: list[object] = []
         refresh_calls: list[str] = []
+        view_layout_calls: list[str] = []
 
         class _RendererStub:
             def __init__(self) -> None:
@@ -101,17 +102,25 @@ class MainWindowSetVolumeTests(unittest.TestCase):
                 set_contrast_window=lambda value: contrast_calls.append(("window", value)),
                 set_level_mode=lambda **kwargs: level_mode_calls.append(dict(kwargs)),
                 set_cursor_range=lambda shape: cursor_calls.append(tuple(shape)),
+                set_view_layout_mode=lambda mode: view_layout_calls.append(str(mode)),
                 set_pyramid_levels=lambda *_args, **_kwargs: None,
                 set_active_levels=lambda **_kwargs: None,
             ),
             sync_manager=SimpleNamespace(
                 set_volume_info=lambda info: info_calls.append(info),
             ),
-            state=SimpleNamespace(volume_loaded=False, annotation_mode_enabled=False),
+            state=SimpleNamespace(
+                volume_loaded=False,
+                annotation_mode_enabled=False,
+                view_layout_mode="sagittal",
+            ),
             _ensure_editable_segmentation_for_annotation=lambda: None,
             _refresh_annotation_ui_state=lambda: refresh_calls.append("refresh"),
         )
         window_like._sync_contrast_controls_from_renderer = lambda: MainWindow._sync_contrast_controls_from_renderer(
+            window_like
+        )
+        window_like._sync_level_mode_controls_from_renderer = lambda: MainWindow._sync_level_mode_controls_from_renderer(
             window_like
         )
 
@@ -155,12 +164,14 @@ class MainWindowSetVolumeTests(unittest.TestCase):
         self.assertEqual(len(renderer.attach_calls), 2)
         self.assertEqual(sync_bbox_calls, ["sync", "sync"])
         self.assertEqual(cursor_calls, [(10, 11, 12), (4, 5, 6)])
+        self.assertEqual(view_layout_calls, ["all", "all"])
         self.assertEqual(len(info_calls), 2)
         self.assertEqual(history_calls, ["clear", "clear"])
         self.assertEqual(picker_calls, ["clear", "clear"])
         self.assertEqual(refresh_calls, ["refresh", "refresh"])
         self.assertIs(window_like._raw_volume, second_volume)
         self.assertTrue(window_like.state.volume_loaded)
+        self.assertEqual(window_like.state.view_layout_mode, "all")
 
     def test_set_volume_failure_keeps_existing_window_state(self) -> None:
         attach_calls: list[tuple[object, object]] = []
@@ -214,13 +225,18 @@ class MainWindowSetVolumeTests(unittest.TestCase):
             _sync_contrast_controls_from_renderer=lambda: sync_contrast_calls.append("sync"),
             bottom_panel=SimpleNamespace(
                 set_cursor_range=lambda shape: cursor_calls.append(tuple(shape)),
+                set_view_layout_mode=lambda _mode: None,
                 set_pyramid_levels=lambda *_args, **_kwargs: None,
                 set_active_levels=lambda **_kwargs: None,
             ),
             sync_manager=SimpleNamespace(
                 set_volume_info=lambda info: info_calls.append(info),
             ),
-            state=SimpleNamespace(volume_loaded=True, annotation_mode_enabled=False),
+            state=SimpleNamespace(
+                volume_loaded=True,
+                annotation_mode_enabled=False,
+                view_layout_mode="coronal",
+            ),
             _ensure_editable_segmentation_for_annotation=lambda: ensure_calls.append("ensure"),
             _refresh_annotation_ui_state=lambda: refresh_calls.append("refresh"),
         )
@@ -246,6 +262,76 @@ class MainWindowSetVolumeTests(unittest.TestCase):
         self.assertEqual(window_like._raw_volume, "existing_raw")
         self.assertIs(window_like._bbox_manager, previous_bbox_manager)
         self.assertTrue(window_like.state.volume_loaded)
+        self.assertEqual(window_like.state.view_layout_mode, "coronal")
+
+    def test_set_volume_resets_layout_mode_to_all_and_applies_layout_when_available(self) -> None:
+        layout_apply_calls: list[str] = []
+        view_layout_calls: list[str] = []
+
+        renderer = SimpleNamespace(
+            attach_volume=lambda _volume, *, levels=None: None,
+            detach_segmentation=lambda: None,
+            get_data_range=lambda: (0.0, 1.0),
+            get_window_range=lambda: (0.0, 1.0),
+            is_auto_level_enabled=lambda: True,
+            manual_level=lambda: 0,
+            available_level_count=lambda: 1,
+        )
+        window_like = SimpleNamespace(
+            _semantic_volume=None,
+            _semantic_worker=None,
+            _instance_volume=None,
+            _instance_worker=None,
+            _segmentation_editor=None,
+            _pending_render_view_ids=set(),
+            _render_flush_scheduled=False,
+            _pending_annotation_peer_view_ids=set(),
+            _annotation_dirty_views=set(),
+            _annotation_peer_flush_scheduled=False,
+            _bbox_drag_active=False,
+            _bbox_drag_source_view_id=None,
+            _bbox_pending_peer_view_ids=set(),
+            _bbox_peer_flush_scheduled=False,
+            _bbox_drag_staged_history_updates={},
+            _annotation_modification_active=False,
+            _annotation_modification_view_id=None,
+            _annotation_labels_dirty=False,
+            _deferred_hover_readout=False,
+            _deferred_picked_readout=False,
+            _global_history=SimpleNamespace(clear=lambda: None),
+            _clear_picker_selection=lambda: None,
+            renderer=renderer,
+            _raw_volume=None,
+            _bbox_manager=object(),
+            _on_bounding_boxes_changed=lambda _change: None,
+            _sync_bounding_boxes_ui=lambda: None,
+            _sync_contrast_controls_from_renderer=lambda: None,
+            _sync_level_mode_controls_from_renderer=lambda: None,
+            _apply_view_layout_mode=lambda: layout_apply_calls.append("apply"),
+            bottom_panel=SimpleNamespace(
+                set_cursor_range=lambda _shape: None,
+                set_view_layout_mode=lambda mode: view_layout_calls.append(str(mode)),
+                set_pyramid_levels=lambda *_args, **_kwargs: None,
+                set_active_levels=lambda **_kwargs: None,
+            ),
+            sync_manager=SimpleNamespace(set_volume_info=lambda _info: None),
+            state=SimpleNamespace(
+                volume_loaded=False,
+                annotation_mode_enabled=False,
+                view_layout_mode="sagittal",
+            ),
+            _ensure_editable_segmentation_for_annotation=lambda: None,
+            _refresh_annotation_ui_state=lambda: None,
+        )
+        volume = SimpleNamespace(
+            info=SimpleNamespace(shape=(7, 8, 9)),
+            loader=SimpleNamespace(path="/tmp/fresh.raw"),
+        )
+
+        self.assertTrue(MainWindow.set_volume(window_like, volume, levels=None))
+        self.assertEqual(window_like.state.view_layout_mode, "all")
+        self.assertEqual(view_layout_calls, ["all"])
+        self.assertEqual(layout_apply_calls, ["apply"])
 
 
 if __name__ == "__main__":
