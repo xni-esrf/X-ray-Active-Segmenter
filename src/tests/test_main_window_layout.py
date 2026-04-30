@@ -9,6 +9,11 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QGridLayout, QScrollArea, QSplitter, QWidget
+from src.bbox import BoundingBox
+try:
+    from src.ui.bottom_panel import BottomPanel as RealBottomPanel
+except Exception:  # pragma: no cover - environment dependent
+    RealBottomPanel = None  # type: ignore[assignment]
 
 
 class _BottomPanelStub(QWidget):
@@ -121,7 +126,7 @@ class MainWindowLayoutTests(unittest.TestCase):
         self.assertIs(scroll_area.widget(), window.bottom_panel)
         self.assertEqual(scroll_area.horizontalScrollBarPolicy(), Qt.ScrollBarAsNeeded)
         self.assertEqual(scroll_area.verticalScrollBarPolicy(), Qt.ScrollBarAsNeeded)
-        self.assertFalse(scroll_area.widgetResizable())
+        self.assertTrue(scroll_area.widgetResizable())
 
         self.assertFalse(hasattr(window, "_unused_view"))
 
@@ -144,7 +149,7 @@ class MainWindowLayoutTests(unittest.TestCase):
         self.assertGreater(scroll_area.horizontalScrollBar().maximum(), 0)
         self.assertGreater(scroll_area.verticalScrollBar().maximum(), 0)
 
-    def test_control_panel_width_is_clamped_to_ten_and_fifty_percent(self) -> None:
+    def test_control_panel_width_is_clamped_to_five_and_thirty_five_percent(self) -> None:
         window = self._build_window()
         window.resize(1000, 700)
         window.show()
@@ -170,7 +175,7 @@ class MainWindowLayoutTests(unittest.TestCase):
         window._apply_main_splitter_width_constraints()
         self.assertEqual(tuple(window._main_splitter.sizes()), (total_width - max_width, max_width))
 
-    def test_initial_splitter_size_defaults_to_twenty_five_percent_without_persistence(self) -> None:
+    def test_initial_splitter_size_defaults_to_twenty_percent_without_persistence(self) -> None:
         first_window = self._build_window()
         first_window.resize(1000, 700)
         first_window.show()
@@ -297,6 +302,65 @@ class MainWindowLayoutTests(unittest.TestCase):
         queued_view_ids.clear()
         window._handle_view_layout_mode_changed("all")
         self.assertEqual(queued_view_ids, ["axial", "coronal", "sagittal"])
+
+    def test_bbox_table_width_grows_when_control_panel_expands(self) -> None:
+        if RealBottomPanel is None:
+            self.skipTest("Real BottomPanel is not available")
+        window = self._build_window(bottom_panel_cls=RealBottomPanel)
+        window.resize(2200, 1200)
+        window.show()
+        self._app.processEvents()
+        window._initialize_main_splitter_sizes()
+        self._app.processEvents()
+
+        box = BoundingBox.from_bounds(
+            box_id="bbox_very_long",
+            z0=123,
+            z1=999,
+            y0=10,
+            y1=998,
+            x0=20,
+            x1=997,
+            volume_shape=(2000, 2000, 2000),
+        )
+        window.bottom_panel.set_bounding_boxes((box,))
+        self._app.processEvents()
+
+        total_width = window._main_splitter_total_width()
+        min_width, max_width = window._main_splitter_control_panel_width_bounds()
+        window._main_splitter.setSizes([total_width - min_width, min_width])
+        window._apply_main_splitter_width_constraints()
+        self._app.processEvents()
+        narrow_width = window.bottom_panel._bbox_table.width()
+
+        window._main_splitter.setSizes([total_width - max_width, max_width])
+        window._apply_main_splitter_width_constraints()
+        self._app.processEvents()
+        wide_width = window.bottom_panel._bbox_table.width()
+
+        self.assertGreaterEqual(max_width, min_width)
+        self.assertGreater(wide_width, narrow_width)
+
+    def test_compact_controls_remain_compact_at_minimum_control_panel_width(self) -> None:
+        if RealBottomPanel is None:
+            self.skipTest("Real BottomPanel is not available")
+        window = self._build_window(bottom_panel_cls=RealBottomPanel)
+        window.resize(1600, 900)
+        window.show()
+        self._app.processEvents()
+        window._initialize_main_splitter_sizes()
+        self._app.processEvents()
+
+        total_width = window._main_splitter_total_width()
+        min_width, _max_width = window._main_splitter_control_panel_width_bounds()
+        window._main_splitter.setSizes([total_width - min_width, min_width])
+        window._apply_main_splitter_width_constraints()
+        self._app.processEvents()
+
+        self.assertLessEqual(window.bottom_panel._open_button.width(), 170)
+        self.assertLessEqual(window.bottom_panel._zoom_spin.width(), 130)
+        self.assertLessEqual(window.bottom_panel._contrast_min_slider.width(), 180)
+        self.assertLessEqual(window.bottom_panel._undo_button.width(), 170)
 
 
 if __name__ == "__main__":

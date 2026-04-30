@@ -728,9 +728,9 @@ class _LearningInferenceWorker(QObject):
 
 
 class MainWindow(QMainWindow):
-    _CONTROL_PANEL_MIN_WIDTH_FRACTION = 0.08
-    _CONTROL_PANEL_MAX_WIDTH_FRACTION = 0.30
-    _CONTROL_PANEL_INITIAL_WIDTH_FRACTION = 0.14
+    _CONTROL_PANEL_MIN_WIDTH_FRACTION = 0.05
+    _CONTROL_PANEL_MAX_WIDTH_FRACTION = 0.35
+    _CONTROL_PANEL_INITIAL_WIDTH_FRACTION = 0.20
 
     def __init__(
         self,
@@ -870,7 +870,7 @@ class MainWindow(QMainWindow):
 
         control_scroll_area = QScrollArea()
         control_scroll_area.setWidget(self.bottom_panel)
-        control_scroll_area.setWidgetResizable(False)
+        control_scroll_area.setWidgetResizable(True)
         control_scroll_area.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
         control_scroll_area.setVerticalScrollBarPolicy(Qt.ScrollBarAsNeeded)
 

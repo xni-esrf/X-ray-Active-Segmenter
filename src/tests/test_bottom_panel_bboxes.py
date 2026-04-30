@@ -6,10 +6,12 @@ import unittest
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from PySide6.QtWidgets import QApplication, QAbstractItemView
+    from PySide6.QtWidgets import QApplication, QAbstractItemView, QGroupBox, QSizePolicy
 except Exception:  # pragma: no cover - environment dependent
     QApplication = None  # type: ignore[assignment]
     QAbstractItemView = None  # type: ignore[assignment]
+    QGroupBox = None  # type: ignore[assignment]
+    QSizePolicy = None  # type: ignore[assignment]
 
 from src.bbox import BoundingBox
 try:
@@ -728,6 +730,46 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         QApplication.processEvents()
 
         self.assertEqual(changes, [])
+
+    def test_only_bounding_boxes_group_uses_expanding_width_policy(self) -> None:
+        self.assertIsNotNone(QGroupBox)
+        self.assertIsNotNone(QSizePolicy)
+        groups = self.panel.findChildren(QGroupBox)
+        self.assertGreater(len(groups), 0)
+
+        for group in groups:
+            horizontal_policy = group.sizePolicy().horizontalPolicy()
+            if group.title() == "Bounding Boxes":
+                self.assertEqual(horizontal_policy, QSizePolicy.Expanding)
+                self.assertGreaterEqual(group.minimumWidth(), 336)
+            else:
+                self.assertEqual(horizontal_policy, QSizePolicy.Maximum)
+
+    def test_bbox_table_width_is_expanding_with_content_minimum(self) -> None:
+        self.assertIsNotNone(QSizePolicy)
+        horizontal_policy = self.panel._bbox_table.sizePolicy().horizontalPolicy()
+        self.assertEqual(horizontal_policy, QSizePolicy.Expanding)
+        self.assertGreaterEqual(self.panel._bbox_table.minimumWidth(), 176)
+        self.assertGreaterEqual(self.panel._bbox_table.maximumWidth(), 16_777_215)
+
+    def test_compact_per_control_width_limits_remain_unchanged(self) -> None:
+        self.assertEqual(self.panel._open_button.maximumWidth(), 170)
+        self.assertEqual(self.panel._open_semantic_button.maximumWidth(), 170)
+        self.assertEqual(self.panel._open_instance_button.maximumWidth(), 170)
+        self.assertEqual(self.panel._save_segmentation_button.maximumWidth(), 170)
+
+        self.assertEqual(self.panel._cursor_z.maximumWidth(), 130)
+        self.assertEqual(self.panel._cursor_y.maximumWidth(), 130)
+        self.assertEqual(self.panel._cursor_x.maximumWidth(), 130)
+        self.assertEqual(self.panel._zoom_spin.maximumWidth(), 130)
+        self.assertEqual(self.panel._manual_level_spin.maximumWidth(), 130)
+
+        self.assertEqual(self.panel._contrast_min_slider.maximumWidth(), 180)
+        self.assertEqual(self.panel._contrast_max_slider.maximumWidth(), 180)
+        self.assertEqual(self.panel._segmentation_opacity_slider.maximumWidth(), 180)
+
+        self.assertEqual(self.panel._undo_button.maximumWidth(), 170)
+        self.assertEqual(self.panel._redo_button.maximumWidth(), 170)
 
 
 if __name__ == "__main__":

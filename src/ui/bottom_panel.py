@@ -125,8 +125,8 @@ class BottomPanel(QWidget):
     _COMPACT_BUTTON_MAX_WIDTH = 170
     _COMPACT_INPUT_MAX_WIDTH = 130
     _COMPACT_SLIDER_MAX_WIDTH = 180
-    _COMPACT_BBOX_TABLE_MAX_WIDTH = 420
-    _SECTION_MAX_WIDTH = 420
+    _COMPACT_BBOX_TABLE_MIN_WIDTH = 176
+    _SECTION_COMPACT_WIDTH = 336
 
     def __init__(self) -> None:
         super().__init__()
@@ -473,6 +473,7 @@ class BottomPanel(QWidget):
         annotation_group.setLayout(annotation_layout)
 
         bounding_boxes_group = QGroupBox("Bounding Boxes")
+        self._bounding_boxes_group = bounding_boxes_group
         bounding_boxes_layout = QVBoxLayout()
         bounding_boxes_layout.addWidget(self._bounding_box_mode_toggle)
         bounding_boxes_layout.addWidget(self._bbox_table)
@@ -523,19 +524,21 @@ class BottomPanel(QWidget):
         history_group.setLayout(history_layout)
 
         root_layout = QVBoxLayout()
-        root_layout.addWidget(files_group, 0, Qt.AlignmentFlag.AlignHCenter)
+        root_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
+        root_layout.addWidget(files_group)
         root_layout.addSpacing(8)
-        root_layout.addWidget(navigation_group, 0, Qt.AlignmentFlag.AlignHCenter)
+        root_layout.addWidget(navigation_group)
         root_layout.addSpacing(8)
-        root_layout.addWidget(contrast_group, 0, Qt.AlignmentFlag.AlignHCenter)
+        root_layout.addWidget(contrast_group)
         root_layout.addSpacing(8)
-        root_layout.addWidget(annotation_group, 0, Qt.AlignmentFlag.AlignHCenter)
+        root_layout.addWidget(annotation_group)
         root_layout.addSpacing(8)
-        root_layout.addWidget(bounding_boxes_group, 0, Qt.AlignmentFlag.AlignHCenter)
+        # Keep this section responsive to right-panel width so bbox metadata can expand.
+        root_layout.addWidget(bounding_boxes_group)
         root_layout.addSpacing(8)
-        root_layout.addWidget(learning_group, 0, Qt.AlignmentFlag.AlignHCenter)
+        root_layout.addWidget(learning_group)
         root_layout.addSpacing(8)
-        root_layout.addWidget(history_group, 0, Qt.AlignmentFlag.AlignHCenter)
+        root_layout.addWidget(history_group)
         root_layout.addStretch(1)
         root_layout.setContentsMargins(8, 8, 8, 8)
         self.setLayout(root_layout)
@@ -555,11 +558,18 @@ class BottomPanel(QWidget):
 
     def _apply_compact_section_widths(self) -> None:
         for group in self.findChildren(QGroupBox):
-            group.setMaximumWidth(self._SECTION_MAX_WIDTH)
+            if group is getattr(self, "_bounding_boxes_group", None):
+                group.setMinimumWidth(self._SECTION_COMPACT_WIDTH)
+                group.setMaximumWidth(16_777_215)
+                group.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
+                continue
+            group.setMaximumWidth(self._SECTION_COMPACT_WIDTH)
             group.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
 
     def _apply_compact_right_panel_widths(self) -> None:
-        self.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Preferred)
+        # Allow section containers (not individual controls) to use extra width
+        # when the right splitter pane is expanded.
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
 
         file_buttons = (
             self._open_button,
@@ -601,8 +611,9 @@ class BottomPanel(QWidget):
         for widget in annotation_compact_widgets:
             widget.setMaximumWidth(self._COMPACT_BUTTON_MAX_WIDTH)
 
-        self._bbox_table.setSizePolicy(QSizePolicy.Policy.Maximum, QSizePolicy.Policy.Expanding)
-        self._bbox_table.setMaximumWidth(self._COMPACT_BBOX_TABLE_MAX_WIDTH)
+        self._bbox_table.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self._bbox_table.setMinimumWidth(self._COMPACT_BBOX_TABLE_MIN_WIDTH)
+        self._bbox_table.setMaximumWidth(16_777_215)
 
         history_buttons = (
             self._undo_button,
@@ -618,8 +629,12 @@ class BottomPanel(QWidget):
         column_widths = sum(int(self._bbox_table.columnWidth(i)) for i in range(self._bbox_table.columnCount()))
         padding = 12
         content_width = frame + vertical_header + column_widths + padding
-        clamped_width = max(220, min(self._COMPACT_BBOX_TABLE_MAX_WIDTH, int(content_width)))
-        self._bbox_table.setFixedWidth(clamped_width)
+        minimum_width = max(self._COMPACT_BBOX_TABLE_MIN_WIDTH, int(content_width))
+        self._bbox_table.setMinimumWidth(minimum_width)
+
+    def resizeEvent(self, event) -> None:  # type: ignore[override]
+        super().resizeEvent(event)
+        self._update_bbox_table_width()
 
     def set_file_path(self, path: str) -> None:
         self._file_path = path
