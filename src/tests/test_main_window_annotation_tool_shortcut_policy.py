@@ -651,6 +651,119 @@ class MainWindowAnnotationToolShortcutPolicyTests(unittest.TestCase):
         self.assertEqual(event.ignore_calls, 0)
 
     @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
+    def test_close_event_inference_running_ignores_when_inference_close_preparation_fails(self) -> None:
+        event = SimpleNamespace(
+            accept_calls=0,
+            ignore_calls=0,
+            accept=lambda: None,
+            ignore=lambda: None,
+        )
+        event.accept = lambda: setattr(event, "accept_calls", event.accept_calls + 1)
+        event.ignore = lambda: setattr(event, "ignore_calls", event.ignore_calls + 1)
+        window_like = SimpleNamespace(
+            _maybe_resolve_unsaved_data_before_close=lambda: True,
+            _inference_is_running=lambda: True,
+            _maybe_prepare_close_while_inference=lambda: False,
+            _training_is_running=lambda: False,
+            _clear_deferred_close_training_state=lambda: None,
+            _app_event_filter_installed=True,
+        )
+
+        MainWindow.closeEvent(window_like, event)
+
+        self.assertTrue(window_like._app_event_filter_installed)
+        self.assertEqual(event.accept_calls, 0)
+        self.assertEqual(event.ignore_calls, 1)
+
+    @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
+    def test_close_event_inference_running_accepts_when_inference_close_preparation_succeeds(self) -> None:
+        event = SimpleNamespace(
+            accept_calls=0,
+            ignore_calls=0,
+            accept=lambda: None,
+            ignore=lambda: None,
+        )
+        event.accept = lambda: setattr(event, "accept_calls", event.accept_calls + 1)
+        event.ignore = lambda: setattr(event, "ignore_calls", event.ignore_calls + 1)
+        window_like = SimpleNamespace(
+            _maybe_resolve_unsaved_data_before_close=lambda: True,
+            _inference_is_running=lambda: True,
+            _maybe_prepare_close_while_inference=lambda: True,
+            _training_is_running=lambda: False,
+            _clear_deferred_close_training_state=lambda: None,
+            _app_event_filter_installed=False,
+        )
+
+        MainWindow.closeEvent(window_like, event)
+
+        self.assertEqual(event.accept_calls, 1)
+        self.assertEqual(event.ignore_calls, 0)
+
+    @unittest.skipUnless(MainWindow is not None and QApplication is not None, "Qt/MainWindow unavailable")
+    def test_close_event_inference_background_mode_defers_app_quit(self) -> None:
+        removed_filters: list[object] = []
+        quit_on_last_closed_values: list[bool] = []
+        app_like = SimpleNamespace(
+            removeEventFilter=lambda obj: removed_filters.append(obj),
+            setQuitOnLastWindowClosed=lambda value: quit_on_last_closed_values.append(bool(value)),
+        )
+        event = SimpleNamespace(
+            accept_calls=0,
+            ignore_calls=0,
+            accept=lambda: None,
+            ignore=lambda: None,
+        )
+        event.accept = lambda: setattr(event, "accept_calls", event.accept_calls + 1)
+        event.ignore = lambda: setattr(event, "ignore_calls", event.ignore_calls + 1)
+        window_like = SimpleNamespace(
+            _maybe_resolve_unsaved_data_before_close=lambda: True,
+            _inference_is_running=lambda: True,
+            _maybe_prepare_close_while_inference=lambda: True,
+            _deferred_close_after_inference=True,
+            _deferred_close_inference_mode="continue_in_background",
+            _training_is_running=lambda: False,
+            _clear_deferred_close_training_state=lambda: None,
+            _app_event_filter_installed=True,
+        )
+
+        with patch("src.ui.main_window.QApplication.instance", return_value=app_like):
+            MainWindow.closeEvent(window_like, event)
+
+        self.assertEqual(quit_on_last_closed_values, [False])
+        self.assertEqual(removed_filters, [window_like])
+        self.assertFalse(window_like._app_event_filter_installed)
+        self.assertEqual(event.accept_calls, 1)
+        self.assertEqual(event.ignore_calls, 0)
+
+    @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
+    def test_close_event_inference_preparation_takes_precedence_over_training_branch(self) -> None:
+        event = SimpleNamespace(
+            accept_calls=0,
+            ignore_calls=0,
+            accept=lambda: None,
+            ignore=lambda: None,
+        )
+        event.accept = lambda: setattr(event, "accept_calls", event.accept_calls + 1)
+        event.ignore = lambda: setattr(event, "ignore_calls", event.ignore_calls + 1)
+
+        calls: list[str] = []
+        window_like = SimpleNamespace(
+            _maybe_resolve_unsaved_data_before_close=lambda: True,
+            _inference_is_running=lambda: True,
+            _maybe_prepare_close_while_inference=lambda: True,
+            _training_is_running=lambda: True,
+            _maybe_prepare_close_while_training=lambda: calls.append("training_prepare") or True,
+            _clear_deferred_close_training_state=lambda: calls.append("clear_training_state"),
+            _app_event_filter_installed=False,
+        )
+
+        MainWindow.closeEvent(window_like, event)
+
+        self.assertEqual(event.accept_calls, 1)
+        self.assertEqual(event.ignore_calls, 0)
+        self.assertEqual(calls, ["clear_training_state"])
+
+    @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
     def test_close_event_training_running_ignores_when_training_close_preparation_fails(self) -> None:
         event = SimpleNamespace(
             accept_calls=0,
@@ -692,6 +805,210 @@ class MainWindowAnnotationToolShortcutPolicyTests(unittest.TestCase):
 
         self.assertFalse(should_close)
         self.assertEqual(clears, ["clear"])
+
+    @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
+    def test_prepare_close_while_inference_cancel_keeps_window_open(self) -> None:
+        actions: list[str] = []
+        window_like = SimpleNamespace(
+            _request_learning_inference_stop=lambda: None,
+            _clear_deferred_close_inference_state=lambda: actions.append("clear"),
+            _set_deferred_close_after_stop_inference=lambda: actions.append("set_stop_mode"),
+            _set_deferred_close_with_background_inference=lambda **_: actions.append("set_bg_mode"),
+        )
+
+        with patch(
+            "src.ui.main_window.ask_inference_running_close_decision",
+            return_value=main_window_module.InferenceCloseDecision.CANCEL,
+        ):
+            should_close = MainWindow._maybe_prepare_close_while_inference(window_like)
+
+        self.assertFalse(should_close)
+        self.assertEqual(actions, ["clear"])
+
+    @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
+    def test_prepare_close_while_inference_stop_requests_immediate_stop(self) -> None:
+        actions: list[str] = []
+        window_like = SimpleNamespace(
+            _clear_deferred_close_inference_state=lambda: actions.append("clear"),
+            _set_deferred_close_after_stop_inference=lambda: actions.append("set_stop_mode"),
+            _set_deferred_close_with_background_inference=lambda **_: actions.append("set_bg_mode"),
+            _request_learning_inference_stop=lambda: actions.append("request_stop"),
+        )
+
+        with patch(
+            "src.ui.main_window.ask_inference_running_close_decision",
+            return_value=main_window_module.InferenceCloseDecision.STOP_AND_CLOSE,
+        ):
+            should_close = MainWindow._maybe_prepare_close_while_inference(window_like)
+
+        self.assertTrue(should_close)
+        self.assertEqual(actions, ["set_stop_mode", "request_stop"])
+
+    @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
+    def test_prepare_close_while_inference_continue_in_background_sets_deferred_save_target(self) -> None:
+        actions: list[str] = []
+        window_like = SimpleNamespace(
+            _clear_deferred_close_inference_state=lambda: actions.append("clear"),
+            _set_deferred_close_after_stop_inference=lambda: actions.append("set_stop_mode"),
+            _set_deferred_close_with_background_inference=lambda **kwargs: actions.append(
+                f"set_bg_mode:{kwargs.get('save_path')}:{kwargs.get('save_format')}"
+            ),
+            _request_learning_inference_stop=lambda: actions.append("request_stop"),
+        )
+
+        with patch(
+            "src.ui.main_window.ask_inference_running_close_decision",
+            return_value=main_window_module.InferenceCloseDecision.CONTINUE_IN_BACKGROUND,
+        ), patch(
+            "src.ui.main_window.open_save_segmentation_dialog",
+            return_value=SimpleNamespace(accepted=True, path="/tmp/background_inference.npz", format="npz"),
+        ) as save_dialog_mock:
+            should_close = MainWindow._maybe_prepare_close_while_inference(window_like)
+
+        self.assertTrue(should_close)
+        self.assertEqual(actions, ["set_bg_mode:/tmp/background_inference.npz:npz"])
+        save_dialog_mock.assert_called_once_with(window_like)
+
+    @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
+    def test_prepare_close_while_inference_continue_in_background_cancelled_picker_keeps_window_open(self) -> None:
+        actions: list[str] = []
+        window_like = SimpleNamespace(
+            _clear_deferred_close_inference_state=lambda: actions.append("clear"),
+            _set_deferred_close_after_stop_inference=lambda: actions.append("set_stop_mode"),
+            _set_deferred_close_with_background_inference=lambda **kwargs: actions.append(
+                f"set_bg_mode:{kwargs.get('save_path')}:{kwargs.get('save_format')}"
+            ),
+            _request_learning_inference_stop=lambda: actions.append("request_stop"),
+        )
+
+        with patch(
+            "src.ui.main_window.ask_inference_running_close_decision",
+            return_value=main_window_module.InferenceCloseDecision.CONTINUE_IN_BACKGROUND,
+        ), patch(
+            "src.ui.main_window.open_save_segmentation_dialog",
+            return_value=SimpleNamespace(accepted=False, path=None, format=None),
+        ):
+            should_close = MainWindow._maybe_prepare_close_while_inference(window_like)
+
+        self.assertFalse(should_close)
+        self.assertEqual(actions, ["clear"])
+
+    @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
+    def test_prepare_close_while_inference_continue_in_background_reprompts_when_overwrite_declined(self) -> None:
+        actions: list[str] = []
+        window_like = SimpleNamespace(
+            _clear_deferred_close_inference_state=lambda: actions.append("clear"),
+            _set_deferred_close_after_stop_inference=lambda: actions.append("set_stop_mode"),
+            _set_deferred_close_with_background_inference=lambda **kwargs: actions.append(
+                f"set_bg_mode:{kwargs.get('save_path')}:{kwargs.get('save_format')}"
+            ),
+            _request_learning_inference_stop=lambda: actions.append("request_stop"),
+        )
+
+        with patch(
+            "src.ui.main_window.ask_inference_running_close_decision",
+            return_value=main_window_module.InferenceCloseDecision.CONTINUE_IN_BACKGROUND,
+        ):
+            with patch(
+                "src.ui.main_window.open_save_segmentation_dialog",
+                side_effect=[
+                    SimpleNamespace(accepted=True, path="/tmp/existing_background.npz", format="npz"),
+                    SimpleNamespace(accepted=True, path="/tmp/new_background.npz", format="npz"),
+                ],
+            ) as save_dialog_mock, patch(
+                "src.ui.main_window.Path.exists",
+                side_effect=[True, False],
+            ), patch(
+                "src.ui.main_window.confirm_overwrite",
+                return_value=False,
+            ) as confirm_mock:
+                should_close = MainWindow._maybe_prepare_close_while_inference(window_like)
+
+        self.assertTrue(should_close)
+        self.assertEqual(actions, ["set_bg_mode:/tmp/new_background.npz:npz"])
+        self.assertEqual(save_dialog_mock.call_count, 2)
+        confirm_mock.assert_called_once_with("/tmp/existing_background.npz", parent=window_like)
+
+    @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
+    def test_clear_and_set_deferred_close_inference_state_helpers(self) -> None:
+        window_like = SimpleNamespace(
+            _deferred_close_after_inference=True,
+            _deferred_close_inference_mode="continue_in_background",
+            _deferred_close_inference_save_path="/tmp/previous_path.npz",
+            _deferred_close_inference_save_format="npz",
+        )
+
+        MainWindow._clear_deferred_close_inference_state(window_like)
+        self.assertFalse(window_like._deferred_close_after_inference)
+        self.assertEqual(window_like._deferred_close_inference_mode, "none")
+        self.assertIsNone(window_like._deferred_close_inference_save_path)
+        self.assertIsNone(window_like._deferred_close_inference_save_format)
+
+        MainWindow._set_deferred_close_after_stop_inference(window_like)
+        self.assertTrue(window_like._deferred_close_after_inference)
+        self.assertEqual(window_like._deferred_close_inference_mode, "stop_and_close")
+        self.assertIsNone(window_like._deferred_close_inference_save_path)
+        self.assertIsNone(window_like._deferred_close_inference_save_format)
+
+        MainWindow._set_deferred_close_with_background_inference(
+            window_like,
+            save_path="  /tmp/new_path.npz  ",
+            save_format=" NPZ ",
+        )
+        self.assertTrue(window_like._deferred_close_after_inference)
+        self.assertEqual(window_like._deferred_close_inference_mode, "continue_in_background")
+        self.assertEqual(window_like._deferred_close_inference_save_path, "/tmp/new_path.npz")
+        self.assertEqual(window_like._deferred_close_inference_save_format, "npz")
+
+    @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
+    def test_inference_deferred_setters_clear_training_deferred_state_first(self) -> None:
+        actions: list[str] = []
+        window_like = SimpleNamespace(
+            _clear_deferred_close_training_state=lambda: actions.append("clear_training"),
+        )
+
+        MainWindow._set_deferred_close_after_stop_inference(window_like)
+        self.assertEqual(actions, ["clear_training"])
+        self.assertTrue(window_like._deferred_close_after_inference)
+        self.assertEqual(window_like._deferred_close_inference_mode, "stop_and_close")
+
+        MainWindow._set_deferred_close_with_background_inference(
+            window_like,
+            save_path="/tmp/bg.npz",
+            save_format="npz",
+        )
+        self.assertEqual(actions, ["clear_training", "clear_training"])
+        self.assertTrue(window_like._deferred_close_after_inference)
+        self.assertEqual(window_like._deferred_close_inference_mode, "continue_in_background")
+        self.assertEqual(window_like._deferred_close_inference_save_path, "/tmp/bg.npz")
+        self.assertEqual(window_like._deferred_close_inference_save_format, "npz")
+
+    @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
+    def test_training_deferred_setters_clear_inference_deferred_state_first(self) -> None:
+        actions: list[str] = []
+        window_like = SimpleNamespace(
+            _set_running_training_worker_completion_checkpoint_path=lambda checkpoint_path: actions.append(
+                f"sync:{checkpoint_path}"
+            ),
+            _clear_deferred_close_inference_state=lambda: actions.append("clear_inference"),
+        )
+
+        MainWindow._set_deferred_close_after_stop_training(window_like)
+        self.assertEqual(actions, ["clear_inference", "sync:None"])
+        self.assertTrue(window_like._deferred_close_after_training)
+        self.assertEqual(window_like._deferred_close_training_mode, "stop_and_close")
+
+        MainWindow._set_deferred_close_with_background_training(
+            window_like,
+            checkpoint_path="/tmp/model.cp",
+        )
+        self.assertEqual(
+            actions,
+            ["clear_inference", "sync:None", "clear_inference", "sync:/tmp/model.cp"],
+        )
+        self.assertTrue(window_like._deferred_close_after_training)
+        self.assertEqual(window_like._deferred_close_training_mode, "continue_in_background")
+        self.assertEqual(window_like._deferred_close_checkpoint_path, "/tmp/model.cp")
 
     @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
     def test_prepare_close_while_training_stop_requests_graceful_stop(self) -> None:

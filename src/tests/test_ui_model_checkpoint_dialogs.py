@@ -12,14 +12,18 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 try:
     import src.ui.dialogs as dialogs_module
     from src.ui.dialogs import (
+        InferenceCloseDecision,
         TrainingCloseDecision,
+        ask_inference_running_close_decision,
         ask_training_running_close_decision,
         confirm_replace_training_model_with_default_checkpoint,
         open_save_model_checkpoint_dialog,
     )
 except Exception:  # pragma: no cover - environment dependent
     dialogs_module = None  # type: ignore[assignment]
+    InferenceCloseDecision = None  # type: ignore[assignment]
     TrainingCloseDecision = None  # type: ignore[assignment]
+    ask_inference_running_close_decision = None  # type: ignore[assignment]
     ask_training_running_close_decision = None  # type: ignore[assignment]
     open_save_model_checkpoint_dialog = None  # type: ignore[assignment]
     confirm_replace_training_model_with_default_checkpoint = None  # type: ignore[assignment]
@@ -230,6 +234,81 @@ class TrainingCloseDecisionDialogTests(unittest.TestCase):
         with patch("src.ui.dialogs.QMessageBox", fake_box):
             result = ask_training_running_close_decision(parent=None)
         self.assertEqual(result, TrainingCloseDecision.CANCEL)
+
+
+@unittest.skipUnless(
+    ask_inference_running_close_decision is not None and InferenceCloseDecision is not None,
+    "Dialogs are not available",
+)
+class InferenceCloseDecisionDialogTests(unittest.TestCase):
+    @staticmethod
+    def _fake_message_box_class(*, clicked_label: Optional[str]):
+        class _FakeMessageBox:
+            class Icon:
+                Warning = object()
+
+            class ButtonRole:
+                AcceptRole = object()
+                DestructiveRole = object()
+                RejectRole = object()
+
+            def __init__(self, parent=None) -> None:
+                self._clicked = None
+
+            def setIcon(self, _icon) -> None:
+                pass
+
+            def setWindowTitle(self, _title: str) -> None:
+                pass
+
+            def setText(self, _text: str) -> None:
+                pass
+
+            def setInformativeText(self, _text: str) -> None:
+                pass
+
+            def addButton(self, text: str, _role):
+                button = object()
+                if clicked_label is not None and text == clicked_label:
+                    self._clicked = button
+                return button
+
+            def setDefaultButton(self, _button) -> None:
+                pass
+
+            def exec(self) -> None:
+                pass
+
+            def clickedButton(self):
+                return self._clicked
+
+        return _FakeMessageBox
+
+    def test_returns_stop_and_close_when_stop_button_clicked(self) -> None:
+        fake_box = self._fake_message_box_class(
+            clicked_label="Stop inference and close"
+        )
+        with patch("src.ui.dialogs.QMessageBox", fake_box):
+            result = ask_inference_running_close_decision(parent=None)
+        self.assertEqual(result, InferenceCloseDecision.STOP_AND_CLOSE)
+
+    def test_returns_continue_in_background_when_continue_button_clicked(self) -> None:
+        fake_box = self._fake_message_box_class(clicked_label="Continue in background")
+        with patch("src.ui.dialogs.QMessageBox", fake_box):
+            result = ask_inference_running_close_decision(parent=None)
+        self.assertEqual(result, InferenceCloseDecision.CONTINUE_IN_BACKGROUND)
+
+    def test_returns_cancel_when_cancel_button_clicked(self) -> None:
+        fake_box = self._fake_message_box_class(clicked_label="Cancel")
+        with patch("src.ui.dialogs.QMessageBox", fake_box):
+            result = ask_inference_running_close_decision(parent=None)
+        self.assertEqual(result, InferenceCloseDecision.CANCEL)
+
+    def test_returns_cancel_when_no_button_is_clicked(self) -> None:
+        fake_box = self._fake_message_box_class(clicked_label=None)
+        with patch("src.ui.dialogs.QMessageBox", fake_box):
+            result = ask_inference_running_close_decision(parent=None)
+        self.assertEqual(result, InferenceCloseDecision.CANCEL)
 
 
 if __name__ == "__main__":

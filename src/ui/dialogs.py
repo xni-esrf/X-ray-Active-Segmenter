@@ -34,6 +34,12 @@ class TrainingCloseDecision(str, Enum):
     CANCEL = "cancel"
 
 
+class InferenceCloseDecision(str, Enum):
+    STOP_AND_CLOSE = "stop_and_close"
+    CONTINUE_IN_BACKGROUND = "continue_in_background"
+    CANCEL = "cancel"
+
+
 def show_warning(message: str, parent: Optional[QWidget] = None) -> DialogResult:
     QMessageBox.warning(parent, "Warning", message)
     return DialogResult(accepted=False, message=message)
@@ -160,6 +166,40 @@ def ask_training_running_close_decision(
     if clicked is cancel_button:
         return TrainingCloseDecision.CANCEL
     return TrainingCloseDecision.CANCEL
+
+
+def ask_inference_running_close_decision(
+    parent: Optional[QWidget] = None,
+) -> InferenceCloseDecision:
+    dialog = QMessageBox(parent)
+    dialog.setIcon(QMessageBox.Icon.Warning)
+    dialog.setWindowTitle("Inference In Progress")
+    dialog.setText("A segmentation inference is currently running.")
+    dialog.setInformativeText("Choose what to do before closing this window.")
+
+    stop_button = dialog.addButton(
+        "Stop inference and close",
+        QMessageBox.ButtonRole.DestructiveRole,
+    )
+    continue_button = dialog.addButton(
+        "Continue in background",
+        QMessageBox.ButtonRole.AcceptRole,
+    )
+    cancel_button = dialog.addButton(
+        "Cancel",
+        QMessageBox.ButtonRole.RejectRole,
+    )
+    dialog.setDefaultButton(cancel_button)
+    dialog.exec()
+
+    clicked = dialog.clickedButton()
+    if clicked is stop_button:
+        return InferenceCloseDecision.STOP_AND_CLOSE
+    if clicked is continue_button:
+        return InferenceCloseDecision.CONTINUE_IN_BACKGROUND
+    if clicked is cancel_button:
+        return InferenceCloseDecision.CANCEL
+    return InferenceCloseDecision.CANCEL
 
 
 def _normalize_volume_path(path: str) -> str:

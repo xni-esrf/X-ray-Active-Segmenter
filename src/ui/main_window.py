@@ -71,8 +71,10 @@ from ..render import Renderer, ViewId
 from ..utils import get_logger, torch_from_numpy_safe
 from .bottom_panel import BottomPanel
 from .dialogs import (
+    InferenceCloseDecision,
     TrainingCloseDecision,
     UnsavedChangesDecision,
+    ask_inference_running_close_decision,
     ask_unsaved_changes,
     ask_training_running_close_decision,
     confirm_reinitialize_model,
@@ -95,6 +97,11 @@ from .orthogonal_view import AnnotationPaintOutcome, OrthogonalView
 AnnotationTool = Literal["brush", "eraser", "flood_filler"]
 BBoxSegmentationOperation = Literal["median_filter", "erosion", "dilation"]
 DeferredTrainingCloseMode = Literal[
+    "none",
+    "stop_and_close",
+    "continue_in_background",
+]
+DeferredInferenceCloseMode = Literal[
     "none",
     "stop_and_close",
     "continue_in_background",
@@ -764,6 +771,10 @@ class MainWindow(QMainWindow):
         self._deferred_close_after_training = False
         self._deferred_close_training_mode: DeferredTrainingCloseMode = "none"
         self._deferred_close_checkpoint_path: Optional[str] = None
+        self._deferred_close_after_inference = False
+        self._deferred_close_inference_mode: DeferredInferenceCloseMode = "none"
+        self._deferred_close_inference_save_path: Optional[str] = None
+        self._deferred_close_inference_save_format: Optional[str] = None
         self._segmentation_editor: Optional[SegmentationEditor] = None
         self._annotation_kind: SegmentationKind = "semantic"
         self._raw_volume: Optional[VolumeData] = None
@@ -990,15 +1001,37 @@ class MainWindow(QMainWindow):
         if not self._maybe_resolve_unsaved_data_before_close():
             event.ignore()
             return
-        if self._training_is_running():
-            if not self._maybe_prepare_close_while_training():
+        inference_close_prepared = False
+        if MainWindow._inference_navigation_lock_active(self):
+            if not self._maybe_prepare_close_while_inference():
                 event.ignore()
                 return
+            inference_close_prepared = True
+
+        if not inference_close_prepared:
+            if self._training_is_running():
+                if not self._maybe_prepare_close_while_training():
+                    event.ignore()
+                    return
+                app_instance = QApplication.instance()
+                if app_instance is not None:
+                    app_instance.setQuitOnLastWindowClosed(False)
+            else:
+                self._clear_deferred_close_training_state()
+        else:
+            # Inference-close decisions take precedence when both are active.
+            self._clear_deferred_close_training_state()
+        inference_background_close_mode = bool(
+            getattr(self, "_deferred_close_after_inference", False)
+            and getattr(self, "_deferred_close_inference_mode", "none")
+            == "continue_in_background"
+        )
+        if inference_background_close_mode:
             app_instance = QApplication.instance()
             if app_instance is not None:
-                app_instance.setQuitOnLastWindowClosed(False)
-        else:
-            self._clear_deferred_close_training_state()
+                set_quit_on_last = getattr(app_instance, "setQuitOnLastWindowClosed", None)
+                if callable(set_quit_on_last):
+                    set_quit_on_last(False)
         if self._app_event_filter_installed:
             app_instance = QApplication.instance()
             if app_instance is not None:
@@ -1106,6 +1139,43 @@ class MainWindow(QMainWindow):
             )
             return True
         self._clear_deferred_close_training_state()
+        return False
+
+    def _maybe_prepare_close_while_inference(self) -> bool:
+        decision = ask_inference_running_close_decision(parent=self)
+        if decision == InferenceCloseDecision.CANCEL:
+            self._clear_deferred_close_inference_state()
+            return False
+        if decision == InferenceCloseDecision.STOP_AND_CLOSE:
+            self._set_deferred_close_after_stop_inference()
+            self._request_learning_inference_stop()
+            return True
+        if decision == InferenceCloseDecision.CONTINUE_IN_BACKGROUND:
+            active_segmentation_getter = getattr(self, "_active_segmentation_volume", None)
+            if callable(active_segmentation_getter):
+                try:
+                    if active_segmentation_getter() is None:
+                        show_warning("No semantic or instance segmentation map is loaded.", parent=self)
+                        self._clear_deferred_close_inference_state()
+                        return False
+                except Exception:
+                    pass
+
+            while True:
+                dialog_result = open_save_segmentation_dialog(self)
+                if not dialog_result.accepted or not dialog_result.path or not dialog_result.format:
+                    self._clear_deferred_close_inference_state()
+                    return False
+                save_path = str(Path(dialog_result.path).expanduser())
+                if Path(save_path).exists():
+                    if not confirm_overwrite(save_path, parent=self):
+                        continue
+                self._set_deferred_close_with_background_inference(
+                    save_path=save_path,
+                    save_format=str(dialog_result.format),
+                )
+                return True
+        self._clear_deferred_close_inference_state()
         return False
 
     def _annotation_tool_from_keypress_event(self, event: object) -> Optional[AnnotationTool]:
@@ -2974,12 +3044,23 @@ class MainWindow(QMainWindow):
         )
 
     def _on_learning_inference_completed(self, result: object) -> None:
+        background_close_mode = bool(
+            getattr(self, "_deferred_close_after_inference", False)
+            and getattr(self, "_deferred_close_inference_mode", "none")
+            == "continue_in_background"
+        )
         try:
             if not isinstance(result, _LearningInferenceBackgroundResult):
-                show_warning(
-                    "Segment Inference Bbox completed with an invalid result payload.",
-                    parent=self,
-                )
+                if background_close_mode:
+                    _LOGGER.error(
+                        "Background inference completed with an invalid result payload: %r",
+                        result,
+                    )
+                else:
+                    show_warning(
+                        "Segment Inference Bbox completed with an invalid result payload.",
+                        parent=self,
+                    )
                 return
             if MainWindow._inference_stop_already_requested(self):
                 self._on_learning_inference_canceled(
@@ -2989,13 +3070,18 @@ class MainWindow(QMainWindow):
 
             editor = self._segmentation_editor
             if editor is None or editor.kind != "semantic":
-                show_warning(
-                    (
-                        "Segment Inference Bbox completed, but the semantic map is no longer "
-                        "available. Predictions were discarded."
-                    ),
-                    parent=self,
-                )
+                if background_close_mode:
+                    _LOGGER.error(
+                        "Background inference completed, but semantic map is unavailable; predictions discarded."
+                    )
+                else:
+                    show_warning(
+                        (
+                            "Segment Inference Bbox completed, but the semantic map is no longer "
+                            "available. Predictions were discarded."
+                        ),
+                        parent=self,
+                    )
                 return
 
             failure_by_box_id = dict(result.failure_by_box_id)
@@ -3039,6 +3125,32 @@ class MainWindow(QMainWindow):
             self.render_all()
         self._refresh_annotation_ui_state()
 
+        if background_close_mode:
+            save_path = str(getattr(self, "_deferred_close_inference_save_path", "")).strip()
+            save_format = str(getattr(self, "_deferred_close_inference_save_format", "")).strip().lower()
+            try:
+                active_segmentation_getter = getattr(self, "_active_segmentation_volume", None)
+                if not callable(active_segmentation_getter):
+                    raise RuntimeError("No active segmentation provider is available.")
+                active = active_segmentation_getter()
+                if active is None:
+                    raise RuntimeError("No semantic or instance segmentation map is loaded.")
+                _kind, volume = active
+                if not save_path:
+                    raise RuntimeError("Background inference save path is empty.")
+                if not save_format:
+                    raise RuntimeError("Background inference save format is empty.")
+                save_segmentation_volume(
+                    volume,
+                    save_path,
+                    save_format=save_format,
+                    overwrite=True,
+                )
+                _LOGGER.info("Background inference saved segmentation to %s", save_path)
+            except Exception as exc:
+                _LOGGER.error("Background inference save failed: %s", _exception_message(exc))
+            return
+
         success_count = int(len(succeeded_box_ids))
         failure_count = int(len(failure_by_box_id))
         total_count = int(result.total_count)
@@ -3078,10 +3190,30 @@ class MainWindow(QMainWindow):
             show_info("\n".join(summary_lines), parent=self)
 
     def _on_learning_inference_canceled(self, message: str) -> None:
+        background_close_mode = bool(
+            getattr(self, "_deferred_close_after_inference", False)
+            and getattr(self, "_deferred_close_inference_mode", "none")
+            == "continue_in_background"
+        )
         try:
             normalized_message = str(message).strip()
             if not normalized_message:
                 normalized_message = "Inference canceled by user."
+            if background_close_mode:
+                _LOGGER.info(
+                    "Background inference canceled: %s",
+                    normalized_message,
+                )
+                finalize_close = getattr(
+                    self,
+                    "_finalize_deferred_close_inference_and_quit",
+                    None,
+                )
+                if callable(finalize_close):
+                    finalize_close()
+                else:
+                    MainWindow._finalize_deferred_close_inference_and_quit(self)
+                return
             show_info(
                 f"Segment Inference Bbox canceled: {normalized_message}",
                 parent=self,
@@ -3098,10 +3230,30 @@ class MainWindow(QMainWindow):
                 MainWindow._clear_learning_inference_stop_request_state(self)
 
     def _on_learning_inference_failed(self, message: str) -> None:
+        background_close_mode = bool(
+            getattr(self, "_deferred_close_after_inference", False)
+            and getattr(self, "_deferred_close_inference_mode", "none")
+            == "continue_in_background"
+        )
         try:
             normalized_message = str(message).strip()
             if not normalized_message:
                 normalized_message = "Unknown inference error."
+            if background_close_mode:
+                _LOGGER.error(
+                    "Background inference aborted: %s",
+                    normalized_message,
+                )
+                finalize_close = getattr(
+                    self,
+                    "_finalize_deferred_close_inference_and_quit",
+                    None,
+                )
+                if callable(finalize_close):
+                    finalize_close()
+                else:
+                    MainWindow._finalize_deferred_close_inference_and_quit(self)
+                return
             show_warning(
                 f"Segment Inference Bbox aborted: {normalized_message}",
                 parent=self,
@@ -3119,6 +3271,26 @@ class MainWindow(QMainWindow):
 
     def _on_learning_inference_thread_finished(self) -> None:
         self._exit_learning_inference_running_state()
+        if not bool(getattr(self, "_deferred_close_after_inference", False)):
+            return
+        clear_state = getattr(self, "_clear_deferred_close_inference_state", None)
+        if callable(clear_state):
+            clear_state()
+        else:
+            MainWindow._clear_deferred_close_inference_state(self)
+
+        app_instance = QApplication.instance()
+        if app_instance is None:
+            return
+        set_quit_on_last = getattr(app_instance, "setQuitOnLastWindowClosed", None)
+        if callable(set_quit_on_last):
+            try:
+                set_quit_on_last(True)
+            except Exception:
+                pass
+        quit_method = getattr(app_instance, "quit", None)
+        if callable(quit_method):
+            quit_method()
 
     def _request_learning_inference_stop(self) -> None:
         if not self._inference_is_running():
@@ -3970,6 +4142,65 @@ class MainWindow(QMainWindow):
     def _clear_learning_inference_stop_request_state(self) -> None:
         self._inference_stop_requested = False
 
+    def _clear_deferred_close_inference_state(self) -> None:
+        self._deferred_close_after_inference = False
+        self._deferred_close_inference_mode = "none"
+        self._deferred_close_inference_save_path = None
+        self._deferred_close_inference_save_format = None
+
+    def _set_deferred_close_after_stop_inference(self) -> None:
+        clear_training_state = getattr(self, "_clear_deferred_close_training_state", None)
+        if callable(clear_training_state):
+            clear_training_state()
+        else:
+            MainWindow._clear_deferred_close_training_state(self)
+        self._deferred_close_after_inference = True
+        self._deferred_close_inference_mode = "stop_and_close"
+        self._deferred_close_inference_save_path = None
+        self._deferred_close_inference_save_format = None
+
+    def _set_deferred_close_with_background_inference(
+        self,
+        *,
+        save_path: str,
+        save_format: str,
+    ) -> None:
+        clear_training_state = getattr(self, "_clear_deferred_close_training_state", None)
+        if callable(clear_training_state):
+            clear_training_state()
+        else:
+            MainWindow._clear_deferred_close_training_state(self)
+        normalized_path = str(save_path).strip()
+        if not normalized_path:
+            raise ValueError("save_path must be a non-empty string")
+        normalized_format = str(save_format).strip().lower()
+        if not normalized_format:
+            raise ValueError("save_format must be a non-empty string")
+        self._deferred_close_after_inference = True
+        self._deferred_close_inference_mode = "continue_in_background"
+        self._deferred_close_inference_save_path = normalized_path
+        self._deferred_close_inference_save_format = normalized_format
+
+    def _finalize_deferred_close_inference_and_quit(self) -> None:
+        clear_state = getattr(self, "_clear_deferred_close_inference_state", None)
+        if callable(clear_state):
+            clear_state()
+        else:
+            MainWindow._clear_deferred_close_inference_state(self)
+
+        app_instance = QApplication.instance()
+        if app_instance is None:
+            return
+        set_quit_on_last = getattr(app_instance, "setQuitOnLastWindowClosed", None)
+        if callable(set_quit_on_last):
+            try:
+                set_quit_on_last(True)
+            except Exception:
+                pass
+        quit_method = getattr(app_instance, "quit", None)
+        if callable(quit_method):
+            quit_method()
+
     def _set_running_training_worker_completion_checkpoint_path(
         self,
         *,
@@ -4005,6 +4236,11 @@ class MainWindow(QMainWindow):
         )
 
     def _set_deferred_close_after_stop_training(self) -> None:
+        clear_inference_state = getattr(self, "_clear_deferred_close_inference_state", None)
+        if callable(clear_inference_state):
+            clear_inference_state()
+        else:
+            MainWindow._clear_deferred_close_inference_state(self)
         self._deferred_close_after_training = True
         self._deferred_close_training_mode = "stop_and_close"
         self._deferred_close_checkpoint_path = None
@@ -4026,6 +4262,11 @@ class MainWindow(QMainWindow):
         *,
         checkpoint_path: str,
     ) -> None:
+        clear_inference_state = getattr(self, "_clear_deferred_close_inference_state", None)
+        if callable(clear_inference_state):
+            clear_inference_state()
+        else:
+            MainWindow._clear_deferred_close_inference_state(self)
         normalized_path = str(checkpoint_path).strip()
         if not normalized_path:
             raise ValueError("checkpoint_path must be a non-empty string")

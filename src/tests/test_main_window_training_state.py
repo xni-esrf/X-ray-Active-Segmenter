@@ -724,6 +724,35 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         self.assertIn("canceled", info_mock.call_args.args[0].lower())
         self.assertFalse(window_like._inference_stop_requested)
 
+    def test_on_learning_inference_canceled_background_mode_quits_without_popup(self) -> None:
+        actions: list[str] = []
+        quit_on_last_closed_values: list[bool] = []
+        app_like = SimpleNamespace(
+            setQuitOnLastWindowClosed=lambda value: quit_on_last_closed_values.append(bool(value)),
+            quit=lambda: actions.append("quit"),
+        )
+        window_like = SimpleNamespace(
+            _inference_stop_requested=True,
+            _deferred_close_after_inference=True,
+            _deferred_close_inference_mode="continue_in_background",
+            _deferred_close_inference_save_path="/tmp/seg.npz",
+            _deferred_close_inference_save_format="npz",
+        )
+
+        with patch("src.ui.main_window.QApplication.instance", return_value=app_like), patch(
+            "src.ui.main_window.show_info"
+        ) as info_mock:
+            MainWindow._on_learning_inference_canceled(window_like, "")
+
+        info_mock.assert_not_called()
+        self.assertFalse(window_like._deferred_close_after_inference)
+        self.assertEqual(window_like._deferred_close_inference_mode, "none")
+        self.assertIsNone(window_like._deferred_close_inference_save_path)
+        self.assertIsNone(window_like._deferred_close_inference_save_format)
+        self.assertEqual(quit_on_last_closed_values, [True])
+        self.assertEqual(actions, ["quit"])
+        self.assertFalse(window_like._inference_stop_requested)
+
     def test_on_learning_inference_failed_clears_stop_request_flag(self) -> None:
         window_like = SimpleNamespace(_inference_stop_requested=True)
 
@@ -733,6 +762,111 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         warning_mock.assert_called_once()
         self.assertIn("aborted", warning_mock.call_args.args[0].lower())
         self.assertFalse(window_like._inference_stop_requested)
+
+    def test_on_learning_inference_failed_background_mode_quits_without_popup(self) -> None:
+        actions: list[str] = []
+        quit_on_last_closed_values: list[bool] = []
+        app_like = SimpleNamespace(
+            setQuitOnLastWindowClosed=lambda value: quit_on_last_closed_values.append(bool(value)),
+            quit=lambda: actions.append("quit"),
+        )
+        window_like = SimpleNamespace(
+            _inference_stop_requested=True,
+            _deferred_close_after_inference=True,
+            _deferred_close_inference_mode="continue_in_background",
+            _deferred_close_inference_save_path="/tmp/seg.npz",
+            _deferred_close_inference_save_format="npz",
+        )
+
+        with patch("src.ui.main_window.QApplication.instance", return_value=app_like), patch(
+            "src.ui.main_window.show_warning"
+        ) as warning_mock:
+            MainWindow._on_learning_inference_failed(window_like, "")
+
+        warning_mock.assert_not_called()
+        self.assertFalse(window_like._deferred_close_after_inference)
+        self.assertEqual(window_like._deferred_close_inference_mode, "none")
+        self.assertIsNone(window_like._deferred_close_inference_save_path)
+        self.assertIsNone(window_like._deferred_close_inference_save_format)
+        self.assertEqual(quit_on_last_closed_values, [True])
+        self.assertEqual(actions, ["quit"])
+        self.assertFalse(window_like._inference_stop_requested)
+
+    def test_on_learning_inference_completed_background_mode_saves_and_skips_popups(self) -> None:
+        self.assertIsNotNone(_LearningInferenceBackgroundResult)
+        save_calls: list[tuple[object, str, str, bool]] = []
+        sync_calls: list[str] = []
+        hover_calls: list[str] = []
+        picked_calls: list[str] = []
+        render_calls: list[str] = []
+        refresh_calls: list[str] = []
+        fake_volume = object()
+
+        result = _LearningInferenceBackgroundResult(
+            total_count=1,
+            predictions=tuple(),
+            failure_by_box_id={},
+            cleanup_errors_by_box_id={},
+        )
+        window_like = SimpleNamespace(
+            _deferred_close_after_inference=True,
+            _deferred_close_inference_mode="continue_in_background",
+            _deferred_close_inference_save_path="/tmp/background_inference.npz",
+            _deferred_close_inference_save_format="npz",
+            _inference_stop_requested=False,
+            _segmentation_editor=SimpleNamespace(kind="semantic"),
+            _apply_inference_predictions_in_single_commit=lambda **_kwargs: (1, tuple(), {}),
+            _annotation_labels_dirty=False,
+            _sync_renderer_segmentation_labels=lambda: sync_calls.append("sync"),
+            _request_hover_readout=lambda: hover_calls.append("hover"),
+            _request_picked_readout=lambda: picked_calls.append("picked"),
+            render_all=lambda: render_calls.append("render"),
+            _refresh_annotation_ui_state=lambda: refresh_calls.append("refresh"),
+            _active_segmentation_volume=lambda: ("semantic", fake_volume),
+            _clear_learning_inference_stop_request_state=lambda: None,
+        )
+
+        with patch(
+            "src.ui.main_window.save_segmentation_volume",
+            side_effect=lambda volume, path, *, save_format, overwrite: save_calls.append(
+                (volume, str(path), str(save_format), bool(overwrite))
+            ) or str(path),
+        ) as save_mock, patch("src.ui.main_window.show_info") as info_mock, patch(
+            "src.ui.main_window.show_warning"
+        ) as warning_mock:
+            MainWindow._on_learning_inference_completed(window_like, result)
+
+        self.assertEqual(sync_calls, ["sync"])
+        self.assertEqual(hover_calls, ["hover"])
+        self.assertEqual(picked_calls, ["picked"])
+        self.assertEqual(render_calls, ["render"])
+        self.assertEqual(refresh_calls, ["refresh"])
+        self.assertEqual(
+            save_calls,
+            [(fake_volume, "/tmp/background_inference.npz", "npz", True)],
+        )
+        save_mock.assert_called_once()
+        info_mock.assert_not_called()
+        warning_mock.assert_not_called()
+
+    def test_on_learning_inference_thread_finished_deferred_close_quits_app(self) -> None:
+        actions: list[str] = []
+        quit_on_last_closed_values: list[bool] = []
+        app_like = SimpleNamespace(
+            setQuitOnLastWindowClosed=lambda value: quit_on_last_closed_values.append(bool(value)),
+            quit=lambda: actions.append("quit"),
+        )
+        window_like = SimpleNamespace(
+            _deferred_close_after_inference=True,
+            _exit_learning_inference_running_state=lambda: actions.append("exit_state"),
+            _clear_deferred_close_inference_state=lambda: actions.append("clear_state"),
+        )
+
+        with patch("src.ui.main_window.QApplication.instance", return_value=app_like):
+            MainWindow._on_learning_inference_thread_finished(window_like)
+
+        self.assertEqual(actions, ["exit_state", "clear_state", "quit"])
+        self.assertEqual(quit_on_last_closed_values, [True])
 
     def test_apply_inference_predictions_single_commit_aborts_before_begin_when_stop_requested(
         self,

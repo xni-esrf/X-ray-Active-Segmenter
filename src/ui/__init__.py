@@ -1,9 +1,11 @@
 from .bottom_panel import BottomPanel, BottomPanelState
 from .dialogs import (
     DialogResult,
+    InferenceCloseDecision,
     SaveDialogResult,
     TrainingCloseDecision,
     UnsavedChangesDecision,
+    ask_inference_running_close_decision,
     ask_unsaved_changes,
     ask_training_running_close_decision,
     confirm_reinitialize_model,
@@ -24,9 +26,11 @@ __all__ = [
     "BottomPanel",
     "BottomPanelState",
     "DialogResult",
+    "InferenceCloseDecision",
     "SaveDialogResult",
     "TrainingCloseDecision",
     "UnsavedChangesDecision",
+    "ask_inference_running_close_decision",
     "ask_unsaved_changes",
     "ask_training_running_close_decision",
     "confirm_reinitialize_model",
