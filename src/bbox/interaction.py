@@ -138,9 +138,10 @@ def hit_test_projected_box_handles(
             f"selected_id must be a string or None, got {type(selected_id).__name__}"
         )
 
-    candidates: List[
-        Tuple[float, int, int, int, BoundingBoxHandleHit]
-    ] = []
+    corner_tolerance = tolerance_f * 1.6
+    edge_tolerance = tolerance_f * 0.8
+    corner_candidates: List[Tuple[float, int, int, BoundingBoxHandleHit]] = []
+    edge_candidates: List[Tuple[float, int, int, BoundingBoxHandleHit]] = []
     projected_items = list(boxes)
     for draw_rank, box in enumerate(reversed(projected_items)):
         if not isinstance(box, ProjectedBoundingBox2D):
@@ -161,12 +162,11 @@ def hit_test_projected_box_handles(
         )
         for handle, (corner_row, corner_col) in corners:
             distance = hypot(row_f - corner_row, col_f - corner_col)
-            if distance > tolerance_f:
+            if distance > corner_tolerance:
                 continue
-            candidates.append(
+            corner_candidates.append(
                 (
                     distance,
-                    0,
                     selected_penalty,
                     draw_rank,
                     BoundingBoxHandleHit(
@@ -192,12 +192,11 @@ def hit_test_projected_box_handles(
                 x1=x1,
                 y1=y1,
             )
-            if distance > tolerance_f:
+            if distance > edge_tolerance:
                 continue
-            candidates.append(
+            edge_candidates.append(
                 (
                     distance,
-                    1,
                     selected_penalty,
                     draw_rank,
                     BoundingBoxHandleHit(
@@ -208,10 +207,13 @@ def hit_test_projected_box_handles(
                 )
             )
 
-    if not candidates:
-        return None
-    candidates.sort(key=lambda item: (item[0], item[1], item[2], item[3]))
-    return candidates[0][4]
+    if corner_candidates:
+        corner_candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        return corner_candidates[0][3]
+    if edge_candidates:
+        edge_candidates.sort(key=lambda item: (item[0], item[1], item[2]))
+        return edge_candidates[0][3]
+    return None
 
 
 def face_updates_for_handle_drag(
