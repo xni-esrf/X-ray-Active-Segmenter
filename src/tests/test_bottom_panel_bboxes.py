@@ -57,12 +57,14 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.set_bounding_boxes((box1, box2))
 
         self.assertEqual(self.panel._bbox_table.rowCount(), 2)
-        self.assertEqual(self.panel._bbox_table.item(0, 0).text(), "bbox_0001")
-        self.assertEqual(self.panel._bbox_table.item(0, 1).text(), "train")
-        self.assertEqual(self.panel._bbox_table.item(0, 2).text(), "3 x 4 x 5")
-        self.assertEqual(self.panel._bbox_table.item(0, 3).text(), "(2.00, 3.50, 5.00)")
-        self.assertEqual(self.panel._bbox_table.item(1, 0).text(), "bbox_0002")
-        self.assertEqual(self.panel._bbox_table.item(1, 1).text(), "train")
+        self.assertEqual(self.panel._bbox_table.item(0, 0).text(), "1")
+        self.assertEqual(self.panel._bbox_table.item(0, 1).text(), "bbox_0001")
+        self.assertEqual(self.panel._bbox_table.item(0, 2).text(), "train")
+        self.assertEqual(self.panel._bbox_table.item(0, 3).text(), "3 x 4 x 5")
+        self.assertEqual(self.panel._bbox_table.item(0, 4).text(), "(2.00, 3.50, 5.00)")
+        self.assertEqual(self.panel._bbox_table.item(1, 0).text(), "2")
+        self.assertEqual(self.panel._bbox_table.item(1, 1).text(), "bbox_0002")
+        self.assertEqual(self.panel._bbox_table.item(1, 2).text(), "train")
 
     def test_bbox_table_uses_extended_row_selection_mode(self) -> None:
         self.assertIsNotNone(QAbstractItemView)
@@ -249,12 +251,12 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
     def test_metadata_updates_after_geometry_change(self) -> None:
         box1, _ = self._boxes()
         self.panel.set_bounding_boxes((box1,))
-        self.assertEqual(self.panel._bbox_table.item(0, 2).text(), "3 x 4 x 5")
+        self.assertEqual(self.panel._bbox_table.item(0, 3).text(), "3 x 4 x 5")
 
         updated = box1.move_face("x_max", 12, volume_shape=(20, 30, 40))
         self.panel.set_bounding_boxes((updated,))
-        self.assertEqual(self.panel._bbox_table.item(0, 2).text(), "3 x 4 x 9")
-        self.assertEqual(self.panel._bbox_table.item(0, 3).text(), "(2.00, 3.50, 7.00)")
+        self.assertEqual(self.panel._bbox_table.item(0, 3).text(), "3 x 4 x 9")
+        self.assertEqual(self.panel._bbox_table.item(0, 4).text(), "(2.00, 3.50, 7.00)")
 
     def test_label_editor_emits_callback_for_selected_box(self) -> None:
         label_events = []

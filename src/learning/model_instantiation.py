@@ -34,7 +34,7 @@ from .session_store import (
 )
 
 
-DEFAULT_FOUNDATION_CHECKPOINT_PATH = "foundation_model/weights_epoch_190.cp"
+DEFAULT_FOUNDATION_CHECKPOINT_PATH = "foundation_model/MAE_XNT.cp"
 
 
 def _require_torch():

@@ -286,8 +286,10 @@ class BottomPanel(QWidget):
         self._segmentation_opacity_value = QLabel("30%")
         self._pyramid_status = QLabel("Pyramid: -")
         self._level_status = QLabel("Level: L0 (x1)")
-        self._bbox_table = QTableWidget(0, 4)
-        self._bbox_table.setHorizontalHeaderLabels(["ID", "Label", "Size (dz, dy, dx)", "Center (z, y, x)"])
+        self._bbox_table = QTableWidget(0, 5)
+        self._bbox_table.setHorizontalHeaderLabels(
+            ["ID", "bbox_name", "Label", "Size (dz, dy, dx)", "Center (z, y, x)"]
+        )
         self._bbox_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self._bbox_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
         self._bbox_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -299,6 +301,7 @@ class BottomPanel(QWidget):
         bbox_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
         bbox_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         bbox_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
+        bbox_header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
         self._bbox_label_label = QLabel("Selected Label")
         self._bbox_label_combo = QComboBox()
         self._bbox_label_combo.addItem("Train", "train")
@@ -1008,14 +1011,16 @@ class BottomPanel(QWidget):
         self._bbox_table.blockSignals(True)
         self._bbox_table.setRowCount(len(self.state.bbox_rows))
         for row_index, row in enumerate(self.state.bbox_rows):
-            id_item = QTableWidgetItem(row.box_id)
+            id_item = QTableWidgetItem(str(row_index + 1))
+            name_item = QTableWidgetItem(row.box_id)
             label_item = QTableWidgetItem(row.label)
             size_item = QTableWidgetItem(row.size_text)
             center_item = QTableWidgetItem(row.center_text)
             self._bbox_table.setItem(row_index, 0, id_item)
-            self._bbox_table.setItem(row_index, 1, label_item)
-            self._bbox_table.setItem(row_index, 2, size_item)
-            self._bbox_table.setItem(row_index, 3, center_item)
+            self._bbox_table.setItem(row_index, 1, name_item)
+            self._bbox_table.setItem(row_index, 2, label_item)
+            self._bbox_table.setItem(row_index, 3, size_item)
+            self._bbox_table.setItem(row_index, 4, center_item)
         self._bbox_table.blockSignals(False)
         self._update_bbox_table_width()
 
@@ -1404,10 +1409,9 @@ class BottomPanel(QWidget):
         selected_row_indices = sorted({item.row() for item in self._bbox_table.selectedItems()})
         selected_ids = []
         for row in selected_row_indices:
-            item = self._bbox_table.item(row, 0)
-            if item is None:
+            if row < 0 or row >= len(self.state.bbox_rows):
                 continue
-            box_id = item.text().strip()
+            box_id = str(self.state.bbox_rows[row].box_id).strip()
             if not box_id:
                 continue
             selected_ids.append(box_id)
@@ -1434,10 +1438,9 @@ class BottomPanel(QWidget):
         row_index = int(item.row())
         if row_index < 0 or row_index >= self._bbox_table.rowCount():
             return
-        id_item = self._bbox_table.item(row_index, 0)
-        if id_item is None:
+        if row_index >= len(self.state.bbox_rows):
             return
-        box_id = id_item.text().strip()
+        box_id = str(self.state.bbox_rows[row_index].box_id).strip()
         if not box_id:
             return
         self._on_bounding_box_double_clicked(box_id)

@@ -21,6 +21,10 @@ apptainer shell --nv container.sif
 
 4. Store the downloaded model in a directory named `foundation_model`.
 5. Keep the model filename exactly `MAE_XNT.cp` (do not rename it).
+6. See how to launch the application with: 
+```bash
+python3 open_ui_raw_viewer.py --help
+```
 
 ### Typical Usage
 1. Open a raw volume.
@@ -38,6 +42,7 @@ apptainer shell --nv container.sif
 11. Train again and repeat the process iteratively.
 
 ### Tips
+- Opening an image can be very long, in command line use the --load-mode lazy argument to load the volume faster, however, navigation will be then much slower.
 - You can adjust the 3D brush radius. Use a larger radius when high precision is not required.
 - Rather than creating a large manual dataset first, it is often faster to annotate a small dataset, train, generate predictions, proofread those predictions, and train again with new generated bounding boxes.
 - Features you want to segment should be represented in both the training and validation sets.
