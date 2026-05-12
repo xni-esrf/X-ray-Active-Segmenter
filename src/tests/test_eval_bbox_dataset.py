@@ -8,6 +8,7 @@ except Exception:  # pragma: no cover - environment dependent
     torch = None  # type: ignore[assignment]
 
 from src.learning import DestVolBuffer, EvalBBoxDataset, InferenceDestVolBuffer
+from src.learning.eval_bbox_dataset import compute_volume_weighted_mean_score
 
 
 @unittest.skipUnless(torch is not None, "PyTorch is not available")
@@ -30,7 +31,7 @@ class EvalBBoxDatasetTests(unittest.TestCase):
 
 @unittest.skipUnless(torch is not None, "PyTorch is not available")
 class DestVolBufferTests(unittest.TestCase):
-    def test_accuracy_uses_label_mapping_and_mask(self) -> None:
+    def test_dice_uses_label_mapping_and_mask(self) -> None:
         ground_truth = torch.tensor(
             [
                 [[5, 5], [5, -100]],
@@ -46,13 +47,12 @@ class DestVolBufferTests(unittest.TestCase):
             minivol_size=2,
         )
 
-        batch = torch.zeros((1, 4, 2, 2, 2), dtype=torch.float32)
-        # Channel index 2 maps to label value 5.
-        batch[0, 2, :, :, :] = 2.0
-        buffer.add_batch(batch, ([0], [0], [0]))
+        pred_labels = torch.full(tuple(int(v) for v in ground_truth.shape), 5, dtype=torch.int16)
+        for channel_index, label in enumerate(label_values):
+            buffer.buffer_vol[channel_index] = (pred_labels == label).to(dtype=torch.float32)
 
-        accuracy = buffer.get_acc_pred()
-        self.assertAlmostEqual(float(accuracy.item()), 1.0, places=6)
+        dice = buffer.get_dice_pred()
+        self.assertAlmostEqual(float(dice.item()), 1.0, places=6)
 
     def test_rejects_mask_label_in_label_values(self) -> None:
         ground_truth = torch.zeros((2, 2, 2), dtype=torch.int16)
@@ -64,6 +64,61 @@ class DestVolBufferTests(unittest.TestCase):
                 minivol_size=2,
             )
 
+    def test_dice_keeps_boundary_class_with_inclusive_threshold(self) -> None:
+        ground_truth_flat = torch.tensor(
+            ([0] * 100) + ([2] * 24) + ([1] * 1),
+            dtype=torch.int16,
+        )
+        ground_truth = ground_truth_flat.reshape((5, 5, 5))
+        pred_labels = ground_truth.clone()
+        pred_labels.reshape(-1)[124] = 0
+
+        buffer = DestVolBuffer(
+            ground_truth,
+            volume_shape=(5, 5, 5),
+            label_values=(0, 1, 2),
+            minivol_size=2,
+        )
+        for channel_index, label in enumerate((0, 1, 2)):
+            buffer.buffer_vol[channel_index] = (pred_labels == label).to(dtype=torch.float32)
+
+        dice = float(buffer.get_dice_pred().item())
+        expected = ((200.0 / 201.0) + 0.0 + 1.0) / 3.0
+        self.assertAlmostEqual(dice, expected, places=6)
+
+    def test_dice_can_filter_background_when_it_is_rare(self) -> None:
+        ground_truth_flat = torch.tensor(
+            ([1] * 991) + ([0] * 9),
+            dtype=torch.int16,
+        )
+        ground_truth = ground_truth_flat.reshape((10, 10, 10))
+        pred_labels = ground_truth.clone()
+        pred_labels.reshape(-1)[0] = 0
+
+        buffer = DestVolBuffer(
+            ground_truth,
+            volume_shape=(10, 10, 10),
+            label_values=(0, 1),
+            minivol_size=2,
+        )
+        for channel_index, label in enumerate((0, 1)):
+            buffer.buffer_vol[channel_index] = (pred_labels == label).to(dtype=torch.float32)
+
+        dice = float(buffer.get_dice_pred().item())
+        expected_class_1_dice = 1980.0 / 1981.0
+        self.assertAlmostEqual(dice, expected_class_1_dice, places=6)
+
+    def test_dice_rejects_fully_masked_ground_truth(self) -> None:
+        ground_truth = torch.full((2, 2, 2), -100, dtype=torch.int16)
+        buffer = DestVolBuffer(
+            ground_truth,
+            volume_shape=(2, 2, 2),
+            label_values=(0, 1),
+            minivol_size=2,
+        )
+        with self.assertRaisesRegex(ValueError, "No valid annotated voxels found"):
+            _ = buffer.get_dice_pred()
+
 
 @unittest.skipUnless(torch is not None, "PyTorch is not available")
 class InferenceDestVolBufferTests(unittest.TestCase):
@@ -74,10 +129,9 @@ class InferenceDestVolBufferTests(unittest.TestCase):
             minivol_size=2,
         )
 
-        batch = torch.zeros((1, 3, 2, 2, 2), dtype=torch.float32)
-        # Channel index 1 maps to label value 5.
-        batch[0, 1, :, :, :] = 4.0
-        buffer.add_batch(batch, ([0], [0], [0]))
+        pred_labels = torch.full((2, 2, 2), 5, dtype=torch.int16)
+        for channel_index, label in enumerate((0, 5, 9)):
+            buffer.buffer_vol[channel_index] = (pred_labels == label).to(dtype=torch.float32)
 
         pred = buffer.get_pred_labels()
         self.assertEqual(tuple(pred.shape), (2, 2, 2))
@@ -89,6 +143,22 @@ class InferenceDestVolBufferTests(unittest.TestCase):
                 volume_shape=(2, 2, 2),
                 label_values=(0, 1, -100),
                 minivol_size=2,
+            )
+
+
+class VolumeWeightedMeanScoreTests(unittest.TestCase):
+    def test_computes_standard_volume_weighted_mean(self) -> None:
+        weighted = compute_volume_weighted_mean_score(
+            score_by_box_id={"bbox_a": 0.5, "bbox_b": 0.8},
+            bbox_volume_by_box_id={"bbox_a": 100, "bbox_b": 300},
+        )
+        self.assertAlmostEqual(weighted, 0.725, places=8)
+
+    def test_rejects_missing_bbox_volume(self) -> None:
+        with self.assertRaisesRegex(ValueError, "Missing bbox volume"):
+            compute_volume_weighted_mean_score(
+                score_by_box_id={"bbox_a": 0.5},
+                bbox_volume_by_box_id={},
             )
 
 

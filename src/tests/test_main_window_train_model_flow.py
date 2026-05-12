@@ -218,8 +218,8 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
             completed_epoch_count=4,
             total_epoch_count=6,
             stop_reason="early_stop",
-            best_epoch_index=1,
-            best_weighted_mean_accuracy=0.8125,
+            best_epoch=1,
+            best_weighted_mean_dice=0.8125,
             early_stop_patience=2,
             mixed_precision_enabled=True,
         )
@@ -235,8 +235,8 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
         info_text = info_mock.call_args.args[0]
         self.assertIn("Training is over.", info_text)
         self.assertIn("reason: early stop", info_text)
-        self.assertIn("best epoch (0-based): 1", info_text)
-        self.assertIn("best weighted accuracy: 0.8125", info_text)
+        self.assertIn("best epoch: 1", info_text)
+        self.assertIn("best weighted dice: 0.8125", info_text)
         self.assertIs(info_mock.call_args.kwargs["parent"], window_like)
 
     @unittest.skipUnless(
@@ -248,8 +248,8 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
             completed_epoch_count=2,
             total_epoch_count=6,
             stop_reason="early_stop",
-            best_epoch_index=1,
-            best_weighted_mean_accuracy=0.8125,
+            best_epoch=1,
+            best_weighted_mean_dice=0.8125,
             early_stop_patience=2,
             mixed_precision_enabled=True,
         )
@@ -285,8 +285,8 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
             completed_epoch_count=0,
             total_epoch_count=6,
             stop_reason="user_stop",
-            best_epoch_index=None,
-            best_weighted_mean_accuracy=None,
+            best_epoch=None,
+            best_weighted_mean_dice=None,
             early_stop_patience=2,
             mixed_precision_enabled=True,
         )
@@ -301,8 +301,8 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
         info_mock.assert_called_once()
         info_text = info_mock.call_args.args[0]
         self.assertIn("reason: stopped by user", info_text)
-        self.assertIn("best epoch (0-based): N/A", info_text)
-        self.assertIn("best weighted accuracy: N/A", info_text)
+        self.assertIn("best epoch: N/A", info_text)
+        self.assertIn("best weighted dice: N/A", info_text)
 
     @unittest.skipUnless(
         LearningTrainingLoopResult is not None,
@@ -329,8 +329,8 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
             completed_epoch_count=3,
             total_epoch_count=6,
             stop_reason="max_epoch",
-            best_epoch_index=2,
-            best_weighted_mean_accuracy=0.91,
+            best_epoch=2,
+            best_weighted_mean_dice=0.91,
             early_stop_patience=2,
             mixed_precision_enabled=True,
         )
@@ -354,6 +354,8 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
         warning_mock.assert_not_called()
         logger_mock.info.assert_called_once()
         self.assertIn("Background training completed", logger_mock.info.call_args.args[0])
+        self.assertIn("best_weighted_dice", logger_mock.info.call_args.args[0])
+        self.assertEqual(logger_mock.info.call_args.args[3], "0.91")
 
     @unittest.skipUnless(
         LearningTrainingLoopResult is not None,
@@ -387,8 +389,8 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
             completed_epoch_count=2,
             total_epoch_count=2,
             stop_reason="unexpected_reason",
-            best_epoch_index=0,
-            best_weighted_mean_accuracy=0.5,
+            best_epoch=1,
+            best_weighted_mean_dice=0.5,
             early_stop_patience=2,
             mixed_precision_enabled=True,
         )
@@ -534,8 +536,8 @@ class LearningTrainingWorkerTests(unittest.TestCase):
             completed_epoch_count=4,
             total_epoch_count=8,
             stop_reason="max_epoch",
-            best_epoch_index=3,
-            best_weighted_mean_accuracy=0.87,
+            best_epoch=4,
+            best_weighted_mean_dice=0.87,
             early_stop_patience=2,
             mixed_precision_enabled=True,
         )
@@ -584,8 +586,8 @@ class LearningTrainingWorkerTests(unittest.TestCase):
             completed_epoch_count=0,
             total_epoch_count=8,
             stop_reason="user_stop",
-            best_epoch_index=None,
-            best_weighted_mean_accuracy=None,
+            best_epoch=None,
+            best_weighted_mean_dice=None,
             early_stop_patience=2,
             mixed_precision_enabled=True,
         )
@@ -615,8 +617,8 @@ class LearningTrainingWorkerTests(unittest.TestCase):
             completed_epoch_count=4,
             total_epoch_count=8,
             stop_reason="early_stop",
-            best_epoch_index=3,
-            best_weighted_mean_accuracy=0.87,
+            best_epoch=4,
+            best_weighted_mean_dice=0.87,
             early_stop_patience=2,
             mixed_precision_enabled=True,
         )

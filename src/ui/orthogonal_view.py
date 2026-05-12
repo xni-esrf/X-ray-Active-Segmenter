@@ -94,6 +94,7 @@ class OrthogonalView(QWidget):
         self._latest: Optional[RenderResult] = None
         self._recenter_on_next_render = False
         self._drag_active = False
+        self._right_button_mode: Optional[str] = None
         self._pan_active = False
         self._pan_last: Optional[QPointF] = None
         self._annotation_drag_active = False
@@ -382,11 +383,12 @@ class OrthogonalView(QWidget):
         row = position.y() / widget_h * height
         return (col, row)
 
-    def _update_cursor_from_position(self, position: QPointF) -> None:
+    def _update_cursor_from_position(self, position: QPointF) -> bool:
         indices = self._indices_from_position(position)
         if indices is None:
-            return
+            return False
         self.input_handlers.on_drag_cursor(indices)
+        return True
 
     def _update_hover_from_position(self, position: QPointF) -> None:
         indices = self._indices_from_position(position)
@@ -404,6 +406,8 @@ class OrthogonalView(QWidget):
             return None
         mapped = self._map_canvas_to_image_coords(position, width, height)
         if mapped is None:
+            return None
+        if not np.isfinite(mapped[0]) or not np.isfinite(mapped[1]):
             return None
         col = int(np.clip(mapped[0], 0, width - 1))
         row = int(np.clip(mapped[1], 0, height - 1))
@@ -437,15 +441,64 @@ class OrthogonalView(QWidget):
 
     def _handle_canvas_press(self, position: QPointF) -> None:
         self._drag_active = True
-        self._update_cursor_from_position(position)
+        moved = bool(self._update_cursor_from_position(position))
+        center_callback = getattr(self, "_on_center_all_views_requested", None)
+        if moved and callable(center_callback):
+            center_callback()
 
     def _handle_canvas_move(self, position: QPointF) -> None:
-        if not self._drag_active:
+        if not bool(getattr(self, "_drag_active", False)):
             return
         self._update_cursor_from_position(position)
 
     def _handle_canvas_release(self) -> None:
         self._drag_active = False
+
+    def _handle_right_button_press(self, position: QPointF, *, shift_pressed: bool) -> None:
+        mode = "center" if bool(shift_pressed) else "pan"
+        self._right_button_mode = mode
+        if mode == "center":
+            self._handle_canvas_press(position)
+        else:
+            self._handle_pan_press(position)
+
+    def _handle_right_button_move(self, position: QPointF, *, shift_pressed: bool) -> None:
+        mode = getattr(self, "_right_button_mode", None)
+        if mode not in {"center", "pan"}:
+            mode = "center" if bool(shift_pressed) else "pan"
+        if mode == "center":
+            self._handle_canvas_move(position)
+        else:
+            self._handle_pan_move(position)
+
+    def _handle_right_button_release(self, *, shift_pressed: bool) -> None:
+        mode = getattr(self, "_right_button_mode", None)
+        if mode not in {"center", "pan"}:
+            mode = "center" if bool(shift_pressed) else "pan"
+        self._right_button_mode = None
+        if mode == "center":
+            self._handle_canvas_release()
+        else:
+            self._handle_pan_release()
+
+    def target_pan_for_cursor_centering(self) -> Tuple[float, float]:
+        if self._latest is None:
+            return tuple(self.state.pan)
+        image = self._latest.image
+        height, width = image.shape[:2]
+        if height <= 0 or width <= 0:
+            return tuple(self.state.pan)
+        widget_size = self._canvas_widget.size()
+        center_position = QPointF(widget_size.width() / 2.0, widget_size.height() / 2.0)
+        mapped_center = self._map_canvas_to_image_coords(center_position, width, height)
+        if mapped_center is None or not np.isfinite(mapped_center[0]) or not np.isfinite(mapped_center[1]):
+            mapped_center = (float(width) / 2.0, float(height) / 2.0)
+        cursor_col, cursor_row = self._cursor_xy(self._current_level_scale())
+        pan_x, pan_y = self.state.pan
+        return (
+            float(pan_x) + float(mapped_center[0] - cursor_col),
+            float(pan_y) + float(mapped_center[1] - cursor_row),
+        )
 
     def _handle_annotation_press(self, position: QPointF) -> None:
         self._annotation_drag_active = False
@@ -941,10 +994,10 @@ class OrthogonalView(QWidget):
                     event.accept()
                     return True
                 if event.button() == Qt.RightButton:
-                    if event.modifiers() & Qt.ShiftModifier:
-                        self._handle_canvas_press(event.position())
-                    else:
-                        self._handle_pan_press(event.position())
+                    self._handle_right_button_press(
+                        event.position(),
+                        shift_pressed=bool(event.modifiers() & Qt.ShiftModifier),
+                    )
                     event.accept()
                     return True
             if event.type() == QEvent.MouseMove:
@@ -961,10 +1014,10 @@ class OrthogonalView(QWidget):
                     event.accept()
                     return True
                 if event.buttons() & Qt.RightButton:
-                    if event.modifiers() & Qt.ShiftModifier:
-                        self._handle_canvas_move(event.position())
-                    else:
-                        self._handle_pan_move(event.position())
+                    self._handle_right_button_move(
+                        event.position(),
+                        shift_pressed=bool(event.modifiers() & Qt.ShiftModifier),
+                    )
                     event.accept()
                     return True
                 return False
@@ -983,10 +1036,9 @@ class OrthogonalView(QWidget):
                     event.accept()
                     return True
                 if event.button() == Qt.RightButton:
-                    if event.modifiers() & Qt.ShiftModifier:
-                        self._handle_canvas_release()
-                    else:
-                        self._handle_pan_release()
+                    self._handle_right_button_release(
+                        shift_pressed=bool(event.modifiers() & Qt.ShiftModifier),
+                    )
                     event.accept()
                     return True
         return super().eventFilter(obj, event)
@@ -1010,10 +1062,10 @@ class OrthogonalView(QWidget):
             event.accept()
             return
         if event.button() == Qt.RightButton:
-            if event.modifiers() & Qt.ShiftModifier:
-                self._handle_canvas_press(QPointF(canvas_pos))
-            else:
-                self._handle_pan_press(QPointF(canvas_pos))
+            self._handle_right_button_press(
+                QPointF(canvas_pos),
+                shift_pressed=bool(event.modifiers() & Qt.ShiftModifier),
+            )
             event.accept()
             return
 
@@ -1032,10 +1084,10 @@ class OrthogonalView(QWidget):
             event.accept()
             return
         if event.buttons() & Qt.RightButton:
-            if event.modifiers() & Qt.ShiftModifier:
-                self._handle_canvas_move(QPointF(canvas_pos))
-            else:
-                self._handle_pan_move(QPointF(canvas_pos))
+            self._handle_right_button_move(
+                QPointF(canvas_pos),
+                shift_pressed=bool(event.modifiers() & Qt.ShiftModifier),
+            )
             event.accept()
             return
 
@@ -1055,10 +1107,9 @@ class OrthogonalView(QWidget):
             event.accept()
             return
         if event.button() == Qt.RightButton:
-            if event.modifiers() & Qt.ShiftModifier:
-                self._handle_canvas_release()
-            else:
-                self._handle_pan_release()
+            self._handle_right_button_release(
+                shift_pressed=bool(event.modifiers() & Qt.ShiftModifier),
+            )
             event.accept()
             return
 

@@ -40,12 +40,14 @@ class LearningModelEvaluationTests(unittest.TestCase):
                 del num_classes
 
     class _GuardedBuffer:
-        def __init__(self, *, ground_truth, accuracy: float) -> None:
+        def __init__(self, *, ground_truth, dice: float, include_bbox_volume: bool = True) -> None:
             self.ground_truth = ground_truth
-            self._accuracy = float(accuracy)
+            self._dice = float(dice)
             self.buffer_vol = torch.full((1,), 7.0, dtype=torch.float32)
             self.add_calls = 0
             self.cleared_before_first_add = False
+            if include_bbox_volume:
+                self.bbox_voxel_volume = int(self.ground_truth.numel())
 
         def add_batch(self, batch, coordinates) -> None:
             del batch, coordinates
@@ -53,8 +55,8 @@ class LearningModelEvaluationTests(unittest.TestCase):
             if self.add_calls == 1:
                 self.cleared_before_first_add = bool(torch.all(self.buffer_vol == 0))
 
-        def get_acc_pred(self):
-            return torch.tensor(self._accuracy, dtype=torch.float32)
+        def get_dice_pred(self):
+            return torch.tensor(self._dice, dtype=torch.float32)
 
     @staticmethod
     def _make_eval_runtime(*, box_id: str, buffer_obj) -> LearningBBoxEvalRuntime:
@@ -87,7 +89,7 @@ class LearningModelEvaluationTests(unittest.TestCase):
         model_runtime = self._make_model_runtime()
         first_buffer = self._GuardedBuffer(
             ground_truth=torch.tensor([[[0, -100], [1, -100]]], dtype=torch.long),
-            accuracy=0.5,
+            dice=0.5,
         )
         second_buffer = self._GuardedBuffer(
             ground_truth=torch.tensor(
@@ -97,7 +99,7 @@ class LearningModelEvaluationTests(unittest.TestCase):
                 ],
                 dtype=torch.long,
             ),
-            accuracy=1.0,
+            dice=1.0,
         )
         eval_runtimes = {
             "bbox_0008": self._make_eval_runtime(box_id="bbox_0008", buffer_obj=first_buffer),
@@ -112,12 +114,12 @@ class LearningModelEvaluationTests(unittest.TestCase):
             mixed_precision=True,
         )
 
-        self.assertAlmostEqual(result.weighted_mean_accuracy, 0.875, places=8)
+        self.assertAlmostEqual(result.weighted_mean_dice, (0.5 * 4.0 + 1.0 * 8.0) / 12.0, places=8)
         self.assertEqual(result.valid_voxel_counts_by_box_id["bbox_0008"], 2)
         self.assertEqual(result.valid_voxel_counts_by_box_id["bbox_0011"], 6)
         self.assertEqual(result.total_valid_voxel_count, 8)
-        self.assertEqual(result.per_box_accuracy_by_box_id["bbox_0008"], 0.5)
-        self.assertEqual(result.per_box_accuracy_by_box_id["bbox_0011"], 1.0)
+        self.assertEqual(result.per_box_dice_by_box_id["bbox_0008"], 0.5)
+        self.assertEqual(result.per_box_dice_by_box_id["bbox_0011"], 1.0)
         self.assertFalse(result.mixed_precision_used)
         self.assertTrue(first_buffer.cleared_before_first_add)
         self.assertTrue(second_buffer.cleared_before_first_add)
@@ -127,7 +129,7 @@ class LearningModelEvaluationTests(unittest.TestCase):
         model_runtime = self._make_model_runtime()
         empty_buffer = self._GuardedBuffer(
             ground_truth=torch.full((1, 2, 2), -100, dtype=torch.long),
-            accuracy=1.0,
+            dice=1.0,
         )
         eval_runtimes = {
             "bbox_0008": self._make_eval_runtime(box_id="bbox_0008", buffer_obj=empty_buffer),
@@ -140,6 +142,32 @@ class LearningModelEvaluationTests(unittest.TestCase):
                 device="cpu",
                 mixed_precision=False,
             )
+
+    def test_evaluate_validation_falls_back_to_ground_truth_volume_when_bbox_volume_missing(self) -> None:
+        model_runtime = self._make_model_runtime()
+        first_buffer = self._GuardedBuffer(
+            ground_truth=torch.ones((1, 1, 2), dtype=torch.long),
+            dice=0.25,
+            include_bbox_volume=False,
+        )
+        second_buffer = self._GuardedBuffer(
+            ground_truth=torch.ones((1, 2, 2), dtype=torch.long),
+            dice=1.0,
+            include_bbox_volume=False,
+        )
+        eval_runtimes = {
+            "bbox_0008": self._make_eval_runtime(box_id="bbox_0008", buffer_obj=first_buffer),
+            "bbox_0011": self._make_eval_runtime(box_id="bbox_0011", buffer_obj=second_buffer),
+        }
+
+        result = evaluate_learning_model_on_validation_dataloaders(
+            model_runtime=model_runtime,
+            eval_runtimes_by_box_id=eval_runtimes,
+            device="cpu",
+            mixed_precision=False,
+        )
+
+        self.assertAlmostEqual(result.weighted_mean_dice, (0.25 * 2.0 + 1.0 * 4.0) / 6.0, places=8)
 
 
 if __name__ == "__main__":

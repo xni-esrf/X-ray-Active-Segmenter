@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import math
 from numbers import Integral
-from typing import Dict, Sequence, Tuple
+from numbers import Real
+from typing import Dict, Mapping, Sequence, Tuple
 
 import numpy as np
 
@@ -135,6 +137,133 @@ def _decode_buffer_labels(buffer_vol, channel_index_to_label: Sequence[int], *, 
     return lookup[pred_channel]
 
 
+def _compute_bbox_volume_voxels(volume_shape: Sequence[object]) -> int:
+    if len(volume_shape) != 3:
+        raise ValueError(f"volume_shape must be length 3, got {volume_shape}")
+    volume = 1
+    for axis, raw_dim in enumerate(tuple(volume_shape)):
+        dim = _coerce_positive_int(raw_dim, name=f"volume_shape[{axis}]")
+        volume *= int(dim)
+    if volume <= 0:
+        raise ValueError("bbox volume must be > 0 voxels")
+    return int(volume)
+
+
+def _coerce_scalar_real(value: object, *, name: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, Real):
+        raise TypeError(f"{name} must be a scalar real value, got {type(value).__name__}")
+    normalized = float(value)
+    if not math.isfinite(normalized):
+        raise ValueError(f"{name} must be finite, got {normalized!r}")
+    return normalized
+
+
+def _compute_filtered_mean_dice_score(
+    *,
+    pred_labels,
+    ground_truth,
+    label_values: Sequence[int],
+    rare_class_ratio: float = 0.01,
+    mask_label: int = _MASK_LABEL,
+) -> float:
+    torch_mod = _require_torch()
+    if pred_labels.shape != ground_truth.shape:
+        raise ValueError(
+            "pred_labels and ground_truth must share shape, "
+            f"got {tuple(pred_labels.shape)} vs {tuple(ground_truth.shape)}"
+        )
+    ratio = _coerce_scalar_real(rare_class_ratio, name="rare_class_ratio")
+    if ratio <= 0.0:
+        raise ValueError(f"rare_class_ratio must be > 0, got {ratio}")
+
+    valid_mask = ground_truth != int(mask_label)
+    if not bool(torch_mod.any(valid_mask).item()):
+        raise ValueError("No valid annotated voxels found (all labels are masked).")
+
+    pred_valid = pred_labels[valid_mask]
+    ground_truth_valid = ground_truth[valid_mask]
+
+    per_class_ground_truth_count: Dict[int, int] = {}
+    max_count = 0
+    for label in tuple(int(v) for v in tuple(label_values)):
+        count = int((ground_truth_valid == int(label)).sum().item())
+        per_class_ground_truth_count[int(label)] = int(count)
+        if count > max_count:
+            max_count = int(count)
+
+    if max_count <= 0:
+        raise ValueError("No non-masked class voxels were found in ground truth.")
+
+    threshold = float(max_count) * float(ratio)
+    kept_labels = tuple(
+        label
+        for label in tuple(int(v) for v in tuple(label_values))
+        if float(per_class_ground_truth_count[int(label)]) >= float(threshold)
+    )
+    if not kept_labels:
+        raise ValueError("No classes remained after rare-class filtering.")
+
+    per_class_dice_values = []
+    for label in kept_labels:
+        pred_is_label = pred_valid == int(label)
+        gt_is_label = ground_truth_valid == int(label)
+        true_positive = int(torch_mod.logical_and(pred_is_label, gt_is_label).sum().item())
+        false_positive = int(
+            torch_mod.logical_and(pred_is_label, torch_mod.logical_not(gt_is_label)).sum().item()
+        )
+        false_negative = int(
+            torch_mod.logical_and(torch_mod.logical_not(pred_is_label), gt_is_label).sum().item()
+        )
+
+        denominator = float((2 * true_positive) + false_positive + false_negative)
+        if denominator <= 0.0:
+            raise ValueError(
+                "Encountered invalid Dice denominator <= 0 for a kept class; "
+                "check label filtering invariants."
+            )
+        dice_value = float((2.0 * float(true_positive)) / denominator)
+        if not math.isfinite(dice_value):
+            raise ValueError(f"Computed non-finite Dice value: {dice_value!r}")
+        per_class_dice_values.append(float(dice_value))
+
+    bbox_dice = float(sum(per_class_dice_values) / float(len(per_class_dice_values)))
+    if not math.isfinite(bbox_dice):
+        raise ValueError(f"Computed non-finite bbox Dice score: {bbox_dice!r}")
+    return float(bbox_dice)
+
+
+def compute_volume_weighted_mean_score(
+    *,
+    score_by_box_id: Mapping[str, object],
+    bbox_volume_by_box_id: Mapping[str, object],
+) -> float:
+    if not score_by_box_id:
+        raise ValueError("score_by_box_id must not be empty")
+
+    weighted_sum = 0.0
+    total_weight = 0
+    for box_id, raw_score in tuple(score_by_box_id.items()):
+        normalized_box_id = str(box_id)
+        if normalized_box_id not in bbox_volume_by_box_id:
+            raise ValueError(
+                f"Missing bbox volume for box_id={normalized_box_id!r} in bbox_volume_by_box_id."
+            )
+        score_value = _coerce_scalar_real(raw_score, name=f"score_by_box_id[{normalized_box_id!r}]")
+        weight = _coerce_positive_int(
+            bbox_volume_by_box_id[normalized_box_id],
+            name=f"bbox_volume_by_box_id[{normalized_box_id!r}]",
+        )
+        weighted_sum += float(score_value) * float(weight)
+        total_weight += int(weight)
+
+    if total_weight <= 0:
+        raise ValueError("Total bbox volume weight must be > 0.")
+    weighted_mean = float(weighted_sum / float(total_weight))
+    if not math.isfinite(weighted_mean):
+        raise ValueError(f"Weighted mean score must be finite, got {weighted_mean!r}")
+    return float(weighted_mean)
+
+
 class EvalBBoxDataset(Dataset):
     def __init__(self, vol, minivol_size: int = 200) -> None:
         torch_mod = _require_torch()
@@ -233,6 +362,7 @@ class DestVolBuffer:
         self.hann_window = _build_hann_window(minivol_size=self.minivol_size)
 
         self.ground_truth = ground_truth
+        self.bbox_voxel_volume = _compute_bbox_volume_voxels(self.volume_shape)
 
     def add_batch(self, batch, batch_coordinates):
         _add_weighted_batch_to_buffer(
@@ -244,19 +374,21 @@ class DestVolBuffer:
             num_classes=self.num_classes,
         )
 
-    def get_acc_pred(self):
+    def get_dice_pred(self):
+        torch_mod = _require_torch()
         pred_labels = _decode_buffer_labels(
             self.buffer_vol,
             self.channel_index_to_label,
             dtype=self.ground_truth.dtype,
         )
-
-        valid_mask = self.ground_truth != _MASK_LABEL
-        assert torch.any(valid_mask), "No valid annotated voxels found."
-
-        correct = (pred_labels == self.ground_truth) & valid_mask
-        accuracy = correct.sum().float() / valid_mask.sum().float()
-        return accuracy
+        dice_value = _compute_filtered_mean_dice_score(
+            pred_labels=pred_labels,
+            ground_truth=self.ground_truth,
+            label_values=self.channel_index_to_label,
+            rare_class_ratio=0.01,
+            mask_label=_MASK_LABEL,
+        )
+        return torch_mod.tensor(float(dice_value), dtype=torch_mod.float32)
 
 
 class InferenceDestVolBuffer:

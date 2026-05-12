@@ -17,7 +17,7 @@ apptainer shell --nv container.sif
 
 3. Download the foundation model:
 
-`https://drive.google.com/file/d/1A6RbuGG6SqERgDIOmEadFkyy4l_t8Y-C/view?usp=sharing`
+`https://drive.google.com/file/d/1Y-SUCuor5Rxfsyyrooj_a09LaLVtu6pG/view?usp=sharing`
 
 4. Store the downloaded model in a directory named `foundation_model`.
 5. Keep the model filename exactly `MAE_XNT.cp` (do not rename it).
@@ -49,5 +49,5 @@ python3 open_ui_raw_viewer.py --help
 - Features you do not want to segment should also be represented in both the training and validation sets.
 - For a fixed amount of annotated data, the training set is often larger than the validation set (typically 2x to 10x).
 - For each feature, start with easier examples, then progressively add harder cases.
-- You can close the application without stopping a running training job. When training finishes, the best checkpoint (best validation score) is saved and can be used for inference.
+- You can close the application without stopping a running training job. When training finishes, the best checkpoint (best validation weighted Dice) is saved and can be used for inference.
 - Training can be stopped at any point. If at least the first epoch has finished (about 1 hour), the best state reached so far is restored and can be used for inference.

@@ -8,6 +8,7 @@ from typing import Dict, Mapping, Optional, Tuple
 
 import numpy as np
 
+from .eval_bbox_dataset import compute_volume_weighted_mean_score
 from .session_store import (
     LearningBBoxDataLoaderRuntime,
     LearningBBoxEvalRuntime,
@@ -19,6 +20,30 @@ from .session_store import (
 
 
 _MASK_LABEL = -100
+
+# Canonical metric specification for the Dice migration.
+# This block intentionally freezes semantics before implementation so later
+# code changes can be validated against one source of truth.
+#
+# Weighted validation Dice (target behavior):
+# 1) For each validation bbox, compute per-class Dice using all labels
+#    present in `buffer.label_values` (background included).
+# 2) Class-presence filtering is determined from ground-truth voxel counts
+#    inside that bbox only (`buffer.ground_truth`), after excluding mask voxels
+#    where label == -100.
+# 3) Let `max_count` be the largest per-class ground-truth count in the bbox.
+#    Keep class `c` iff `count_c >= max_count / 100.0` (inclusive boundary).
+# 4) Bbox Dice is the unweighted arithmetic mean of per-class Dice across the
+#    kept classes only.
+# 5) Global weighted Dice is the weighted mean across validation bboxes, with
+#    bbox weight = bbox voxel volume (`D * H * W` from the bbox volume shape):
+#       sum(weight_bbox * dice_bbox) / sum(weight_bbox)
+# 6) Dice replaces accuracy everywhere for:
+#    - validation metric reporting,
+#    - best-epoch/checkpoint selection,
+#    - early stopping comparisons,
+#    - user-facing logs/messages,
+#    - field names and tests.
 
 
 @dataclass(frozen=True)
@@ -43,8 +68,8 @@ class LearningTrainEpochResult:
 
 @dataclass(frozen=True)
 class LearningValidationEvalResult:
-    weighted_mean_accuracy: float
-    per_box_accuracy_by_box_id: Dict[str, float]
+    weighted_mean_dice: float
+    per_box_dice_by_box_id: Dict[str, float]
     valid_voxel_counts_by_box_id: Dict[str, int]
     total_valid_voxel_count: int
     mixed_precision_used: bool
@@ -52,11 +77,19 @@ class LearningValidationEvalResult:
 
 @dataclass(frozen=True)
 class LearningTrainingLoopResult:
+    """Summary of the full train+validation loop.
+
+    Contract (frozen for migration):
+    - `best_epoch` is the canonical best-epoch field.
+    - `best_epoch` is intended to represent 1-based epoch numbering everywhere.
+    - `None` means no checkpointable "best epoch" was produced.
+    """
+
     completed_epoch_count: int
     total_epoch_count: int
     stop_reason: str
-    best_epoch_index: Optional[int]
-    best_weighted_mean_accuracy: Optional[float]
+    best_epoch: Optional[int]
+    best_weighted_mean_dice: Optional[float]
     early_stop_patience: int
     mixed_precision_enabled: bool
 
@@ -83,14 +116,14 @@ def _require_real(value: object, *, name: str) -> float:
     return float(value)
 
 
-def _coerce_accuracy_value(value: object) -> float:
+def _coerce_dice_value(value: object) -> float:
     torch_mod = _resolve_torch(None)
     if torch_mod is not None and isinstance(value, getattr(torch_mod, "Tensor")):
         if int(value.numel()) != 1:
-            raise ValueError("accuracy tensor must contain a single scalar value")
+            raise ValueError("dice tensor must contain a single scalar value")
         return float(value.detach().item())
     if isinstance(value, bool) or not isinstance(value, Real):
-        raise TypeError(f"accuracy must be a scalar real value, got {type(value).__name__}")
+        raise TypeError(f"dice must be a scalar real value, got {type(value).__name__}")
     return float(value)
 
 
@@ -134,6 +167,17 @@ def _count_valid_voxels(
     if int(ground_truth_array.size) <= 0:
         return 0
     return int(np.count_nonzero(ground_truth_array != int(mask_label)))
+
+
+def _count_total_voxels(
+    volume: object,
+    *,
+    torch_module: Optional[object] = None,
+) -> int:
+    torch_mod = _resolve_torch(torch_module)
+    if torch_mod is not None and isinstance(volume, getattr(torch_mod, "Tensor")):
+        return int(volume.numel())
+    return int(np.asarray(volume).size)
 
 
 def _format_missing_preconditions_message(missing_items) -> str:
@@ -365,6 +409,49 @@ def _resolve_validation_valid_voxel_counts(
             )
         counts[str(box_id)] = int(valid_voxel_count)
     return counts
+
+
+def _resolve_validation_bbox_voxel_volumes(
+    eval_runtimes_by_box_id: Mapping[str, LearningBBoxEvalRuntime],
+    *,
+    torch_module: Optional[object] = None,
+) -> Dict[str, int]:
+    torch_mod = _resolve_torch(torch_module)
+    volumes: Dict[str, int] = {}
+    for box_id, runtime in tuple(eval_runtimes_by_box_id.items()):
+        if not isinstance(runtime, LearningBBoxEvalRuntime):
+            raise TypeError(
+                "eval_runtimes_by_box_id values must be LearningBBoxEvalRuntime, "
+                f"got {type(runtime).__name__} for box_id={box_id!r}"
+            )
+        buffer_obj = runtime.buffer
+        if hasattr(buffer_obj, "bbox_voxel_volume"):
+            volume = _require_int(
+                getattr(buffer_obj, "bbox_voxel_volume"),
+                name=f"bbox_voxel_volume for box_id={box_id!r}",
+            )
+            if volume <= 0:
+                raise ValueError(
+                    f"bbox_voxel_volume must be > 0 for box_id={box_id!r}, got {volume}"
+                )
+            volumes[str(box_id)] = int(volume)
+            continue
+        if hasattr(buffer_obj, "ground_truth"):
+            volume = _count_total_voxels(
+                getattr(buffer_obj, "ground_truth"),
+                torch_module=torch_mod,
+            )
+            if volume <= 0:
+                raise ValueError(
+                    f"Ground-truth volume must be > 0 for box_id={box_id!r}, got {volume}"
+                )
+            volumes[str(box_id)] = int(volume)
+            continue
+        raise ValueError(
+            "Evaluation buffer must expose either 'bbox_voxel_volume' or 'ground_truth' "
+            f"to resolve bbox volume for box_id={box_id!r}."
+        )
+    return volumes
 
 
 def validate_learning_model_training_preconditions(
@@ -688,7 +775,11 @@ def evaluate_learning_model_on_validation_dataloaders(
 
     total_valid_voxel_count = int(sum(int(v) for v in tuple(resolved_valid_counts.values())))
     if total_valid_voxel_count <= 0:
-        raise ValueError("Validation weighted accuracy requires a positive total valid voxel count.")
+        raise ValueError("Validation weighted Dice requires a positive total valid voxel count.")
+    resolved_bbox_volumes = _resolve_validation_bbox_voxel_volumes(
+        resolved_eval_runtimes,
+        torch_module=torch_mod,
+    )
 
     resolved_device = _resolve_training_device(
         torch_mod,
@@ -704,8 +795,7 @@ def evaluate_learning_model_on_validation_dataloaders(
     if callable(eval_method):
         eval_method()
 
-    weighted_accuracy_sum = 0.0
-    per_box_accuracy: Dict[str, float] = {}
+    per_box_dice: Dict[str, float] = {}
     with getattr(torch_mod, "no_grad")():
         for box_id, runtime in tuple(resolved_eval_runtimes.items()):
             if _is_stop_requested(stop_event):
@@ -717,10 +807,10 @@ def evaluate_learning_model_on_validation_dataloaders(
                 raise TypeError(
                     f"Evaluation buffer for box_id={box_id!r} must define add_batch(batch, coordinates)."
                 )
-            get_acc_pred = getattr(runtime.buffer, "get_acc_pred", None)
-            if not callable(get_acc_pred):
+            get_dice_pred = getattr(runtime.buffer, "get_dice_pred", None)
+            if not callable(get_dice_pred):
                 raise TypeError(
-                    f"Evaluation buffer for box_id={box_id!r} must define get_acc_pred()."
+                    f"Evaluation buffer for box_id={box_id!r} must define get_dice_pred()."
                 )
 
             for minivols, coordinates in dataloader:
@@ -735,18 +825,21 @@ def evaluate_learning_model_on_validation_dataloaders(
                     pred_minivols = model(minivols)
                 add_batch(pred_minivols.detach().cpu(), coordinates)
 
-            accuracy_value = _coerce_accuracy_value(get_acc_pred())
-            per_box_accuracy[box_id] = float(accuracy_value)
-            weighted_accuracy_sum += float(accuracy_value) * float(resolved_valid_counts[box_id])
+            dice_value = _coerce_dice_value(get_dice_pred())
+            per_box_dice[box_id] = float(dice_value)
 
     if was_training:
         train_method = getattr(model, "train", None)
         if callable(train_method):
             train_method()
 
+    weighted_mean_dice = compute_volume_weighted_mean_score(
+        score_by_box_id=per_box_dice,
+        bbox_volume_by_box_id=resolved_bbox_volumes,
+    )
     return LearningValidationEvalResult(
-        weighted_mean_accuracy=float(weighted_accuracy_sum / float(total_valid_voxel_count)),
-        per_box_accuracy_by_box_id=dict(per_box_accuracy),
+        weighted_mean_dice=float(weighted_mean_dice),
+        per_box_dice_by_box_id=dict(per_box_dice),
         valid_voxel_counts_by_box_id={box_id: int(count) for box_id, count in tuple(resolved_valid_counts.items())},
         total_valid_voxel_count=int(total_valid_voxel_count),
         mixed_precision_used=bool(autocast_enabled),
@@ -805,8 +898,8 @@ def train_learning_model_with_validation_loop(
 
     model = preconditions.model_runtime.model
     scaler = None
-    best_epoch_index = -1
-    best_weighted_mean_accuracy = float("-inf")
+    best_epoch: Optional[int] = None
+    best_weighted_mean_dice = float("-inf")
     epochs_without_improvement = 0
     completed_epoch_count = 0
     stop_reason = "max_epoch"
@@ -848,16 +941,17 @@ def train_learning_model_with_validation_loop(
                 stop_event=stop_event,
                 torch_module=torch_mod,
             )
-            weighted_mean_accuracy = float(eval_result.weighted_mean_accuracy)
-            if not math.isfinite(weighted_mean_accuracy):
+            weighted_mean_dice = float(eval_result.weighted_mean_dice)
+            if not math.isfinite(weighted_mean_dice):
                 raise ValueError(
-                    "Validation weighted mean accuracy must be finite. "
-                    f"Epoch {epoch_index} produced weighted_mean_accuracy={weighted_mean_accuracy!r}."
+                    "Validation weighted mean Dice must be finite. "
+                    f"Epoch {epoch_index} produced weighted_mean_dice={weighted_mean_dice!r}."
                 )
 
-            if weighted_mean_accuracy > best_weighted_mean_accuracy:
-                best_weighted_mean_accuracy = weighted_mean_accuracy
-                best_epoch_index = int(epoch_index)
+            if weighted_mean_dice > best_weighted_mean_dice:
+                best_weighted_mean_dice = weighted_mean_dice
+                # Best epoch is 1-based by contract.
+                best_epoch = int(epoch_index) + 1
                 best_model_state_dict_cpu = _clone_model_state_dict_to_cpu(
                     model,
                     torch_module=torch_mod,
@@ -880,14 +974,14 @@ def train_learning_model_with_validation_loop(
                 pass
         raise
 
-    if best_model_state_dict_cpu is None or best_epoch_index < 0:
+    if best_model_state_dict_cpu is None or best_epoch is None:
         if stop_reason == "user_stop":
             return LearningTrainingLoopResult(
                 completed_epoch_count=int(completed_epoch_count),
                 total_epoch_count=int(resolved_total_epoch_count),
                 stop_reason=str(stop_reason),
-                best_epoch_index=None,
-                best_weighted_mean_accuracy=None,
+                best_epoch=None,
+                best_weighted_mean_dice=None,
                 early_stop_patience=int(normalized_patience),
                 mixed_precision_enabled=bool(normalized_mixed_precision),
             )
@@ -900,8 +994,8 @@ def train_learning_model_with_validation_loop(
         completed_epoch_count=int(completed_epoch_count),
         total_epoch_count=int(resolved_total_epoch_count),
         stop_reason=str(stop_reason),
-        best_epoch_index=int(best_epoch_index),
-        best_weighted_mean_accuracy=float(best_weighted_mean_accuracy),
+        best_epoch=best_epoch,
+        best_weighted_mean_dice=float(best_weighted_mean_dice),
         early_stop_patience=int(normalized_patience),
         mixed_precision_enabled=bool(normalized_mixed_precision),
     )

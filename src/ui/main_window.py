@@ -2895,29 +2895,182 @@ class MainWindow(QMainWindow):
             show_warning(_exception_message(exc), parent=self)
             return False
 
-        show_navigation_only_notice = getattr(
-            self,
-            "_show_inference_navigation_only_notice",
-            None,
-        )
-        if callable(show_navigation_only_notice):
-            show_navigation_only_notice()
-        else:
-            MainWindow._show_inference_navigation_only_notice(self)
-
-        try:
-            self._start_learning_inference_background(
-                model_runtime=model_runtime,
-                inference_boxes=inference_boxes,
-                raw_array=raw_array,
-                label_values=label_values,
-                volume_shape=self._bbox_manager.volume_shape,
+        start_background = getattr(self, "_start_learning_inference_background", None)
+        if callable(start_background):
+            show_navigation_only_notice = getattr(
+                self,
+                "_show_inference_navigation_only_notice",
+                None,
             )
-        except Exception as exc:
-            self._exit_learning_inference_running_state()
-            show_warning(_exception_message(exc), parent=self)
+            if callable(show_navigation_only_notice):
+                show_navigation_only_notice()
+            else:
+                MainWindow._show_inference_navigation_only_notice(self)
+            try:
+                start_background(
+                    model_runtime=model_runtime,
+                    inference_boxes=inference_boxes,
+                    raw_array=raw_array,
+                    label_values=label_values,
+                    volume_shape=self._bbox_manager.volume_shape,
+                )
+            except Exception as exc:
+                exit_running_state = getattr(
+                    self,
+                    "_exit_learning_inference_running_state",
+                    None,
+                )
+                if callable(exit_running_state):
+                    exit_running_state()
+                show_warning(_exception_message(exc), parent=self)
+                return False
+            return True
+        return MainWindow._run_learning_inference_inline_compat(
+            self,
+            model_runtime=model_runtime,
+            inference_boxes=inference_boxes,
+            raw_array=raw_array,
+            label_values=label_values,
+            volume_shape=self._bbox_manager.volume_shape,
+        )
+
+    @staticmethod
+    def _run_learning_inference_inline_compat(
+        target: object,
+        *,
+        model_runtime: object,
+        inference_boxes: Sequence[BoundingBox],
+        raw_array: np.ndarray,
+        label_values: Sequence[int],
+        volume_shape: Sequence[int],
+    ) -> bool:
+        worker = _LearningInferenceWorker()
+        worker.configure(
+            model_runtime=model_runtime,
+            inference_boxes=inference_boxes,
+            raw_array=raw_array,
+            label_values=label_values,
+            volume_shape=volume_shape,
+        )
+        try:
+            result = worker._run_inference()
+        except _LearningInferenceStopRequested as exc:
+            show_info(
+                f"Segment Inference Bbox canceled: {_exception_message(exc)}",
+                parent=target,
+            )
             return False
-        return True
+        except Exception as exc:
+            show_warning(_exception_message(exc), parent=target)
+            return False
+
+        editor = getattr(target, "_segmentation_editor", None)
+        if editor is None or getattr(editor, "kind", None) != "semantic":
+            show_warning(
+                "A semantic map is required to run Segment Inference Bbox.",
+                parent=target,
+            )
+            return False
+
+        failure_by_box_id: Dict[str, str] = dict(result.failure_by_box_id)
+        cleanup_errors_by_box_id: Dict[str, Tuple[str, ...]] = {
+            str(box_id): tuple(errors)
+            for box_id, errors in tuple(result.cleanup_errors_by_box_id.items())
+        }
+        succeeded_box_ids: list[str] = []
+        changed_voxel_count_total = 0
+
+        begin_modification = getattr(editor, "begin_modification", None)
+        commit_modification = getattr(editor, "commit_modification", None)
+        cancel_modification = getattr(editor, "cancel_modification", None)
+        record_history = getattr(target, "_record_global_history_for_segmentation_operation", None)
+        in_modification = False
+        try:
+            if callable(begin_modification):
+                begin_modification("segment_inference_bboxes")
+                in_modification = True
+            for prediction in tuple(result.predictions):
+                box = prediction.box
+                try:
+                    changed_count = _apply_predicted_bbox_to_editor(
+                        editor=editor,
+                        box=box,
+                        predicted_bbox=prediction.predicted_bbox,
+                    )
+                    changed_voxel_count_total += int(changed_count)
+                    succeeded_box_ids.append(str(box.id))
+                except Exception as exc:
+                    failure_by_box_id[str(box.id)] = _exception_message(exc)
+            if callable(commit_modification):
+                committed = commit_modification()
+                in_modification = False
+                if callable(record_history):
+                    record_history(committed)
+        except Exception as exc:
+            if in_modification and callable(cancel_modification):
+                try:
+                    cancel_modification()
+                except Exception:
+                    pass
+            show_warning(_exception_message(exc), parent=target)
+            return False
+
+        if changed_voxel_count_total > 0:
+            setattr(target, "_annotation_labels_dirty", True)
+            for method_name in (
+                "_sync_renderer_segmentation_labels",
+                "_request_hover_readout",
+                "_request_picked_readout",
+                "render_all",
+            ):
+                method = getattr(target, method_name, None)
+                if callable(method):
+                    method()
+        refresh_annotation_ui_state = getattr(target, "_refresh_annotation_ui_state", None)
+        if callable(refresh_annotation_ui_state):
+            refresh_annotation_ui_state()
+
+        success_count = int(len(succeeded_box_ids))
+        failure_count = int(len(failure_by_box_id))
+        total_count = int(result.total_count)
+        cleanup_warning_count = int(
+            sum(len(errors) for errors in cleanup_errors_by_box_id.values())
+        )
+
+        if failure_count <= 0 and cleanup_warning_count <= 0:
+            title_line = "Segment Inference Bbox completed: all inference bboxes succeeded."
+        elif failure_count > 0 and success_count <= 0:
+            title_line = "Segment Inference Bbox failed: no inference bbox was successfully processed."
+        elif failure_count > 0:
+            title_line = "Segment Inference Bbox completed with partial success."
+        else:
+            title_line = "Segment Inference Bbox completed with cleanup warnings."
+
+        summary_lines = [
+            title_line,
+            f"- processed inference bboxes: {total_count}",
+            f"- succeeded: {success_count}",
+            f"- failed: {failure_count}",
+            f"- changed voxels: {int(changed_voxel_count_total)}",
+        ]
+        if succeeded_box_ids:
+            summary_lines.append("- succeeded bbox ids: " + ", ".join(succeeded_box_ids))
+        if failure_by_box_id:
+            summary_lines.append("- failed bbox reasons:")
+            for box_id, reason in tuple(failure_by_box_id.items()):
+                summary_lines.append(f"  - {box_id}: {reason}")
+        if cleanup_errors_by_box_id:
+            summary_lines.append("- cleanup warnings:")
+            for box_id, errors in tuple(cleanup_errors_by_box_id.items()):
+                for error in tuple(errors):
+                    summary_lines.append(f"  - {box_id}: {error}")
+
+        summary = "\n".join(summary_lines)
+        if failure_by_box_id or cleanup_errors_by_box_id:
+            show_warning(summary, parent=target)
+        else:
+            show_info(summary, parent=target)
+        return bool(failure_count <= 0)
 
     def _show_inference_navigation_only_notice(self) -> None:
         parent = self if isinstance(self, QWidget) else None
@@ -3514,13 +3667,13 @@ class MainWindow(QMainWindow):
             return
         best_epoch_text = (
             "N/A"
-            if result.best_epoch_index is None
-            else str(int(result.best_epoch_index))
+            if result.best_epoch is None
+            else str(int(result.best_epoch))
         )
-        best_accuracy_text = (
+        best_dice_text = (
             "N/A"
-            if result.best_weighted_mean_accuracy is None
-            else f"{float(result.best_weighted_mean_accuracy):.6g}"
+            if result.best_weighted_mean_dice is None
+            else f"{float(result.best_weighted_mean_dice):.6g}"
         )
         marker = getattr(self, "_mark_current_model_runtime_as_trained", None)
         if callable(marker):
@@ -3532,10 +3685,10 @@ class MainWindow(QMainWindow):
             )
         if background_close_mode:
             _LOGGER.info(
-                "Background training completed: reason=%s, best_epoch=%s, best_weighted_accuracy=%s, checkpoint=%s",
+                "Background training completed: reason=%s, best_epoch=%s, best_weighted_dice=%s, checkpoint=%s",
                 stop_reason_text,
                 best_epoch_text,
-                best_accuracy_text,
+                best_dice_text,
                 getattr(self, "_deferred_close_checkpoint_path", None),
             )
             return
@@ -3543,8 +3696,8 @@ class MainWindow(QMainWindow):
             (
                 "Training is over.\n"
                 f"- reason: {stop_reason_text}\n"
-                f"- best epoch (0-based): {best_epoch_text}\n"
-                f"- best weighted accuracy: {best_accuracy_text}"
+                f"- best epoch: {best_epoch_text}\n"
+                f"- best weighted dice: {best_dice_text}"
             ),
             parent=self,
         )

@@ -186,7 +186,20 @@ def compute_class_weights_from_segmentation_tensors(
     positive_counts = [count for count in tuple(label_counts.values()) if count > 0]
     if not positive_counts:
         raise ValueError("No non-masked train voxels were found to compute class weights.")
-    max_count = int(max(positive_counts))
+    non_background_labels = tuple(
+        int(label) for label in tuple(resolved_label_values) if int(label) != 0
+    )
+    non_background_positive_counts = [
+        int(label_counts[label])
+        for label in non_background_labels
+        if int(label_counts[label]) > 0
+    ]
+    if non_background_positive_counts:
+        reference_count = int(max(non_background_positive_counts))
+        normalization_factor = int(len(non_background_positive_counts))
+    else:
+        reference_count = int(max(positive_counts))
+        normalization_factor = 1
 
     weights = []
     for label in resolved_label_values:
@@ -194,7 +207,11 @@ def compute_class_weights_from_segmentation_tensors(
         if count <= 0:
             weight = float(resolved_max_weight)
         else:
-            weight = float(max_count) / float(count)
+            weight = (
+                float(reference_count) / float(count)
+            ) * float(normalization_factor)
+            if weight < 1.0:
+                weight = 1.0
             if weight > resolved_max_weight:
                 weight = float(resolved_max_weight)
         weights.append(float(weight))
@@ -223,4 +240,3 @@ def compute_and_store_current_learning_class_weights(
     )
     updated_runtime = set_current_learning_dataloader_class_weights(class_weights)
     return updated_runtime.class_weights
-

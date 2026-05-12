@@ -178,10 +178,6 @@ def _best_effort_shutdown_dataloader_workers(dataloader: object) -> None:
         shutdown_workers = getattr(iterator, "_shutdown_workers", None)
         if callable(shutdown_workers):
             _best_effort_invoke(shutdown_workers)
-        try:
-            setattr(dataloader, "_iterator", None)
-        except Exception:
-            pass
 
     shutdown_workers = getattr(dataloader, "_shutdown_workers", None)
     if callable(shutdown_workers):

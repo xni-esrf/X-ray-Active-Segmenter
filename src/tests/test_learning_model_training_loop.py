@@ -82,8 +82,8 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         def _eval_side_effect(**_kwargs):
             value = float(next(eval_values))
             return LearningValidationEvalResult(
-                weighted_mean_accuracy=value,
-                per_box_accuracy_by_box_id={"bbox_eval_0001": value},
+                weighted_mean_dice=value,
+                per_box_dice_by_box_id={"bbox_eval_0001": value},
                 valid_voxel_counts_by_box_id={"bbox_eval_0001": 10},
                 total_valid_voxel_count=10,
                 mixed_precision_used=False,
@@ -108,8 +108,8 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         self.assertEqual(result.completed_epoch_count, 4)
         self.assertEqual(result.total_epoch_count, 6)
         self.assertEqual(result.stop_reason, "early_stop")
-        self.assertEqual(result.best_epoch_index, 1)
-        self.assertAlmostEqual(result.best_weighted_mean_accuracy, 0.60, places=10)
+        self.assertEqual(result.best_epoch, 2)
+        self.assertAlmostEqual(result.best_weighted_mean_dice, 0.60, places=10)
         self.assertAlmostEqual(float(model.weight.detach().item()), 2.0, places=10)
 
     def test_training_loop_runs_to_max_epoch_and_reports_best_epoch(self) -> None:
@@ -137,8 +137,8 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         def _eval_side_effect(**_kwargs):
             value = float(next(eval_values))
             return LearningValidationEvalResult(
-                weighted_mean_accuracy=value,
-                per_box_accuracy_by_box_id={"bbox_eval_0001": value},
+                weighted_mean_dice=value,
+                per_box_dice_by_box_id={"bbox_eval_0001": value},
                 valid_voxel_counts_by_box_id={"bbox_eval_0001": 10},
                 total_valid_voxel_count=10,
                 mixed_precision_used=False,
@@ -161,8 +161,8 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         self.assertEqual(result.completed_epoch_count, 4)
         self.assertEqual(result.total_epoch_count, 4)
         self.assertEqual(result.stop_reason, "max_epoch")
-        self.assertEqual(result.best_epoch_index, 3)
-        self.assertAlmostEqual(result.best_weighted_mean_accuracy, 0.40, places=10)
+        self.assertEqual(result.best_epoch, 4)
+        self.assertAlmostEqual(result.best_weighted_mean_dice, 0.40, places=10)
         self.assertAlmostEqual(float(model.weight.detach().item()), 4.0, places=10)
 
     def test_training_loop_restores_best_state_when_eval_metric_is_not_finite(self) -> None:
@@ -190,8 +190,8 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         def _eval_side_effect(**_kwargs):
             value = float(next(eval_values))
             return LearningValidationEvalResult(
-                weighted_mean_accuracy=value,
-                per_box_accuracy_by_box_id={"bbox_eval_0001": value},
+                weighted_mean_dice=value,
+                per_box_dice_by_box_id={"bbox_eval_0001": value},
                 valid_voxel_counts_by_box_id={"bbox_eval_0001": 10},
                 total_valid_voxel_count=10,
                 mixed_precision_used=False,
@@ -236,8 +236,8 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         eval_mock.assert_not_called()
         self.assertEqual(result.completed_epoch_count, 0)
         self.assertEqual(result.stop_reason, "user_stop")
-        self.assertIsNone(result.best_epoch_index)
-        self.assertIsNone(result.best_weighted_mean_accuracy)
+        self.assertIsNone(result.best_epoch)
+        self.assertIsNone(result.best_weighted_mean_dice)
 
 
 if __name__ == "__main__":
