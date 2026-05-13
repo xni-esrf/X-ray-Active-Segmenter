@@ -201,6 +201,10 @@ class SegmentationEditor:
         return self._dirty
 
     @property
+    def state_id(self) -> int:
+        return int(self._state_id)
+
+    @property
     def history(self) -> Tuple[HistoryEntry, ...]:
         entries: List[HistoryEntry] = []
         flat = self._array.reshape(-1)

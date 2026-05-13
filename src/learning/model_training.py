@@ -502,15 +502,15 @@ def validate_learning_model_training_preconditions(
     if resolved_model_runtime is None:
         missing_items.append("model runtime (Load Model).")
     if resolved_train_runtime is None:
-        missing_items.append("training dataloader runtime (Build Dataset from Bbox).")
+        missing_items.append("training dataloader runtime.")
     if not resolved_eval_runtimes:
-        missing_items.append("evaluation runtimes/buffers (Build Dataset from Bbox).")
+        missing_items.append("evaluation runtimes/buffers.")
     if (
         resolved_train_runtime is not None
         and normalized_require_class_weights
         and getattr(resolved_train_runtime, "class_weights", None) is None
     ):
-        missing_items.append("class weights on training dataloader runtime (Build Dataset from Bbox).")
+        missing_items.append("class weights on training dataloader runtime.")
     if missing_items:
         raise ValueError(_format_missing_preconditions_message(missing_items))
 
@@ -518,7 +518,7 @@ def validate_learning_model_training_preconditions(
     if normalized_require_class_weights and class_weights is None:
         raise ValueError(
             "Cannot train model because required learning state is missing:\n"
-            "- class weights on training dataloader runtime (Build Dataset from Bbox)."
+            "- class weights on training dataloader runtime."
         )
 
     valid_voxel_counts_by_box_id = _resolve_validation_valid_voxel_counts(
@@ -587,7 +587,7 @@ def train_learning_model_for_one_epoch(
     if class_weights is None:
         raise ValueError(
             "Training dataloader runtime is missing class_weights. "
-            "Build Dataset from Bbox first."
+            "Prepare learning state first."
         )
     if not isinstance(class_weights, getattr(torch_mod, "Tensor")):
         raise TypeError(

@@ -99,6 +99,26 @@ def _coerce_device_ids(device_ids: Sequence[object]) -> Tuple[int, ...]:
     return tuple(normalized)
 
 
+def _coerce_label_values(values: object, *, name: str) -> Tuple[int, ...]:
+    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
+        raise TypeError(f"{name} must be a sequence of class ids, got {type(values).__name__}")
+    normalized = []
+    for raw_value in tuple(values):
+        if isinstance(raw_value, bool) or not isinstance(raw_value, Integral):
+            raise TypeError(
+                f"{name} must contain integers only, got {type(raw_value).__name__}"
+            )
+        value = int(raw_value)
+        if value == -100:
+            raise ValueError(f"{name} must not include -100 (reserved mask label)")
+        if value in normalized:
+            raise ValueError(f"{name} must not contain duplicates, got {value}")
+        normalized.append(value)
+    if not normalized:
+        raise ValueError(f"{name} must contain at least one class id")
+    return tuple(normalized)
+
+
 def build_3d_sincos_position_embedding(
     grid_shape: Sequence[int],
     embed_dim: int,
@@ -753,6 +773,7 @@ def _extract_training_provenance_from_checkpoint_state(
     source_checkpoint_path = str(resolved_checkpoint_path)
     trained_in_app = False
     training_run_count = 0
+    label_values: Optional[Tuple[int, ...]] = None
 
     metadata_obj = checkpoint_state.get("metadata")
     if isinstance(metadata_obj, Mapping):
@@ -777,6 +798,16 @@ def _extract_training_provenance_from_checkpoint_state(
                 if int(raw_run_count) >= 0:
                     training_run_count = int(raw_run_count)
 
+            raw_label_values = metadata_hyperparameters.get("label_values")
+            if raw_label_values is not None:
+                try:
+                    label_values = _coerce_label_values(
+                        raw_label_values,
+                        name="metadata.hyperparameters.label_values",
+                    )
+                except Exception:
+                    label_values = None
+
     if training_run_count > 0 and not trained_in_app:
         trained_in_app = True
     if trained_in_app and training_run_count <= 0:
@@ -786,6 +817,7 @@ def _extract_training_provenance_from_checkpoint_state(
         "source_checkpoint_path": str(source_checkpoint_path),
         "trained_in_app": bool(trained_in_app),
         "training_run_count": int(training_run_count),
+        "label_values": None if label_values is None else tuple(int(v) for v in tuple(label_values)),
     }
 
 
@@ -1196,6 +1228,20 @@ def instantiate_foundation_model_runtime(
         "trained_in_app": bool(training_provenance["trained_in_app"]),
         "training_run_count": int(training_provenance["training_run_count"]),
     }
+    provenance_label_values = training_provenance.get("label_values")
+    if provenance_label_values is not None:
+        normalized_label_values = _coerce_label_values(
+            provenance_label_values,
+            name="training_provenance.label_values",
+        )
+        if int(len(normalized_label_values)) != int(normalized_num_classes):
+            raise ValueError(
+                "Checkpoint metadata label_values length must match num_classes: "
+                f"len(label_values)={len(normalized_label_values)} num_classes={int(normalized_num_classes)}."
+            )
+        hyperparameters["label_values"] = tuple(
+            int(value) for value in tuple(normalized_label_values)
+        )
 
     if bool(store_in_session):
         return set_current_learning_model_components(

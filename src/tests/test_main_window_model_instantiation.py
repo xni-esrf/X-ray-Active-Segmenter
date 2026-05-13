@@ -132,7 +132,7 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
         show_warning_mock.assert_called_once()
         self.assertIn("At least 2 CUDA devices", show_warning_mock.call_args.args[0])
 
-    def test_instantiate_model_warns_to_build_dataset_when_training_runtime_missing(self) -> None:
+    def test_instantiate_model_warns_when_training_runtime_missing(self) -> None:
         window_like = SimpleNamespace()
 
         with patch(
@@ -165,7 +165,62 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
         show_warning_mock.assert_called_once()
         warning_text = show_warning_mock.call_args.args[0]
         self.assertIn("No training dataloader runtime", warning_text)
-        self.assertIn("Build Dataset from Bbox", warning_text)
+
+    def test_instantiate_model_persists_label_values_from_eval_runtimes(self) -> None:
+        window_like = SimpleNamespace()
+        preconditions = SimpleNamespace(
+            num_classes=3,
+            device_ids=(0, 1),
+            eval_runtimes_by_box_id={
+                "bbox_1001": SimpleNamespace(
+                    buffer=SimpleNamespace(label_values=(0, 1, 2))
+                )
+            },
+        )
+        instantiated_runtime = SimpleNamespace(
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            num_classes=3,
+            device_ids=(0, 1),
+            hyperparameters={},
+        )
+        checkpoint_dialog_result = SimpleNamespace(
+            accepted=True,
+            path="foundation_model/weights_epoch_190.cp",
+        )
+
+        with patch(
+            "src.ui.main_window.get_current_learning_model_runtime",
+            return_value=None,
+        ), patch(
+            "src.ui.main_window.confirm_reinitialize_model"
+        ) as confirm_mock, patch(
+            "src.ui.main_window.validate_foundation_model_instantiation_preconditions",
+            return_value=preconditions,
+        ) as validate_mock, patch(
+            "src.ui.main_window.open_model_checkpoint_dialog",
+            return_value=checkpoint_dialog_result,
+        ) as checkpoint_dialog_mock, patch(
+            "src.ui.main_window.instantiate_foundation_model_runtime",
+            return_value=instantiated_runtime,
+        ) as instantiate_mock, patch(
+            "src.ui.main_window.show_warning"
+        ) as show_warning_mock, patch(
+            "src.ui.main_window.show_info"
+        ) as show_info_mock:
+            result = MainWindow._instantiate_foundation_model_with_dialog(window_like)
+
+        self.assertTrue(result)
+        confirm_mock.assert_not_called()
+        validate_mock.assert_called_once_with(require_min_gpu_count=2)
+        checkpoint_dialog_mock.assert_called_once_with(window_like)
+        instantiate_mock.assert_called_once_with(
+            num_classes=3,
+            device_ids=(0, 1),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+        )
+        show_warning_mock.assert_not_called()
+        show_info_mock.assert_called_once()
+        self.assertEqual(instantiated_runtime.hyperparameters.get("label_values"), (0, 1, 2))
 
     def test_save_model_warns_and_aborts_when_model_runtime_is_missing(self) -> None:
         window_like = SimpleNamespace()

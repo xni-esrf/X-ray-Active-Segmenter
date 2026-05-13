@@ -342,6 +342,7 @@ class FoundationModelInstantiationFlowTests(unittest.TestCase):
                         "source_checkpoint_path": "loaded/custom_trained_model.cp",
                         "trained_in_app": True,
                         "training_run_count": 3,
+                        "label_values": (0, 1, 2, 3, 4, 5),
                     }
                 },
             },
@@ -356,6 +357,7 @@ class FoundationModelInstantiationFlowTests(unittest.TestCase):
         )
         self.assertTrue(runtime.hyperparameters["trained_in_app"])
         self.assertEqual(runtime.hyperparameters["training_run_count"], 3)
+        self.assertEqual(runtime.hyperparameters["label_values"], (0, 1, 2, 3, 4, 5))
 
     def test_save_checkpoint_roundtrip_load_is_compatible(self) -> None:
         class _SaveTorchModule:
@@ -385,7 +387,10 @@ class FoundationModelInstantiationFlowTests(unittest.TestCase):
             checkpoint_path="foundation_model/weights_epoch_190.cp",
             device_ids=(0, 1),
             num_classes=6,
-            hyperparameters={"encoder_parameter_count": 3},
+            hyperparameters={
+                "encoder_parameter_count": 3,
+                "label_values": (0, 1, 2, 3, 4, 5),
+            },
         )
 
         saved_path = save_foundation_model_checkpoint(
@@ -411,6 +416,7 @@ class FoundationModelInstantiationFlowTests(unittest.TestCase):
         )
 
         self.assertTrue(loaded_runtime.hyperparameters["full_model_restore_applied"])
+        self.assertEqual(loaded_runtime.hyperparameters["label_values"], (0, 1, 2, 3, 4, 5))
         self.assertEqual(
             tuple(sorted(loaded_runtime.model.module.loaded_state.keys())),
             ("blocks.0.weight", "blocks.1.weight", "patch_embed.weight"),

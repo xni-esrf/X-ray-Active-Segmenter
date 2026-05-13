@@ -58,6 +58,7 @@ from ..learning import (
     clear_current_learning_bbox_batch,
     compute_and_store_current_learning_class_weights,
     dispose_inference_runtime,
+    get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
     get_current_learning_model_runtime,
     get_current_learning_bbox_batch,
@@ -96,6 +97,7 @@ from .orthogonal_view import AnnotationPaintOutcome, OrthogonalView
 
 AnnotationTool = Literal["brush", "eraser", "flood_filler"]
 BBoxSegmentationOperation = Literal["median_filter", "erosion", "dilation"]
+LearningStateAction = Literal["load_model", "train", "inference"]
 DeferredTrainingCloseMode = Literal[
     "none",
     "stop_and_close",
@@ -216,6 +218,45 @@ def _resolve_shared_eval_label_values(eval_runtimes_by_box_id: Mapping[str, obje
     if resolved_label_values is None:
         raise ValueError("No evaluation buffer label_values could be resolved.")
     return resolved_label_values
+
+
+def _resolve_inference_label_values_for_runtime(model_runtime: object) -> Tuple[int, ...]:
+    if model_runtime is None:
+        raise ValueError("No model runtime is available in session storage.")
+
+    hyperparameters_obj = getattr(model_runtime, "hyperparameters", None)
+    if isinstance(hyperparameters_obj, Mapping) and "label_values" in hyperparameters_obj:
+        raw_label_values = hyperparameters_obj.get("label_values")
+        try:
+            resolved_label_values = _coerce_eval_label_values(raw_label_values)
+        except Exception as exc:
+            raise ValueError(
+                "Loaded model metadata has invalid label_values for inference: "
+                f"{_exception_message(exc)}. "
+                "Load a compatible model checkpoint or rebuild training/validation learning state."
+            ) from exc
+        raw_num_classes = getattr(model_runtime, "num_classes", None)
+        if (
+            isinstance(raw_num_classes, Integral)
+            and not isinstance(raw_num_classes, bool)
+            and int(raw_num_classes) > 0
+            and int(raw_num_classes) != int(len(resolved_label_values))
+        ):
+            raise ValueError(
+                "Model runtime label_values length does not match num_classes: "
+                f"len(label_values)={len(resolved_label_values)} num_classes={int(raw_num_classes)}."
+            )
+        return resolved_label_values
+
+    eval_runtimes_by_box_id = get_current_learning_eval_runtimes_by_box_id()
+    if eval_runtimes_by_box_id:
+        return _resolve_shared_eval_label_values(eval_runtimes_by_box_id)
+
+    raise ValueError(
+        "Inference requires class label_values, but the loaded model metadata does not provide them "
+        "and no evaluation runtimes/buffers are available as fallback. "
+        "Load a checkpoint with label_values metadata or build training/validation learning state once."
+    )
 
 
 def _boxes_overlap(first: BoundingBox, second: BoundingBox) -> bool:
@@ -556,7 +597,7 @@ class _LearningInferenceWorker(QObject):
             import torch
         except Exception as exc:  # pragma: no cover - environment dependent
             raise RuntimeError(
-                f"PyTorch is required to run Segment Inference Bbox: {exc}"
+                f"PyTorch is required to run Segment Inference BBox: {exc}"
             ) from exc
 
         model_runtime = self._configured_model_runtime()
@@ -768,6 +809,8 @@ class MainWindow(QMainWindow):
         self._inference_stop_requested = False
         self._inference_worker: Optional[object] = None
         self._inference_thread: Optional[object] = None
+        self._learning_state_signature: Optional[Tuple[object, ...]] = None
+        self._learning_state_stale = True
         self._deferred_close_after_training = False
         self._deferred_close_training_mode: DeferredTrainingCloseMode = "none"
         self._deferred_close_checkpoint_path: Optional[str] = None
@@ -932,9 +975,6 @@ class MainWindow(QMainWindow):
         )
         self.bottom_panel.on_save_bounding_boxes_requested(
             self._handle_save_bounding_boxes_request
-        )
-        self.bottom_panel.on_build_dataset_from_bboxes_requested(
-            self._handle_build_dataset_from_bboxes_request
         )
         self.bottom_panel.on_load_model_requested(self._handle_load_model_request)
         self.bottom_panel.on_save_model_requested(self._handle_save_model_request)
@@ -1330,6 +1370,7 @@ class MainWindow(QMainWindow):
         if self.state.annotation_mode_enabled:
             self._ensure_editable_segmentation_for_annotation()
         self._refresh_annotation_ui_state()
+        self._learning_state_stale = True
         return True
 
     def set_semantic_volume(self, volume: VolumeData, levels: Optional[Tuple[VolumeData, ...]] = None) -> bool:
@@ -1354,6 +1395,7 @@ class MainWindow(QMainWindow):
         self._attach_segmentation_editor(editor, kind="semantic")
         self.bottom_panel.set_pyramid_levels(1, kind="Semantic")
         self._refresh_annotation_ui_state()
+        self._learning_state_stale = True
         return True
 
     def set_instance_volume(self, volume: VolumeData, levels: Optional[Tuple[VolumeData, ...]] = None) -> bool:
@@ -1378,6 +1420,7 @@ class MainWindow(QMainWindow):
         self._attach_segmentation_editor(editor, kind="instance")
         self.bottom_panel.set_pyramid_levels(1, kind="Instance")
         self._refresh_annotation_ui_state()
+        self._learning_state_stale = True
         return True
 
     def set_annotation_mode(
@@ -1421,6 +1464,8 @@ class MainWindow(QMainWindow):
         return self._bbox_manager.selected_id
 
     def _on_bounding_boxes_changed(self, _change: BoundingBoxChange) -> None:
+        if _change.kind != "selection":
+            self._learning_state_stale = True
         self._sync_bounding_boxes_ui()
         if not self._bbox_drag_active:
             for view in self.views.values():
@@ -1919,18 +1964,58 @@ class MainWindow(QMainWindow):
         )
         return True
 
-    def _handle_build_dataset_from_bboxes_request(self) -> None:
-        if MainWindow._inference_navigation_lock_active(self):
-            return
-        if self._abort_if_learning_training_running():
-            return
-        self._build_dataset_from_bboxes_with_dialog()
+    def _ensure_learning_state_for_action(self, action: LearningStateAction) -> bool:
+        """Ensure learning datasets/runtimes are available for a learning action.
+
+        This is the centralized entrypoint for learning-state preparation policy.
+        """
+        normalized_action = str(action).strip().lower()
+        if normalized_action not in {"load_model", "train", "inference"}:
+            raise ValueError(
+                "action must be one of: 'load_model', 'train', or 'inference', "
+                f"got {action!r}"
+            )
+        if normalized_action == "inference":
+            # Inference builds per-inference-box runtimes directly and should not
+            # trigger train/validation learning-state rebuilds.
+            return True
+        require_class_weights = normalized_action == "train"
+        train_runtime = get_current_learning_dataloader_runtime()
+        eval_runtimes_by_box_id = get_current_learning_eval_runtimes_by_box_id()
+        missing_learning_state = bool(train_runtime is None or not eval_runtimes_by_box_id)
+        if (
+            not missing_learning_state
+            and require_class_weights
+            and getattr(train_runtime, "class_weights", None) is None
+        ):
+            missing_learning_state = True
+
+        current_signature = self._current_learning_state_signature()
+        signature_changed = bool(
+            self._learning_state_signature is None
+            or self._learning_state_signature != current_signature
+        )
+        should_rebuild = bool(
+            missing_learning_state
+            or self._learning_state_stale
+            or signature_changed
+        )
+        if not should_rebuild:
+            return True
+        return self._prepare_learning_state(
+            require_class_weights=require_class_weights,
+            show_success_dialog=False,
+        )
 
     def _handle_load_model_request(self) -> None:
         if MainWindow._inference_navigation_lock_active(self):
             return
         if self._abort_if_learning_training_running():
             return
+        ensure_learning_state = getattr(self, "_ensure_learning_state_for_action", None)
+        if callable(ensure_learning_state):
+            if not bool(ensure_learning_state("load_model")):
+                return
         self._instantiate_foundation_model_with_dialog()
 
     def _handle_save_model_request(self) -> None:
@@ -1989,17 +2074,15 @@ class MainWindow(QMainWindow):
             checkpoint_path=checkpoint_path,
         )
 
-    # Backward-compatible alias kept for existing tests/callers.
-    def _handle_instantiate_model_request(self) -> None:
-        if self._abort_if_learning_training_running():
-            return
-        self._instantiate_foundation_model_with_dialog()
-
     def _handle_train_model_request(self) -> None:
         if MainWindow._inference_navigation_lock_active(self):
             return
         if self._abort_if_learning_training_running():
             return
+        ensure_learning_state = getattr(self, "_ensure_learning_state_for_action", None)
+        if callable(ensure_learning_state):
+            if not bool(ensure_learning_state("train")):
+                return
         self._train_model_on_dataset_with_dialog()
 
     def _handle_segment_inference_request(self) -> None:
@@ -2007,6 +2090,10 @@ class MainWindow(QMainWindow):
             return
         if self._abort_if_learning_training_running():
             return
+        ensure_learning_state = getattr(self, "_ensure_learning_state_for_action", None)
+        if callable(ensure_learning_state):
+            if not bool(ensure_learning_state("inference")):
+                return
         self._segment_inference_bboxes_with_dialog()
 
     def _handle_stop_inference_request(self) -> None:
@@ -2752,7 +2839,7 @@ class MainWindow(QMainWindow):
         model_runtime = get_current_learning_model_runtime()
         if model_runtime is None:
             show_warning(
-                "Instantiate a model before running Segment Inference Bbox.",
+                "Load a model before running Segment Inference BBox.",
                 parent=self,
             )
             return False
@@ -2767,7 +2854,7 @@ class MainWindow(QMainWindow):
             show_warning(
                 (
                     "At least one bounding box labeled 'inference' is required to run "
-                    "Segment Inference Bbox."
+                    "Segment Inference BBox."
                 ),
                 parent=self,
             )
@@ -2782,26 +2869,15 @@ class MainWindow(QMainWindow):
             show_warning(
                 (
                     "Inference bounding boxes overlap. Overlap is not supported for "
-                    "Segment Inference Bbox.\n\n"
+                    "Segment Inference BBox.\n\n"
                     f"Overlapping pairs: {pair_text}"
                 ),
                 parent=self,
             )
             return False
 
-        eval_runtimes_by_box_id = get_current_learning_eval_runtimes_by_box_id()
-        if not eval_runtimes_by_box_id:
-            show_warning(
-                (
-                    "Validation runtimes are missing. Click 'Build Dataset from Bbox' "
-                    "first."
-                ),
-                parent=self,
-            )
-            return False
-
         try:
-            label_values = _resolve_shared_eval_label_values(eval_runtimes_by_box_id)
+            label_values = _resolve_inference_label_values_for_runtime(model_runtime)
         except Exception as exc:
             show_warning(str(exc), parent=self)
             return False
@@ -2812,7 +2888,7 @@ class MainWindow(QMainWindow):
             if active_kind == "instance" and self._semantic_volume is None:
                 show_warning(
                     (
-                        "Segment Inference Bbox requires a semantic map, but the active "
+                        "Segment Inference BBox requires a semantic map, but the active "
                         "map is instance and no semantic map is loaded."
                     ),
                     parent=self,
@@ -2821,14 +2897,14 @@ class MainWindow(QMainWindow):
         elif self._semantic_volume is None:
             if self._raw_volume is None:
                 show_warning(
-                    "Load a raw volume before running Segment Inference Bbox.",
+                    "Load a raw volume before running Segment Inference BBox.",
                     parent=self,
                 )
                 return False
             self._annotation_kind = "semantic"
             if not self._ensure_editable_segmentation_for_annotation():
                 show_warning(
-                    "Could not auto-create an empty semantic map for Segment Inference Bbox.",
+                    "Could not auto-create an empty semantic map for Segment Inference BBox.",
                     parent=self,
                 )
                 return False
@@ -2836,7 +2912,7 @@ class MainWindow(QMainWindow):
         semantic_volume = self._semantic_volume
         if semantic_volume is None:
             show_warning(
-                "A semantic map is required to run Segment Inference Bbox.",
+                "A semantic map is required to run Segment Inference BBox.",
                 parent=self,
             )
             return False
@@ -2874,7 +2950,7 @@ class MainWindow(QMainWindow):
         raw_volume = self._raw_volume
         if raw_volume is None:
             show_warning(
-                "Load a raw volume before running Segment Inference Bbox.",
+                "Load a raw volume before running Segment Inference BBox.",
                 parent=self,
             )
             return False
@@ -2882,7 +2958,7 @@ class MainWindow(QMainWindow):
         editor = self._segmentation_editor
         if editor is None or editor.kind != "semantic":
             show_warning(
-                "A semantic map is required to run Segment Inference Bbox.",
+                "A semantic map is required to run Segment Inference BBox.",
                 parent=self,
             )
             return False
@@ -2956,7 +3032,7 @@ class MainWindow(QMainWindow):
             result = worker._run_inference()
         except _LearningInferenceStopRequested as exc:
             show_info(
-                f"Segment Inference Bbox canceled: {_exception_message(exc)}",
+                f"Segment Inference BBox canceled: {_exception_message(exc)}",
                 parent=target,
             )
             return False
@@ -2967,7 +3043,7 @@ class MainWindow(QMainWindow):
         editor = getattr(target, "_segmentation_editor", None)
         if editor is None or getattr(editor, "kind", None) != "semantic":
             show_warning(
-                "A semantic map is required to run Segment Inference Bbox.",
+                "A semantic map is required to run Segment Inference BBox.",
                 parent=target,
             )
             return False
@@ -3038,13 +3114,13 @@ class MainWindow(QMainWindow):
         )
 
         if failure_count <= 0 and cleanup_warning_count <= 0:
-            title_line = "Segment Inference Bbox completed: all inference bboxes succeeded."
+            title_line = "Segment Inference BBox completed: all inference bboxes succeeded."
         elif failure_count > 0 and success_count <= 0:
-            title_line = "Segment Inference Bbox failed: no inference bbox was successfully processed."
+            title_line = "Segment Inference BBox failed: no inference bbox was successfully processed."
         elif failure_count > 0:
-            title_line = "Segment Inference Bbox completed with partial success."
+            title_line = "Segment Inference BBox completed with partial success."
         else:
-            title_line = "Segment Inference Bbox completed with cleanup warnings."
+            title_line = "Segment Inference BBox completed with cleanup warnings."
 
         summary_lines = [
             title_line,
@@ -3076,7 +3152,7 @@ class MainWindow(QMainWindow):
         parent = self if isinstance(self, QWidget) else None
         show_info(
             (
-                "Segment Inference Bbox is starting.\n\n"
+                "Segment Inference BBox is starting.\n\n"
                 "During inference, only navigation remains enabled:\n"
                 "- Slice navigation, zoom/pan, contrast, and level controls\n"
                 "- Bounding-box selection and double-click cursor jump\n\n"
@@ -3208,7 +3284,7 @@ class MainWindow(QMainWindow):
                     )
                 else:
                     show_warning(
-                        "Segment Inference Bbox completed with an invalid result payload.",
+                        "Segment Inference BBox completed with an invalid result payload.",
                         parent=self,
                     )
                 return
@@ -3227,7 +3303,7 @@ class MainWindow(QMainWindow):
                 else:
                     show_warning(
                         (
-                            "Segment Inference Bbox completed, but the semantic map is no longer "
+                            "Segment Inference BBox completed, but the semantic map is no longer "
                             "available. Predictions were discarded."
                         ),
                         parent=self,
@@ -3307,13 +3383,13 @@ class MainWindow(QMainWindow):
         cleanup_warning_count = int(sum(len(errors) for errors in cleanup_errors_by_box_id.values()))
 
         if failure_count <= 0 and cleanup_warning_count <= 0:
-            title_line = "Segment Inference Bbox completed: all inference bboxes succeeded."
+            title_line = "Segment Inference BBox completed: all inference bboxes succeeded."
         elif failure_count > 0 and success_count <= 0:
-            title_line = "Segment Inference Bbox failed: no inference bbox was successfully processed."
+            title_line = "Segment Inference BBox failed: no inference bbox was successfully processed."
         elif failure_count > 0:
-            title_line = "Segment Inference Bbox completed with partial success."
+            title_line = "Segment Inference BBox completed with partial success."
         else:
-            title_line = "Segment Inference Bbox completed with cleanup warnings."
+            title_line = "Segment Inference BBox completed with cleanup warnings."
 
         summary_lines = [
             title_line,
@@ -3365,7 +3441,7 @@ class MainWindow(QMainWindow):
                     MainWindow._finalize_deferred_close_inference_and_quit(self)
                 return
             show_info(
-                f"Segment Inference Bbox canceled: {normalized_message}",
+                f"Segment Inference BBox canceled: {normalized_message}",
                 parent=self,
             )
         finally:
@@ -3405,7 +3481,7 @@ class MainWindow(QMainWindow):
                     MainWindow._finalize_deferred_close_inference_and_quit(self)
                 return
             show_warning(
-                f"Segment Inference Bbox aborted: {normalized_message}",
+                f"Segment Inference BBox aborted: {normalized_message}",
                 parent=self,
             )
         finally:
@@ -3517,11 +3593,29 @@ class MainWindow(QMainWindow):
             preconditions = validate_foundation_model_instantiation_preconditions(
                 require_min_gpu_count=2,
             )
-            instantiate_foundation_model_runtime(
+            runtime = instantiate_foundation_model_runtime(
                 num_classes=preconditions.num_classes,
                 device_ids=preconditions.device_ids,
                 checkpoint_path=checkpoint_path,
             )
+            eval_runtimes_by_box_id = getattr(preconditions, "eval_runtimes_by_box_id", None)
+            if isinstance(eval_runtimes_by_box_id, Mapping):
+                persist_label_values = getattr(
+                    self,
+                    "_persist_model_runtime_label_values_from_eval_runtimes",
+                    None,
+                )
+                if callable(persist_label_values):
+                    persist_label_values(
+                        runtime,
+                        eval_runtimes_by_box_id=eval_runtimes_by_box_id,
+                    )
+                else:
+                    MainWindow._persist_model_runtime_label_values_from_eval_runtimes(
+                        self,
+                        runtime,
+                        eval_runtimes_by_box_id=eval_runtimes_by_box_id,
+                    )
         except Exception as exc:
             message = _exception_message(exc)
             show_warning(
@@ -3797,7 +3891,12 @@ class MainWindow(QMainWindow):
             )
             return True
 
-    def _build_dataset_from_bboxes_with_dialog(self) -> bool:
+    def _prepare_learning_state(
+        self,
+        *,
+        require_class_weights: bool,
+        show_success_dialog: bool,
+    ) -> bool:
         if not self.state.volume_loaded or self._raw_volume is None:
             show_warning(
                 "Load a raw volume before building datasets from bounding boxes.",
@@ -3847,8 +3946,8 @@ class MainWindow(QMainWindow):
         if seg_kind != "semantic":
             show_warning(
                 (
-                    "Only semantic segmentation is supported for Build Dataset "
-                    "from Bbox."
+                    "Only semantic segmentation is supported for learning-state "
+                    "preparation."
                 ),
                 parent=self,
             )
@@ -3890,10 +3989,12 @@ class MainWindow(QMainWindow):
                 eval_pin_memory=True,
                 eval_drop_last=False,
             )
-            class_weights = compute_and_store_current_learning_class_weights(
-                max_weight=100.0,
-                device="cuda:0",
-            )
+            class_weights = None
+            if bool(require_class_weights):
+                class_weights = compute_and_store_current_learning_class_weights(
+                    max_weight=100.0,
+                    device="cuda:0",
+                )
             clear_current_learning_bbox_batch()
             residual_batch = get_current_learning_bbox_batch()
             residual_entry_count = int(residual_batch.size) if residual_batch is not None else 0
@@ -3911,6 +4012,19 @@ class MainWindow(QMainWindow):
                 parent=self,
             )
             return False
+
+        current_signature_getter = getattr(self, "_current_learning_state_signature", None)
+        if callable(current_signature_getter):
+            self._learning_state_signature = current_signature_getter()
+        else:
+            try:
+                self._learning_state_signature = MainWindow._current_learning_state_signature(self)
+            except Exception:
+                self._learning_state_signature = None
+        self._learning_state_stale = False
+
+        if not bool(show_success_dialog):
+            return True
 
         summary_lines = [
             "Built bounding box learning datasets and buffers in memory.",
@@ -3953,6 +4067,72 @@ class MainWindow(QMainWindow):
         )
         return True
 
+    def _persist_model_runtime_label_values_from_eval_runtimes(
+        self,
+        runtime: object,
+        *,
+        eval_runtimes_by_box_id: Mapping[str, object],
+    ) -> None:
+        if runtime is None:
+            return
+        hyperparameters_obj = getattr(runtime, "hyperparameters", None)
+        if not isinstance(hyperparameters_obj, dict):
+            return
+        resolved_label_values = _resolve_shared_eval_label_values(eval_runtimes_by_box_id)
+        hyperparameters_obj["label_values"] = tuple(
+            int(value) for value in tuple(resolved_label_values)
+        )
+
+    def _current_learning_state_signature(self) -> Tuple[object, ...]:
+        bbox_revision = int(getattr(self._bbox_manager, "revision", 0))
+        ordered_box_ids = tuple(
+            str(row.box_id).strip()
+            for row in tuple(self.bottom_panel.state.bbox_rows)
+            if str(row.box_id).strip()
+        )
+        boxes_by_id = {box.id: box for box in self._bbox_manager.boxes()}
+        ordered_box_signature = []
+        for box_id in ordered_box_ids:
+            box = boxes_by_id.get(box_id)
+            if box is None:
+                ordered_box_signature.append((box_id, "<missing>"))
+                continue
+            ordered_box_signature.append(
+                (
+                    str(box.id),
+                    str(box.label),
+                    int(box.z0),
+                    int(box.z1),
+                    int(box.y0),
+                    int(box.y1),
+                    int(box.x0),
+                    int(box.x1),
+                )
+            )
+
+        active_segmentation = self._active_segmentation_volume()
+        semantic_kind: Optional[str] = None
+        semantic_source_path: Optional[str] = None
+        if active_segmentation is not None:
+            semantic_kind, volume = active_segmentation
+            loader = getattr(volume, "loader", None)
+            path_obj = getattr(loader, "path", None)
+            if isinstance(path_obj, str) and path_obj.strip():
+                semantic_source_path = str(path_obj)
+
+        semantic_state_id: Optional[int] = None
+        editor = self._segmentation_editor
+        if editor is not None:
+            semantic_state_id = int(editor.state_id)
+
+        return (
+            bbox_revision,
+            tuple(ordered_box_signature),
+            semantic_kind,
+            semantic_source_path,
+            semantic_state_id,
+        )
+
     def _instantiate_foundation_model_with_dialog(self) -> bool:
         try:
             preconditions = validate_foundation_model_instantiation_preconditions(
@@ -3979,20 +4159,26 @@ class MainWindow(QMainWindow):
                 device_ids=preconditions.device_ids,
                 checkpoint_path=checkpoint_path,
             )
+            eval_runtimes_by_box_id = getattr(preconditions, "eval_runtimes_by_box_id", None)
+            if isinstance(eval_runtimes_by_box_id, Mapping):
+                persist_label_values = getattr(
+                    self,
+                    "_persist_model_runtime_label_values_from_eval_runtimes",
+                    None,
+                )
+                if callable(persist_label_values):
+                    persist_label_values(
+                        runtime,
+                        eval_runtimes_by_box_id=eval_runtimes_by_box_id,
+                    )
+                else:
+                    MainWindow._persist_model_runtime_label_values_from_eval_runtimes(
+                        self,
+                        runtime,
+                        eval_runtimes_by_box_id=eval_runtimes_by_box_id,
+                    )
         except Exception as exc:
-            message = str(exc)
-            if (
-                isinstance(exc, ValueError)
-                and (
-                    "No training dataloader runtime" in message
-                    or "No evaluation runtimes/buffers" in message
-                )
-            ):
-                message = (
-                    f"{message}\n\n"
-                    "Click 'Build Dataset from Bbox' first to initialize learning datasets."
-                )
-            show_warning(message, parent=self)
+            show_warning(_exception_message(exc), parent=self)
             return False
 
         show_info(
@@ -4169,6 +4355,8 @@ class MainWindow(QMainWindow):
             return
         if operation.changed_voxels <= 0:
             return
+        if str(editor.kind) == "semantic":
+            self._learning_state_stale = True
         if editor.latest_undo_operation_id() != operation.operation_id:
             return
         bytes_used = estimate_segmentation_history_bytes(editor, operation)

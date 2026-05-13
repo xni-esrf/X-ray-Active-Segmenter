@@ -158,7 +158,6 @@ class BottomPanel(QWidget):
         self._on_redo_requested: Optional[Callable[[], None]] = None
         self._on_open_bounding_boxes_requested: Optional[Callable[[], None]] = None
         self._on_save_bounding_boxes_requested: Optional[Callable[[], None]] = None
-        self._on_build_dataset_from_bboxes_requested: Optional[Callable[[], None]] = None
         self._on_load_model_requested: Optional[Callable[[], None]] = None
         self._on_save_model_requested: Optional[Callable[[], None]] = None
         self._on_segment_inference_requested: Optional[Callable[[], None]] = None
@@ -313,15 +312,12 @@ class BottomPanel(QWidget):
         self._bbox_label_label.setEnabled(False)
         self._open_bounding_boxes_button = QPushButton("Open Boxes...")
         self._save_bounding_boxes_button = QPushButton("Save Boxes...")
-        self._build_dataset_from_bboxes_button = QPushButton("Build Dataset from Bbox")
         self._load_model_button = QPushButton("Load Model")
         self._save_model_button = QPushButton("Save Model")
-        # Backward-compatible alias kept for existing tests/callers.
-        self._instantiate_model_button = self._load_model_button
-        self._segment_inference_button = QPushButton("Segment Inference Bbox")
+        self._segment_inference_button = QPushButton("Segment Inference BBox")
         self._stop_inference_button = QPushButton("Stop Inference")
         self._stop_inference_button.setEnabled(False)
-        self._train_model_button = QPushButton("Train Model on Dataset")
+        self._train_model_button = QPushButton("Train Model")
         self._stop_training_button = QPushButton("Stop Training")
         self._stop_training_button.setEnabled(False)
         self._learning_training_status = QLabel("Training: Idle")
@@ -330,7 +326,7 @@ class BottomPanel(QWidget):
         self._median_filter_selected_button = QPushButton("Median Filter Selected")
         self._erosion_selected_button = QPushButton("Erosion Selected")
         self._dilation_selected_button = QPushButton("Dilation Selected")
-        self._erase_bbox_segmentation_button = QPushButton("Erase Bbox Segmentation")
+        self._erase_bbox_segmentation_button = QPushButton("Erase BBox Segmentation")
 
         self._open_button.clicked.connect(self._handle_open)
         self._open_semantic_button.clicked.connect(self._handle_open_semantic)
@@ -366,9 +362,6 @@ class BottomPanel(QWidget):
         self._view_layout_sagittal_radio.toggled.connect(self._handle_view_layout_mode_changed)
         self._open_bounding_boxes_button.clicked.connect(self._handle_open_bounding_boxes_requested)
         self._save_bounding_boxes_button.clicked.connect(self._handle_save_bounding_boxes_requested)
-        self._build_dataset_from_bboxes_button.clicked.connect(
-            self._handle_build_dataset_from_bboxes_requested
-        )
         self._load_model_button.clicked.connect(
             self._handle_load_model_requested
         )
@@ -493,8 +486,7 @@ class BottomPanel(QWidget):
         bbox_controls_layout.setContentsMargins(0, 0, 0, 0)
         bbox_controls_layout.addWidget(self._open_bounding_boxes_button, 0, 0)
         bbox_controls_layout.addWidget(self._save_bounding_boxes_button, 0, 1)
-        bbox_controls_layout.addWidget(self._build_dataset_from_bboxes_button, 1, 0)
-        bbox_controls_layout.addWidget(self._delete_bbox_button, 1, 1)
+        bbox_controls_layout.addWidget(self._delete_bbox_button, 1, 0)
         bbox_controls_row.setLayout(bbox_controls_layout)
         bounding_boxes_layout.addWidget(bbox_controls_row)
         bbox_processing_row = QWidget()
@@ -1205,18 +1197,11 @@ class BottomPanel(QWidget):
     def on_save_bounding_boxes_requested(self, callback: Callable[[], None]) -> None:
         self._on_save_bounding_boxes_requested = callback
 
-    def on_build_dataset_from_bboxes_requested(self, callback: Callable[[], None]) -> None:
-        self._on_build_dataset_from_bboxes_requested = callback
-
     def on_load_model_requested(self, callback: Callable[[], None]) -> None:
         self._on_load_model_requested = callback
 
     def on_save_model_requested(self, callback: Callable[[], None]) -> None:
         self._on_save_model_requested = callback
-
-    # Backward-compatible alias kept for existing tests/callers.
-    def on_instantiate_model_requested(self, callback: Callable[[], None]) -> None:
-        self.on_load_model_requested(callback)
 
     def on_segment_inference_requested(self, callback: Callable[[], None]) -> None:
         self._on_segment_inference_requested = callback
@@ -1466,10 +1451,6 @@ class BottomPanel(QWidget):
         if self._on_save_bounding_boxes_requested:
             self._on_save_bounding_boxes_requested()
 
-    def _handle_build_dataset_from_bboxes_requested(self) -> None:
-        if self._on_build_dataset_from_bboxes_requested:
-            self._on_build_dataset_from_bboxes_requested()
-
     def _handle_load_model_requested(self) -> None:
         if self._on_load_model_requested:
             self._on_load_model_requested()
@@ -1477,10 +1458,6 @@ class BottomPanel(QWidget):
     def _handle_save_model_requested(self) -> None:
         if self._on_save_model_requested:
             self._on_save_model_requested()
-
-    # Backward-compatible alias kept for existing tests/callers.
-    def _handle_instantiate_model_requested(self) -> None:
-        self._handle_load_model_requested()
 
     def _handle_segment_inference_requested(self) -> None:
         if self._on_segment_inference_requested:
@@ -1583,7 +1560,6 @@ class BottomPanel(QWidget):
         has_boxes = len(self.state.bbox_rows) > 0
         self._open_bounding_boxes_button.setEnabled(not editing_locked)
         self._save_bounding_boxes_button.setEnabled(has_boxes and not editing_locked)
-        self._build_dataset_from_bboxes_button.setEnabled(has_boxes and not editing_locked)
         has_selected_box = bool(self.state.bbox_selected_ids)
         bbox_editing_enabled = bool(has_selected_box and not editing_locked)
         self._delete_bbox_button.setEnabled(bbox_editing_enabled)

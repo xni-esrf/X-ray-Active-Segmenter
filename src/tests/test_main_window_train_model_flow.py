@@ -23,12 +23,31 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
         called = []
         window_like = SimpleNamespace(
             _abort_if_learning_training_running=lambda: False,
+            _ensure_learning_state_for_action=lambda action: called.append(
+                ("ensure", str(action))
+            )
+            or True,
             _train_model_on_dataset_with_dialog=lambda: called.append("train"),
         )
 
         MainWindow._handle_train_model_request(window_like)
 
-        self.assertEqual(called, ["train"])
+        self.assertEqual(called, [("ensure", "train"), "train"])
+
+    def test_handle_train_model_request_aborts_when_learning_state_prepare_fails(self) -> None:
+        called = []
+        window_like = SimpleNamespace(
+            _abort_if_learning_training_running=lambda: False,
+            _ensure_learning_state_for_action=lambda action: called.append(
+                ("ensure", str(action))
+            )
+            or False,
+            _train_model_on_dataset_with_dialog=lambda: called.append("train"),
+        )
+
+        MainWindow._handle_train_model_request(window_like)
+
+        self.assertEqual(called, [("ensure", "train")])
 
     def test_train_model_on_dataset_warns_and_aborts_on_precondition_error(self) -> None:
         window_like = SimpleNamespace(

@@ -283,8 +283,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
     def test_bbox_file_buttons_emit_callbacks(self) -> None:
         open_events = []
         save_events = []
-        build_events = []
-        instantiate_events = []
+        load_model_events = []
         save_model_events = []
         segment_inference_events = []
         stop_inference_events = []
@@ -295,11 +294,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         dilation_events = []
         erase_bbox_segmentation_events = []
         self.assertEqual(
-            self.panel._build_dataset_from_bboxes_button.text(),
-            "Build Dataset from Bbox",
-        )
-        self.assertEqual(
-            self.panel._instantiate_model_button.text(),
+            self.panel._load_model_button.text(),
             "Load Model",
         )
         self.assertEqual(
@@ -308,11 +303,11 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         )
         self.assertEqual(
             self.panel._train_model_button.text(),
-            "Train Model on Dataset",
+            "Train Model",
         )
         self.assertEqual(
             self.panel._segment_inference_button.text(),
-            "Segment Inference Bbox",
+            "Segment Inference BBox",
         )
         self.assertEqual(
             self.panel._stop_inference_button.text(),
@@ -336,7 +331,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         )
         self.assertEqual(
             self.panel._erase_bbox_segmentation_button.text(),
-            "Erase Bbox Segmentation",
+            "Erase BBox Segmentation",
         )
         self.assertFalse(self.panel._stop_training_button.isEnabled())
         self.assertFalse(self.panel._stop_inference_button.isEnabled())
@@ -346,11 +341,8 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         )
         self.panel.on_open_bounding_boxes_requested(lambda: open_events.append("open"))
         self.panel.on_save_bounding_boxes_requested(lambda: save_events.append("save"))
-        self.panel.on_build_dataset_from_bboxes_requested(
-            lambda: build_events.append("build")
-        )
         self.panel.on_load_model_requested(
-            lambda: instantiate_events.append("instantiate")
+            lambda: load_model_events.append("load_model")
         )
         self.panel.on_save_model_requested(
             lambda: save_model_events.append("save_model")
@@ -386,8 +378,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.set_stop_training_enabled(True)
         self.panel._open_bounding_boxes_button.click()
         self.panel._save_bounding_boxes_button.click()
-        self.panel._build_dataset_from_bboxes_button.click()
-        self.panel._instantiate_model_button.click()
+        self.panel._load_model_button.click()
         self.panel._save_model_button.click()
         self.panel._segment_inference_button.click()
         self.panel._stop_inference_button.click()
@@ -401,8 +392,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
 
         self.assertEqual(open_events, ["open"])
         self.assertEqual(save_events, ["save"])
-        self.assertEqual(build_events, ["build"])
-        self.assertEqual(instantiate_events, ["instantiate"])
+        self.assertEqual(load_model_events, ["load_model"])
         self.assertEqual(save_model_events, ["save_model"])
         self.assertEqual(segment_inference_events, ["segment_inference"])
         self.assertEqual(stop_inference_events, ["stop_inference"])
@@ -461,7 +451,6 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertFalse(self.panel._active_label_spin.isEnabled())
         self.assertFalse(self.panel._open_bounding_boxes_button.isEnabled())
         self.assertFalse(self.panel._save_bounding_boxes_button.isEnabled())
-        self.assertFalse(self.panel._build_dataset_from_bboxes_button.isEnabled())
         self.assertFalse(self.panel._delete_bbox_button.isEnabled())
         self.assertFalse(self.panel._bbox_label_combo.isEnabled())
         self.assertFalse(self.panel._load_model_button.isEnabled())
@@ -499,12 +488,10 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
     def test_save_bbox_button_is_disabled_without_boxes(self) -> None:
         self.panel.set_bounding_boxes(tuple())
         self.assertFalse(self.panel._save_bounding_boxes_button.isEnabled())
-        self.assertFalse(self.panel._build_dataset_from_bboxes_button.isEnabled())
 
         box1, _ = self._boxes()
         self.panel.set_bounding_boxes((box1,))
         self.assertTrue(self.panel._save_bounding_boxes_button.isEnabled())
-        self.assertTrue(self.panel._build_dataset_from_bboxes_button.isEnabled())
 
     def test_bounding_box_tool_uses_dedicated_checkbox(self) -> None:
         index = self.panel._annotation_tool_combo.findData("bbox")

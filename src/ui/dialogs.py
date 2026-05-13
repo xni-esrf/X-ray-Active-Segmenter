@@ -324,24 +324,6 @@ def open_save_bounding_boxes_dialog(parent: Optional[QWidget] = None) -> DialogR
     return DialogResult(accepted=True, path=normalized)
 
 
-def open_build_dataset_from_bboxes_directory_dialog(
-    parent: Optional[QWidget] = None,
-) -> DialogResult:
-    path = QFileDialog.getExistingDirectory(
-        parent,
-        "Select Output Directory for BBox Dataset Build",
-        "",
-        QFileDialog.Option.ShowDirsOnly,
-    )
-    if not path:
-        return DialogResult(accepted=False, path=None)
-    normalized = str(Path(path).expanduser())
-    resolved = Path(normalized)
-    if not resolved.exists() or not resolved.is_dir():
-        return DialogResult(accepted=False, path=None)
-    return DialogResult(accepted=True, path=normalized)
-
-
 def confirm_replace_bounding_boxes(parent: Optional[QWidget] = None) -> bool:
     answer = QMessageBox.question(
         parent,

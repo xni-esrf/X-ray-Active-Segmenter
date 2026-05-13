@@ -246,7 +246,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         self.assertFalse(result)
         warning_mock.assert_called_once()
-        self.assertIn("instantiate a model", warning_mock.call_args.args[0].lower())
+        self.assertIn("load a model", warning_mock.call_args.args[0].lower())
 
     def test_segment_inference_aborts_when_no_inference_bbox_exists(self) -> None:
         train_box = self._make_box(
@@ -276,7 +276,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         warning_mock.assert_called_once()
         self.assertIn("labeled 'inference'", warning_mock.call_args.args[0])
 
-    def test_segment_inference_aborts_when_validation_runtimes_are_missing(self) -> None:
+    def test_segment_inference_aborts_when_label_values_and_eval_fallback_are_missing(self) -> None:
         inference_box = self._make_box(
             box_id="bbox_0001",
             label="inference",
@@ -305,7 +305,9 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         self.assertFalse(result)
         warning_mock.assert_called_once()
-        self.assertIn("validation runtimes are missing", warning_mock.call_args.args[0].lower())
+        warning_text = warning_mock.call_args.args[0].lower()
+        self.assertIn("inference requires class label_values", warning_text)
+        self.assertIn("no evaluation runtimes/buffers", warning_text)
 
     def test_segment_inference_aborts_when_eval_label_order_disagrees(self) -> None:
         inference_box = self._make_box(
@@ -806,7 +808,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         self.assertIn("cleanup warnings", warning_text)
         self.assertIn("bbox_0001", warning_text)
 
-    def test_segment_inference_shows_navigation_notice_before_background_start(self) -> None:
+    def test_segment_inference_prefers_model_metadata_label_values_before_background_start(self) -> None:
         inference_box = self._make_box(
             box_id="bbox_0001",
             label="inference",
@@ -823,9 +825,6 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
             semantic_volume=_FakeVolume(np.zeros((32, 32, 32), dtype=np.int16)),
             raw_volume=_FakeVolume(np.zeros((32, 32, 32), dtype=np.float32)),
         )
-        eval_runtimes = {
-            "bbox_1001": SimpleNamespace(buffer=SimpleNamespace(label_values=(0, 1))),
-        }
         call_order: list[str] = []
         started_calls: list[dict[str, object]] = []
 
@@ -841,15 +840,21 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=object(),
+            return_value=SimpleNamespace(
+                hyperparameters={"label_values": (0, 1)},
+                num_classes=2,
+            ),
         ), patch(
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
-            return_value=eval_runtimes,
+            return_value={},
+        ) as eval_runtime_mock, patch(
+            "src.ui.main_window._resolve_shared_eval_label_values",
         ), patch("src.ui.main_window.show_warning") as warning_mock:
             result = MainWindow._segment_inference_bboxes_with_dialog(window_like)
 
         self.assertTrue(result)
         warning_mock.assert_not_called()
+        eval_runtime_mock.assert_not_called()
         self.assertEqual(call_order, ["notice", "start"])
         self.assertEqual(len(started_calls), 1)
         started_kwargs = started_calls[0]
@@ -857,6 +862,65 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         self.assertEqual(np.asarray(started_kwargs["raw_array"]).shape, (32, 32, 32))
         self.assertIn("inference_boxes", started_kwargs)
         self.assertEqual(len(tuple(started_kwargs["inference_boxes"])), 1)
+        self.assertIn("label_values", started_kwargs)
+        self.assertEqual(tuple(started_kwargs["label_values"]), (0, 1))
+
+    def test_segment_inference_uses_eval_runtime_label_values_fallback_when_metadata_missing(self) -> None:
+        inference_box = self._make_box(
+            box_id="bbox_0001",
+            label="inference",
+            z0=1,
+            z1=4,
+            y0=1,
+            y1=4,
+            x0=1,
+            x1=4,
+        )
+        window_like = self._make_window_like(
+            boxes=(inference_box,),
+            active_segmentation=("semantic", object()),
+            semantic_volume=_FakeVolume(np.zeros((32, 32, 32), dtype=np.int16)),
+            raw_volume=_FakeVolume(np.zeros((32, 32, 32), dtype=np.float32)),
+        )
+        call_order: list[str] = []
+        started_calls: list[dict[str, object]] = []
+        eval_runtimes = {
+            "bbox_1001": SimpleNamespace(buffer=SimpleNamespace(label_values=(0, 1))),
+        }
+
+        def _show_notice() -> None:
+            call_order.append("notice")
+
+        def _start_background(**kwargs: object) -> None:
+            call_order.append("start")
+            started_calls.append(dict(kwargs))
+
+        window_like._show_inference_navigation_only_notice = _show_notice
+        window_like._start_learning_inference_background = _start_background
+
+        with patch(
+            "src.ui.main_window.get_current_learning_model_runtime",
+            return_value=SimpleNamespace(
+                hyperparameters={},
+                num_classes=2,
+            ),
+        ), patch(
+            "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
+            return_value=eval_runtimes,
+        ), patch(
+            "src.ui.main_window._resolve_shared_eval_label_values",
+            return_value=(0, 1),
+        ) as shared_label_values_mock, patch(
+            "src.ui.main_window.show_warning"
+        ) as warning_mock:
+            result = MainWindow._segment_inference_bboxes_with_dialog(window_like)
+
+        self.assertTrue(result)
+        warning_mock.assert_not_called()
+        shared_label_values_mock.assert_called_once_with(eval_runtimes)
+        self.assertEqual(call_order, ["notice", "start"])
+        self.assertEqual(len(started_calls), 1)
+        started_kwargs = started_calls[0]
         self.assertIn("label_values", started_kwargs)
         self.assertEqual(tuple(started_kwargs["label_values"]), (0, 1))
 

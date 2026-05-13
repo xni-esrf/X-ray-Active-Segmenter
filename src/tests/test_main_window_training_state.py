@@ -363,24 +363,6 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         )
         self.assertEqual(calls, [("clear", None)])
 
-    def test_handle_build_dataset_request_warns_and_aborts_when_training_running(self) -> None:
-        called = []
-        window_like = SimpleNamespace(
-            _training_is_running=lambda: True,
-            _build_dataset_from_bboxes_with_dialog=lambda: called.append("build"),
-            _abort_if_learning_training_running=lambda: MainWindow._abort_if_learning_training_running(
-                window_like
-            ),
-        )
-
-        with patch("src.ui.main_window.show_warning") as warning_mock:
-            MainWindow._handle_build_dataset_from_bboxes_request(window_like)
-
-        self.assertEqual(called, [])
-        warning_mock.assert_called_once()
-        self.assertIn("training is running", warning_mock.call_args.args[0].lower())
-        self.assertIs(warning_mock.call_args.kwargs["parent"], window_like)
-
     def test_handle_load_model_request_warns_and_aborts_when_training_running(self) -> None:
         called = []
         window_like = SimpleNamespace(
@@ -456,6 +438,10 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         window_like = SimpleNamespace(
             _training_is_running=lambda: False,
             _inference_is_running=lambda: False,
+            _ensure_learning_state_for_action=lambda action: called.append(
+                ("ensure", str(action))
+            )
+            or True,
             _segment_inference_bboxes_with_dialog=lambda: called.append("segment"),
             _abort_if_learning_training_running=lambda: MainWindow._abort_if_learning_training_running(
                 window_like
@@ -465,8 +451,98 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         with patch("src.ui.main_window.show_warning") as warning_mock:
             MainWindow._handle_segment_inference_request(window_like)
 
-        self.assertEqual(called, ["segment"])
+        self.assertEqual(called, [("ensure", "inference"), "segment"])
         warning_mock.assert_not_called()
+
+    def test_handle_segment_inference_request_aborts_when_learning_state_prepare_fails(self) -> None:
+        called = []
+        window_like = SimpleNamespace(
+            _training_is_running=lambda: False,
+            _inference_is_running=lambda: False,
+            _ensure_learning_state_for_action=lambda action: called.append(
+                ("ensure", str(action))
+            )
+            or False,
+            _segment_inference_bboxes_with_dialog=lambda: called.append("segment"),
+            _abort_if_learning_training_running=lambda: MainWindow._abort_if_learning_training_running(
+                window_like
+            ),
+        )
+
+        with patch("src.ui.main_window.show_warning") as warning_mock:
+            MainWindow._handle_segment_inference_request(window_like)
+
+        self.assertEqual(called, [("ensure", "inference")])
+        warning_mock.assert_not_called()
+
+    def test_ensure_learning_state_for_inference_skips_prepare_and_returns_true(self) -> None:
+        prepare_calls = []
+        window_like = SimpleNamespace(
+            _prepare_learning_state=lambda **kwargs: prepare_calls.append(dict(kwargs)) or False,
+        )
+
+        result = MainWindow._ensure_learning_state_for_action(window_like, "inference")
+
+        self.assertTrue(result)
+        self.assertEqual(prepare_calls, [])
+
+    def test_ensure_learning_state_for_train_rebuilds_when_learning_state_is_missing(self) -> None:
+        prepare_calls = []
+        window_like = SimpleNamespace(
+            _learning_state_signature=("sig",),
+            _learning_state_stale=False,
+            _current_learning_state_signature=lambda: ("sig",),
+            _prepare_learning_state=lambda **kwargs: prepare_calls.append(dict(kwargs)) or True,
+        )
+
+        with patch(
+            "src.ui.main_window.get_current_learning_dataloader_runtime",
+            return_value=None,
+        ), patch(
+            "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
+            return_value={},
+        ):
+            result = MainWindow._ensure_learning_state_for_action(window_like, "train")
+
+        self.assertTrue(result)
+        self.assertEqual(
+            prepare_calls,
+            [
+                {
+                    "require_class_weights": True,
+                    "show_success_dialog": False,
+                }
+            ],
+        )
+
+    def test_ensure_learning_state_for_load_model_rebuilds_when_learning_state_is_missing(self) -> None:
+        prepare_calls = []
+        window_like = SimpleNamespace(
+            _learning_state_signature=("sig",),
+            _learning_state_stale=False,
+            _current_learning_state_signature=lambda: ("sig",),
+            _prepare_learning_state=lambda **kwargs: prepare_calls.append(dict(kwargs)) or True,
+        )
+
+        with patch(
+            "src.ui.main_window.get_current_learning_dataloader_runtime",
+            return_value=None,
+        ), patch(
+            "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
+            return_value={},
+        ):
+            result = MainWindow._ensure_learning_state_for_action(window_like, "load_model")
+
+        self.assertTrue(result)
+        self.assertEqual(
+            prepare_calls,
+            [
+                {
+                    "require_class_weights": False,
+                    "show_success_dialog": False,
+                }
+            ],
+        )
 
     def test_handle_open_request_is_silent_when_inference_running(self) -> None:
         calls = []
@@ -1055,26 +1131,14 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         self.assertEqual(calls, ["stop"])
         warning_mock.assert_not_called()
 
-    def test_handle_build_dataset_request_calls_dialog_when_not_training(self) -> None:
-        called = []
-        window_like = SimpleNamespace(
-            _training_is_running=lambda: False,
-            _build_dataset_from_bboxes_with_dialog=lambda: called.append("build"),
-            _abort_if_learning_training_running=lambda: MainWindow._abort_if_learning_training_running(
-                window_like
-            ),
-        )
-
-        with patch("src.ui.main_window.show_warning") as warning_mock:
-            MainWindow._handle_build_dataset_from_bboxes_request(window_like)
-
-        self.assertEqual(called, ["build"])
-        warning_mock.assert_not_called()
-
     def test_handle_load_model_request_calls_dialog_when_not_training(self) -> None:
         called = []
         window_like = SimpleNamespace(
             _training_is_running=lambda: False,
+            _ensure_learning_state_for_action=lambda action: called.append(
+                ("ensure", str(action))
+            )
+            or True,
             _instantiate_foundation_model_with_dialog=lambda: called.append("instantiate"),
             _abort_if_learning_training_running=lambda: MainWindow._abort_if_learning_training_running(
                 window_like
@@ -1084,7 +1148,27 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         with patch("src.ui.main_window.show_warning") as warning_mock:
             MainWindow._handle_load_model_request(window_like)
 
-        self.assertEqual(called, ["instantiate"])
+        self.assertEqual(called, [("ensure", "load_model"), "instantiate"])
+        warning_mock.assert_not_called()
+
+    def test_handle_load_model_request_aborts_when_learning_state_prepare_fails(self) -> None:
+        called = []
+        window_like = SimpleNamespace(
+            _training_is_running=lambda: False,
+            _ensure_learning_state_for_action=lambda action: called.append(
+                ("ensure", str(action))
+            )
+            or False,
+            _instantiate_foundation_model_with_dialog=lambda: called.append("instantiate"),
+            _abort_if_learning_training_running=lambda: MainWindow._abort_if_learning_training_running(
+                window_like
+            ),
+        )
+
+        with patch("src.ui.main_window.show_warning") as warning_mock:
+            MainWindow._handle_load_model_request(window_like)
+
+        self.assertEqual(called, [("ensure", "load_model")])
         warning_mock.assert_not_called()
 
     def test_handle_save_model_request_calls_dialog_when_not_training(self) -> None:

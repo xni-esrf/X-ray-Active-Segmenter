@@ -35,7 +35,7 @@ class _FakeBBoxManager:
 
 
 @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
-class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
+class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
     def _make_box(self, *, box_id: str = "bbox_0007", label: str = "train") -> BoundingBox:
         return BoundingBox.from_bounds(
             box_id=box_id,
@@ -65,7 +65,7 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         window_like._active_segmentation_volume = lambda: active_segmentation
         return window_like
 
-    def test_build_dataset_from_bboxes_requires_active_segmentation_map(self) -> None:
+    def test_prepare_learning_state_requires_active_segmentation_map(self) -> None:
         box = self._make_box()
         window_like = self._make_window_like(
             boxes=(box,),
@@ -76,7 +76,11 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         with patch("src.ui.main_window.extract_learning_bboxes_in_memory") as extract_mock, patch(
             "src.ui.main_window.show_info"
         ) as show_info_mock, patch("src.ui.main_window.show_warning") as show_warning_mock:
-            result = MainWindow._build_dataset_from_bboxes_with_dialog(window_like)
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=True,
+            )
 
         self.assertFalse(result)
         extract_mock.assert_not_called()
@@ -87,7 +91,7 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
             show_warning_mock.call_args.args[0],
         )
 
-    def test_build_dataset_from_bboxes_rejects_instance_segmentation(self) -> None:
+    def test_prepare_learning_state_rejects_instance_segmentation(self) -> None:
         box = self._make_box()
         instance_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
         window_like = self._make_window_like(
@@ -99,7 +103,11 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         with patch("src.ui.main_window.extract_learning_bboxes_in_memory") as extract_mock, patch(
             "src.ui.main_window.show_info"
         ) as show_info_mock, patch("src.ui.main_window.show_warning") as show_warning_mock:
-            result = MainWindow._build_dataset_from_bboxes_with_dialog(window_like)
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=True,
+            )
 
         self.assertFalse(result)
         extract_mock.assert_not_called()
@@ -110,7 +118,7 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
             show_warning_mock.call_args.args[0],
         )
 
-    def test_build_dataset_from_bboxes_requires_train_labeled_bbox(self) -> None:
+    def test_prepare_learning_state_requires_train_labeled_bbox(self) -> None:
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
         inference_box = self._make_box(box_id="bbox_0011", label="inference")
         seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
@@ -123,7 +131,11 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         with patch("src.ui.main_window.extract_learning_bboxes_in_memory") as extract_mock, patch(
             "src.ui.main_window.show_info"
         ) as show_info_mock, patch("src.ui.main_window.show_warning") as show_warning_mock:
-            result = MainWindow._build_dataset_from_bboxes_with_dialog(window_like)
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=True,
+            )
 
         self.assertFalse(result)
         extract_mock.assert_not_called()
@@ -134,7 +146,7 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
             show_warning_mock.call_args.args[0],
         )
 
-    def test_build_dataset_from_bboxes_requires_validation_labeled_bbox(self) -> None:
+    def test_prepare_learning_state_requires_validation_labeled_bbox(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")
         seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
         window_like = self._make_window_like(
@@ -146,7 +158,11 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         with patch("src.ui.main_window.extract_learning_bboxes_in_memory") as extract_mock, patch(
             "src.ui.main_window.show_info"
         ) as show_info_mock, patch("src.ui.main_window.show_warning") as show_warning_mock:
-            result = MainWindow._build_dataset_from_bboxes_with_dialog(window_like)
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=True,
+            )
 
         self.assertFalse(result)
         extract_mock.assert_not_called()
@@ -157,7 +173,7 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
             show_warning_mock.call_args.args[0],
         )
 
-    def test_build_dataset_from_bboxes_uses_in_memory_extraction(self) -> None:
+    def test_prepare_learning_state_uses_in_memory_extraction(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")
         inference_box = self._make_box(box_id="bbox_0010", label="inference")
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
@@ -190,7 +206,11 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         ), patch("src.ui.main_window.show_info") as show_info_mock, patch(
             "src.ui.main_window.show_warning"
         ) as show_warning_mock:
-            result = MainWindow._build_dataset_from_bboxes_with_dialog(window_like)
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=True,
+            )
 
         self.assertTrue(result)
         extract_mock.assert_called_once()
@@ -229,7 +249,7 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
             info_text,
         )
 
-    def test_build_dataset_from_bboxes_shows_warning_when_extraction_raises(self) -> None:
+    def test_prepare_learning_state_shows_warning_when_extraction_raises(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
         seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
@@ -252,7 +272,11 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         ), patch("src.ui.main_window.show_info") as show_info_mock, patch(
             "src.ui.main_window.show_warning"
         ) as show_warning_mock:
-            result = MainWindow._build_dataset_from_bboxes_with_dialog(window_like)
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=True,
+            )
 
         self.assertFalse(result)
         compute_weights_mock.assert_not_called()
@@ -261,7 +285,7 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         show_warning_mock.assert_called_once()
         self.assertIn("extract boom", show_warning_mock.call_args.args[0])
 
-    def test_build_dataset_from_bboxes_warns_when_tensors_remain_in_session(self) -> None:
+    def test_prepare_learning_state_warns_when_tensors_remain_in_session(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
         seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
@@ -293,7 +317,11 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         ), patch("src.ui.main_window.show_info") as show_info_mock, patch(
             "src.ui.main_window.show_warning"
         ) as show_warning_mock:
-            result = MainWindow._build_dataset_from_bboxes_with_dialog(window_like)
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=True,
+            )
 
         self.assertFalse(result)
         compute_weights_mock.assert_called_once_with(
@@ -305,7 +333,7 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         show_warning_mock.assert_called_once()
         self.assertIn("not fully released", show_warning_mock.call_args.args[0])
 
-    def test_build_dataset_from_bboxes_warns_when_class_weight_computation_raises(self) -> None:
+    def test_prepare_learning_state_warns_when_class_weight_computation_raises(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
         seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
@@ -337,7 +365,11 @@ class MainWindowBBoxDatasetBuildFlowTests(unittest.TestCase):
         ), patch("src.ui.main_window.show_info") as show_info_mock, patch(
             "src.ui.main_window.show_warning"
         ) as show_warning_mock:
-            result = MainWindow._build_dataset_from_bboxes_with_dialog(window_like)
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=True,
+            )
 
         self.assertFalse(result)
         compute_weights_mock.assert_called_once_with(
