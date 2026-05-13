@@ -43,6 +43,27 @@ class AnnotationPaintOutcome:
 
 logger = logging.getLogger(__name__)
 AnnotationTool = Literal["brush", "eraser", "flood_filler"]
+ZoomAction = Literal["zoom_in", "zoom_out"]
+
+_ZOOM_STEP = 0.1
+
+
+def next_zoom_from_action(current_zoom: float, action: ZoomAction) -> float:
+    """Return next zoom value from a semantic action.
+
+    Zoom semantics are intentionally explicit:
+    - ``zoom_in`` decreases numeric zoom (shows a smaller image extent).
+    - ``zoom_out`` increases numeric zoom (shows a larger image extent).
+
+    Bounds are intentionally not enforced here; SyncManager.set_zoom is the
+    canonical clamp authority for the active zoom range.
+    """
+    if action == "zoom_in":
+        return float(current_zoom) - _ZOOM_STEP
+    elif action == "zoom_out":
+        return float(current_zoom) + _ZOOM_STEP
+    else:
+        raise ValueError(f"Unsupported zoom action: {action!r}")
 
 
 class OrthogonalView(QWidget):
@@ -206,6 +227,13 @@ class OrthogonalView(QWidget):
         ):
             previous = self._latest
             overlay_only_refresh = self._is_overlay_only_refresh(previous, result)
+            level_changed = (
+                previous is not None
+                and (
+                    int(previous.level) != int(result.level)
+                    or int(previous.level_scale) != int(result.level_scale)
+                )
+            )
             self._latest = result
             if overlay_only_refresh:
                 self._pending_overlay_result = result
@@ -221,7 +249,10 @@ class OrthogonalView(QWidget):
                     segmentation_labels=result.segmentation_labels,
                     segmentation_roi=result.segmentation_roi,
                 )
-            recenter = self._recenter_on_next_render and not overlay_only_refresh
+            recenter = (
+                (self._recenter_on_next_render or level_changed)
+                and not overlay_only_refresh
+            )
             self._recenter_on_next_render = False
             self._update_crosshair(result.image)
             self._update_picker_marker(result.image)
@@ -919,6 +950,11 @@ class OrthogonalView(QWidget):
             return
         self._schedule_annotation_drag_tick()
 
+    def _apply_zoom_action(self, action: ZoomAction) -> None:
+        next_zoom = next_zoom_from_action(self.state.zoom, action)
+        if next_zoom != self.state.zoom:
+            self.input_handlers.on_zoom(next_zoom)
+
     def _handle_pan_press(self, position: QPointF) -> None:
         self._pan_active = True
         self._pan_last = position
@@ -968,12 +1004,10 @@ class OrthogonalView(QWidget):
                     self.input_handlers.on_scroll(self.state.axis, delta)
                     event.accept()
                     return True
-                delta = 1 if event.angleDelta().y() > 0 else -1
-                step = 0.1
-                next_zoom = self.state.zoom - (delta * step)
-                next_zoom = max(0.1, min(1.0, next_zoom))
-                if next_zoom != self.state.zoom:
-                    self.input_handlers.on_zoom(next_zoom)
+                if event.angleDelta().y() > 0:
+                    self._apply_zoom_action("zoom_in")
+                else:
+                    self._apply_zoom_action("zoom_out")
                 event.accept()
                 return True
             if event.type() == QEvent.MouseButtonPress:
@@ -1129,11 +1163,11 @@ class OrthogonalView(QWidget):
             event.accept()
             return
         if event.key() in (Qt.Key_Plus, Qt.Key_Equal):
-            self.input_handlers.on_zoom(self.state.zoom + 0.1)
+            self._apply_zoom_action("zoom_in")
             event.accept()
             return
         if event.key() == Qt.Key_Minus:
-            self.input_handlers.on_zoom(max(0.1, self.state.zoom - 0.1))
+            self._apply_zoom_action("zoom_out")
             event.accept()
             return
         super().keyPressEvent(event)

@@ -4686,11 +4686,6 @@ class MainWindow(QMainWindow):
             return
         auto_enabled = bool(enabled)
         self.renderer.set_auto_level_enabled(auto_enabled)
-        if auto_enabled:
-            # Recompute target levels from current zoom immediately when
-            # returning to automatic level selection.
-            self.render_all()
-            return
         self._queue_contrast_rerender()
 
     def _handle_manual_level_requested(self, level: int) -> None:

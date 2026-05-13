@@ -179,7 +179,23 @@ class MainWindowContrastFlowTests(unittest.TestCase):
         self.assertEqual(queued_view_ids, [])
         self.assertEqual(render_calls, ["render"])
 
-    def test_handle_auto_level_mode_changed_updates_renderer_and_rerenders_when_reenabled(self) -> None:
+    def test_handle_auto_level_mode_changed_updates_renderer_and_queues_for_both_modes(self) -> None:
+        mode_calls: list[bool] = []
+        queue_calls: list[str] = []
+        renderer = SimpleNamespace(set_auto_level_enabled=lambda enabled: mode_calls.append(bool(enabled)))
+        window_like = SimpleNamespace(
+            state=SimpleNamespace(volume_loaded=True),
+            renderer=renderer,
+            _queue_contrast_rerender=lambda: queue_calls.append("queue"),
+        )
+
+        MainWindow._handle_auto_level_mode_changed(window_like, False)
+        MainWindow._handle_auto_level_mode_changed(window_like, True)
+
+        self.assertEqual(mode_calls, [False, True])
+        self.assertEqual(queue_calls, ["queue", "queue"])
+
+    def test_handle_auto_level_mode_changed_does_not_trigger_full_render(self) -> None:
         mode_calls: list[bool] = []
         queue_calls: list[str] = []
         render_calls: list[str] = []
@@ -195,19 +211,17 @@ class MainWindowContrastFlowTests(unittest.TestCase):
         MainWindow._handle_auto_level_mode_changed(window_like, True)
 
         self.assertEqual(mode_calls, [False, True])
-        self.assertEqual(queue_calls, ["queue"])
-        self.assertEqual(render_calls, ["render"])
+        self.assertEqual(queue_calls, ["queue", "queue"])
+        self.assertEqual(render_calls, [])
 
     def test_handle_auto_level_mode_changed_is_noop_when_no_volume_loaded(self) -> None:
         mode_calls: list[bool] = []
         queue_calls: list[str] = []
-        render_calls: list[str] = []
         renderer = SimpleNamespace(set_auto_level_enabled=lambda enabled: mode_calls.append(bool(enabled)))
         window_like = SimpleNamespace(
             state=SimpleNamespace(volume_loaded=False),
             renderer=renderer,
             _queue_contrast_rerender=lambda: queue_calls.append("queue"),
-            render_all=lambda: render_calls.append("render"),
         )
 
         MainWindow._handle_auto_level_mode_changed(window_like, False)
@@ -215,7 +229,6 @@ class MainWindowContrastFlowTests(unittest.TestCase):
 
         self.assertEqual(mode_calls, [])
         self.assertEqual(queue_calls, [])
-        self.assertEqual(render_calls, [])
 
     def test_handle_manual_level_requested_updates_renderer_and_queues(self) -> None:
         manual_calls: list[int] = []

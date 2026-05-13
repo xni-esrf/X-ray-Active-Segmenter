@@ -564,6 +564,19 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertTrue(self.panel._auto_level_checkbox.isChecked())
         self.assertFalse(self.panel._manual_level_spin.isEnabled())
 
+    def test_zoom_spin_range_matches_core_zoom_bounds(self) -> None:
+        self.assertAlmostEqual(self.panel._zoom_spin.minimum(), 0.1)
+        self.assertAlmostEqual(self.panel._zoom_spin.maximum(), 1.0)
+
+    def test_set_zoom_clamps_to_zoom_spin_range(self) -> None:
+        self.panel.set_zoom(2.5)
+        self.assertAlmostEqual(self.panel.state.zoom, 1.0)
+        self.assertAlmostEqual(self.panel._zoom_spin.value(), 1.0)
+
+        self.panel.set_zoom(-3.0)
+        self.assertAlmostEqual(self.panel.state.zoom, 0.1)
+        self.assertAlmostEqual(self.panel._zoom_spin.value(), 0.1)
+
     def test_level_controls_emit_mode_change_and_manual_level_only_on_enter(self) -> None:
         mode_changes = []
         manual_changes = []

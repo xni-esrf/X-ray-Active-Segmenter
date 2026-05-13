@@ -118,6 +118,8 @@ class BottomPanelState:
 
 
 class BottomPanel(QWidget):
+    _ZOOM_MIN = 0.1
+    _ZOOM_MAX = 1.0
     _CONTRAST_STEPS = 1_000
     _CONTRAST_MAX_STEP = _CONTRAST_STEPS - 1
     _SEGMENTATION_OPACITY_DEFAULT = 0.3
@@ -244,7 +246,7 @@ class BottomPanel(QWidget):
         self._cursor_y.setRange(0, 0)
         self._cursor_x.setRange(0, 0)
         self._zoom_spin = QDoubleSpinBox()
-        self._zoom_spin.setRange(0.1, 20.0)
+        self._zoom_spin.setRange(self._ZOOM_MIN, self._ZOOM_MAX)
         self._zoom_spin.setSingleStep(0.1)
         self._zoom_spin.setValue(1.0)
         self._auto_level_checkbox = QCheckBox("Auto Level")
@@ -646,9 +648,10 @@ class BottomPanel(QWidget):
         return self._file_path
 
     def set_zoom(self, zoom: float) -> None:
-        self.state.zoom = zoom
+        normalized_zoom = max(self._ZOOM_MIN, min(self._ZOOM_MAX, float(zoom)))
+        self.state.zoom = normalized_zoom
         self._zoom_spin.blockSignals(True)
-        self._zoom_spin.setValue(zoom)
+        self._zoom_spin.setValue(normalized_zoom)
         self._zoom_spin.blockSignals(False)
 
     def set_level_mode(
