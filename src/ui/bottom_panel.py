@@ -95,10 +95,8 @@ class BottomPanelState:
     annotation_enabled: bool = False
     bounding_box_mode_enabled: bool = False
     annotation_tool: AnnotationTool = "brush"
-    active_label: int = 1
+    tool_label_text: str = "1"
     brush_radius: BrushRadius = 0
-    eraser_target: str = ""
-    flood_fill_target: int = 1
     undo_depth: int = 0
     redo_depth: int = 0
     contrast_data_range: Optional[Tuple[float, float]] = None
@@ -148,11 +146,9 @@ class BottomPanel(QWidget):
         self._on_annotation_mode_changed: Optional[Callable[[bool], None]] = None
         self._on_bounding_box_mode_changed: Optional[Callable[[bool], None]] = None
         self._on_annotation_tool_changed: Optional[Callable[[AnnotationTool], None]] = None
-        self._on_active_label_changed: Optional[Callable[[int], None]] = None
+        self._on_tool_label_changed: Optional[Callable[[str], None]] = None
         self._on_next_available_label_requested: Optional[Callable[[], None]] = None
         self._on_brush_radius_changed: Optional[Callable[[BrushRadius], None]] = None
-        self._on_eraser_target_changed: Optional[Callable[[str], None]] = None
-        self._on_flood_fill_target_changed: Optional[Callable[[int], None]] = None
         self._on_flood_fill_requested: Optional[Callable[[int], None]] = None
         self._on_undo_requested: Optional[Callable[[], None]] = None
         self._on_redo_requested: Optional[Callable[[], None]] = None
@@ -208,24 +204,15 @@ class BottomPanel(QWidget):
         self._annotation_toggle.setToolTip(
             "Enable manual segmentation. Ctrl+B/Ctrl+E/Ctrl+F also enables it automatically."
         )
-        self._active_label_label = QLabel("Label")
-        self._active_label_spin = QSpinBox()
-        self._active_label_spin.setPrefix("L:")
-        self._active_label_spin.setRange(0, 2_147_483_647)
-        self._active_label_spin.setValue(1)
+        self._tool_label_label = QLabel("Tool Label")
+        self._tool_label_edit = QLineEdit()
+        self._tool_label_edit.setPlaceholderText("1")
+        self._tool_label_edit.setText("1")
+        self._tool_label_edit.setClearButtonEnabled(True)
         self._brush_radius_label = QLabel("Brush Radius")
         self._brush_radius_spin = QSpinBox()
         self._brush_radius_spin.setRange(0, 9)
         self._brush_radius_spin.setValue(0)
-        self._eraser_target_label = QLabel("Erase ID")
-        self._eraser_target_edit = QLineEdit()
-        self._eraser_target_edit.setPlaceholderText("All")
-        self._eraser_target_edit.setClearButtonEnabled(True)
-        self._flood_fill_target_label = QLabel("Fill ID")
-        self._flood_fill_target_spin = QSpinBox()
-        self._flood_fill_target_spin.setPrefix("L:")
-        self._flood_fill_target_spin.setRange(0, 2_147_483_647)
-        self._flood_fill_target_spin.setValue(1)
         self._flood_fill_button = QPushButton("Flood Fill")
         self._undo_button = QPushButton("Undo")
         self._redo_button = QPushButton("Redo")
@@ -335,10 +322,8 @@ class BottomPanel(QWidget):
         self._annotation_toggle.toggled.connect(self._handle_annotation_mode_changed)
         self._bounding_box_mode_toggle.toggled.connect(self._handle_bounding_box_mode_changed)
         self._annotation_tool_combo.currentIndexChanged.connect(self._handle_annotation_tool_changed)
-        self._active_label_spin.valueChanged.connect(self._handle_active_label_changed)
+        self._tool_label_edit.editingFinished.connect(self._handle_tool_label_changed)
         self._brush_radius_spin.valueChanged.connect(self._handle_brush_radius_changed)
-        self._eraser_target_edit.editingFinished.connect(self._handle_eraser_target_changed)
-        self._flood_fill_target_spin.valueChanged.connect(self._handle_flood_fill_target_changed)
         self._flood_fill_button.clicked.connect(self._handle_flood_fill_requested)
         self._undo_button.clicked.connect(self._handle_undo_requested)
         self._redo_button.clicked.connect(self._handle_redo_requested)
@@ -462,10 +447,8 @@ class BottomPanel(QWidget):
         annotation_layout = QFormLayout()
         annotation_layout.addRow(self._annotation_toggle)
         annotation_layout.addRow(self._annotation_tool_label, self._annotation_tool_combo)
-        annotation_layout.addRow(self._active_label_label, self._active_label_spin)
+        annotation_layout.addRow(self._tool_label_label, self._tool_label_edit)
         annotation_layout.addRow(self._brush_radius_label, self._brush_radius_spin)
-        annotation_layout.addRow(self._eraser_target_label, self._eraser_target_edit)
-        annotation_layout.addRow(self._flood_fill_target_label, self._flood_fill_target_spin)
         annotation_layout.addRow(self._flood_fill_button)
         annotation_layout.addRow(self._next_available_button)
         annotation_group.setLayout(annotation_layout)
@@ -594,14 +577,10 @@ class BottomPanel(QWidget):
         annotation_compact_widgets = (
             self._annotation_tool_label,
             self._annotation_tool_combo,
-            self._active_label_label,
-            self._active_label_spin,
+            self._tool_label_label,
+            self._tool_label_edit,
             self._brush_radius_label,
             self._brush_radius_spin,
-            self._eraser_target_label,
-            self._eraser_target_edit,
-            self._flood_fill_target_label,
-            self._flood_fill_target_spin,
             self._flood_fill_button,
             self._next_available_button,
         )
@@ -799,8 +778,8 @@ class BottomPanel(QWidget):
         editable_controls_enabled = bool(
             self._annotation_controls_enabled and not self._inference_navigation_only_mode
         )
-        self._active_label_label.setEnabled(editable_controls_enabled)
-        self._active_label_spin.setEnabled(editable_controls_enabled)
+        self._tool_label_label.setEnabled(editable_controls_enabled)
+        self._tool_label_edit.setEnabled(editable_controls_enabled)
         self._brush_radius_label.setEnabled(editable_controls_enabled)
         self._brush_radius_spin.setEnabled(editable_controls_enabled)
         self._next_available_button.setEnabled(editable_controls_enabled)
@@ -827,21 +806,15 @@ class BottomPanel(QWidget):
     def annotation_tool(self) -> AnnotationTool:
         return self.state.annotation_tool
 
-    def set_active_label_bounds(self, minimum: int, maximum: int) -> None:
-        minimum = int(minimum)
-        maximum = int(maximum)
-        if maximum < minimum:
-            maximum = minimum
-        self._active_label_spin.setRange(minimum, maximum)
+    def set_tool_label(self, value: str) -> None:
+        normalized = str(value).strip()
+        self.state.tool_label_text = normalized
+        self._tool_label_edit.blockSignals(True)
+        self._tool_label_edit.setText(normalized)
+        self._tool_label_edit.blockSignals(False)
 
-    def set_active_label(self, label: int) -> None:
-        self.state.active_label = int(label)
-        self._active_label_spin.blockSignals(True)
-        self._active_label_spin.setValue(self.state.active_label)
-        self._active_label_spin.blockSignals(False)
-
-    def active_label(self) -> int:
-        return int(self._active_label_spin.value())
+    def tool_label(self) -> str:
+        return str(self._tool_label_edit.text().strip())
 
     def set_brush_radius(self, brush_radius: BrushRadius) -> None:
         normalized = _normalize_brush_radius(brush_radius)
@@ -853,31 +826,8 @@ class BottomPanel(QWidget):
     def brush_radius(self) -> BrushRadius:
         return int(self.state.brush_radius)
 
-    def set_eraser_target(self, target: str) -> None:
-        normalized = str(target).strip()
-        self.state.eraser_target = normalized
-        self._eraser_target_edit.blockSignals(True)
-        self._eraser_target_edit.setText(normalized)
-        self._eraser_target_edit.blockSignals(False)
-
-    def eraser_target(self) -> str:
-        return self.state.eraser_target
-
-    def set_flood_fill_target_bounds(self, minimum: int, maximum: int) -> None:
-        minimum = int(minimum)
-        maximum = int(maximum)
-        if maximum < minimum:
-            maximum = minimum
-        self._flood_fill_target_spin.setRange(minimum, maximum)
-
-    def set_flood_fill_target(self, label: int) -> None:
-        self.state.flood_fill_target = int(label)
-        self._flood_fill_target_spin.blockSignals(True)
-        self._flood_fill_target_spin.setValue(self.state.flood_fill_target)
-        self._flood_fill_target_spin.blockSignals(False)
-
-    def flood_fill_target(self) -> int:
-        return int(self._flood_fill_target_spin.value())
+    def set_tool_label_placeholder(self, value: str) -> None:
+        self._tool_label_edit.setPlaceholderText(str(value))
 
     def set_undo_state(self, *, depth: int, enabled: bool) -> None:
         normalized_depth = max(0, int(depth))
@@ -1152,8 +1102,8 @@ class BottomPanel(QWidget):
     def on_annotation_tool_changed(self, callback: Callable[[AnnotationTool], None]) -> None:
         self._on_annotation_tool_changed = callback
 
-    def on_active_label_changed(self, callback: Callable[[int], None]) -> None:
-        self._on_active_label_changed = callback
+    def on_tool_label_changed(self, callback: Callable[[str], None]) -> None:
+        self._on_tool_label_changed = callback
 
     def on_next_available_label_requested(self, callback: Callable[[], None]) -> None:
         self._on_next_available_label_requested = callback
@@ -1161,14 +1111,8 @@ class BottomPanel(QWidget):
     def on_brush_radius_changed(self, callback: Callable[[BrushRadius], None]) -> None:
         self._on_brush_radius_changed = callback
 
-    def on_eraser_target_changed(self, callback: Callable[[str], None]) -> None:
-        self._on_eraser_target_changed = callback
-
     def on_flood_fill_requested(self, callback: Callable[[int], None]) -> None:
         self._on_flood_fill_requested = callback
-
-    def on_flood_fill_target_changed(self, callback: Callable[[int], None]) -> None:
-        self._on_flood_fill_target_changed = callback
 
     def on_undo_requested(self, callback: Callable[[], None]) -> None:
         self._on_undo_requested = callback
@@ -1355,10 +1299,11 @@ class BottomPanel(QWidget):
         if self._on_bounding_box_mode_changed:
             self._on_bounding_box_mode_changed(self.state.bounding_box_mode_enabled)
 
-    def _handle_active_label_changed(self, value: int) -> None:
-        self.state.active_label = int(value)
-        if self._on_active_label_changed:
-            self._on_active_label_changed(self.state.active_label)
+    def _handle_tool_label_changed(self) -> None:
+        value = self._tool_label_edit.text().strip()
+        self.state.tool_label_text = value
+        if self._on_tool_label_changed:
+            self._on_tool_label_changed(value)
 
     def _handle_next_available_label_requested(self) -> None:
         if self._on_next_available_label_requested:
@@ -1369,21 +1314,14 @@ class BottomPanel(QWidget):
         if self._on_brush_radius_changed:
             self._on_brush_radius_changed(self.state.brush_radius)
 
-    def _handle_eraser_target_changed(self) -> None:
-        value = self._eraser_target_edit.text().strip()
-        self.state.eraser_target = value
-        if self._on_eraser_target_changed:
-            self._on_eraser_target_changed(value)
-
     def _handle_flood_fill_requested(self) -> None:
-        self.state.flood_fill_target = int(self._flood_fill_target_spin.value())
+        text = self._tool_label_edit.text().strip()
+        try:
+            value = int(text)
+        except ValueError:
+            value = 1
         if self._on_flood_fill_requested:
-            self._on_flood_fill_requested(self.state.flood_fill_target)
-
-    def _handle_flood_fill_target_changed(self, value: int) -> None:
-        self.state.flood_fill_target = int(value)
-        if self._on_flood_fill_target_changed:
-            self._on_flood_fill_target_changed(self.state.flood_fill_target)
+            self._on_flood_fill_requested(value)
 
     def _handle_undo_requested(self) -> None:
         if self._on_undo_requested:
@@ -1506,22 +1444,23 @@ class BottomPanel(QWidget):
             self._on_bounding_box_label_changed(selected_id, selected_label)
 
     def _update_eraser_controls_state(self) -> None:
-        eraser_active = (
+        tool_label_active = (
             self._annotation_controls_enabled
             and not self._inference_navigation_only_mode
             and self.state.annotation_enabled
-            and self.state.annotation_tool == "eraser"
         )
-        self._eraser_target_label.setEnabled(eraser_active)
-        self._eraser_target_edit.setEnabled(eraser_active)
+        self._tool_label_label.setEnabled(tool_label_active)
+        self._tool_label_edit.setEnabled(tool_label_active)
+        if self.state.annotation_tool == "eraser":
+            self._tool_label_edit.setPlaceholderText("All")
+        else:
+            self._tool_label_edit.setPlaceholderText("1")
         flood_fill_active = (
             self._annotation_controls_enabled
             and not self._inference_navigation_only_mode
             and self.state.annotation_enabled
             and self.state.annotation_tool == "flood_filler"
         )
-        self._flood_fill_target_label.setEnabled(flood_fill_active)
-        self._flood_fill_target_spin.setEnabled(flood_fill_active)
         self._flood_fill_button.setEnabled(flood_fill_active and self.state.picked_position is not None)
         self._update_bounding_box_controls_state()
 

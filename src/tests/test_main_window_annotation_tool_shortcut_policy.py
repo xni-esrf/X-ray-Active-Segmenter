@@ -4,6 +4,7 @@ import os
 import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
+import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -103,6 +104,196 @@ class MainWindowAnnotationToolShortcutPolicyTests(unittest.TestCase):
         self.assertEqual(enable_calls, [])
         self.assertEqual(tool_calls, [])
         self.assertTrue(state.annotation_mode_enabled)
+
+    def test_set_annotation_tool_from_action_switching_from_eraser_all_sets_brush_default_label_one(self) -> None:
+        overlay_calls: list[str] = []
+        refresh_calls: list[str] = []
+        editor = SimpleNamespace(active_label=9, dtype=np.dtype(np.uint16))
+
+        def _set_active_label(value: int) -> None:
+            editor.active_label = int(value)
+
+        editor.set_active_label = _set_active_label
+        window_like = SimpleNamespace(
+            state=SimpleNamespace(
+                annotation_tool="eraser",
+                eraser_target_label=None,
+                shared_tool_numeric_label=9,
+                flood_fill_target_label=9,
+                tool_label_text="All",
+            ),
+            _segmentation_editor=editor,
+            _normalize_annotation_tool=lambda tool: str(tool),
+            _annotation_label_ui_max=lambda: 1024,
+            _refresh_annotation_ui_state=lambda: refresh_calls.append("refresh"),
+            views={"axial": SimpleNamespace(refresh_overlay=lambda: overlay_calls.append("overlay"))},
+        )
+
+        MainWindow._set_annotation_tool_from_action(window_like, "brush")
+
+        self.assertEqual(window_like.state.annotation_tool, "brush")
+        self.assertEqual(window_like.state.shared_tool_numeric_label, 1)
+        self.assertEqual(window_like.state.flood_fill_target_label, 1)
+        self.assertEqual(window_like.state.tool_label_text, "1")
+        self.assertEqual(editor.active_label, 1)
+        self.assertEqual(refresh_calls, ["refresh"])
+        self.assertEqual(overlay_calls, ["overlay"])
+
+    def test_set_annotation_tool_from_action_carries_numeric_eraser_target_to_flood_fill(self) -> None:
+        editor = SimpleNamespace(active_label=1, dtype=np.dtype(np.uint16))
+
+        def _set_active_label(value: int) -> None:
+            editor.active_label = int(value)
+
+        editor.set_active_label = _set_active_label
+        window_like = SimpleNamespace(
+            state=SimpleNamespace(
+                annotation_tool="eraser",
+                eraser_target_label=5,
+                shared_tool_numeric_label=1,
+                flood_fill_target_label=1,
+                tool_label_text="5",
+            ),
+            _segmentation_editor=editor,
+            _normalize_annotation_tool=lambda tool: str(tool),
+            _annotation_label_ui_max=lambda: 1024,
+            _refresh_annotation_ui_state=lambda: None,
+            views={},
+        )
+
+        MainWindow._set_annotation_tool_from_action(window_like, "flood_filler")
+
+        self.assertEqual(window_like.state.annotation_tool, "flood_filler")
+        self.assertEqual(window_like.state.shared_tool_numeric_label, 5)
+        self.assertEqual(window_like.state.flood_fill_target_label, 5)
+        self.assertEqual(window_like.state.tool_label_text, "5")
+        self.assertEqual(editor.active_label, 5)
+
+    def test_handle_tool_label_changed_invalid_brush_value_reverts_to_previous_numeric(self) -> None:
+        refresh_calls: list[str] = []
+        editor = SimpleNamespace(active_label=7, dtype=np.dtype(np.uint16), set_active_label=lambda _value: None)
+        window_like = SimpleNamespace(
+            _inference_running=False,
+            state=SimpleNamespace(
+                annotation_tool="brush",
+                shared_tool_numeric_label=7,
+                flood_fill_target_label=7,
+                tool_label_text="7",
+            ),
+            _segmentation_editor=editor,
+            _refresh_annotation_ui_state=lambda: refresh_calls.append("refresh"),
+        )
+
+        with patch("src.ui.main_window.show_warning") as warning_mock:
+            MainWindow._handle_tool_label_changed(window_like, "abc")
+
+        warning_mock.assert_called_once()
+        self.assertEqual(window_like.state.shared_tool_numeric_label, 7)
+        self.assertEqual(window_like.state.flood_fill_target_label, 7)
+        self.assertEqual(window_like.state.tool_label_text, "7")
+        self.assertEqual(refresh_calls, ["refresh"])
+
+    def test_handle_tool_label_changed_invalid_flood_fill_value_reverts_to_previous_numeric(self) -> None:
+        refresh_calls: list[str] = []
+        editor = SimpleNamespace(active_label=3, dtype=np.dtype(np.uint8), set_active_label=lambda _value: None)
+        window_like = SimpleNamespace(
+            _inference_running=False,
+            state=SimpleNamespace(
+                annotation_tool="flood_filler",
+                shared_tool_numeric_label=3,
+                flood_fill_target_label=3,
+                tool_label_text="3",
+            ),
+            _segmentation_editor=editor,
+            _refresh_annotation_ui_state=lambda: refresh_calls.append("refresh"),
+        )
+
+        with patch("src.ui.main_window.show_warning") as warning_mock:
+            MainWindow._handle_tool_label_changed(window_like, "999")
+
+        warning_mock.assert_called_once()
+        self.assertEqual(window_like.state.shared_tool_numeric_label, 3)
+        self.assertEqual(window_like.state.flood_fill_target_label, 3)
+        self.assertEqual(window_like.state.tool_label_text, "3")
+        self.assertEqual(refresh_calls, ["refresh"])
+
+    def test_handle_tool_label_changed_valid_brush_value_updates_shared_numeric_and_flood_target(self) -> None:
+        refresh_calls: list[str] = []
+        set_active_calls: list[int] = []
+        editor = SimpleNamespace(
+            active_label=2,
+            dtype=np.dtype(np.uint16),
+            set_active_label=lambda value: set_active_calls.append(int(value)),
+        )
+        window_like = SimpleNamespace(
+            _inference_running=False,
+            state=SimpleNamespace(
+                annotation_tool="brush",
+                shared_tool_numeric_label=2,
+                flood_fill_target_label=2,
+                tool_label_text="2",
+            ),
+            _segmentation_editor=editor,
+            _refresh_annotation_ui_state=lambda: refresh_calls.append("refresh"),
+        )
+
+        MainWindow._handle_tool_label_changed(window_like, "11")
+
+        self.assertEqual(set_active_calls, [11])
+        self.assertEqual(window_like.state.shared_tool_numeric_label, 11)
+        self.assertEqual(window_like.state.flood_fill_target_label, 11)
+        self.assertEqual(window_like.state.tool_label_text, "11")
+        self.assertEqual(refresh_calls, ["refresh"])
+
+    def test_handle_tool_label_changed_valid_flood_value_updates_shared_numeric_and_flood_target(self) -> None:
+        refresh_calls: list[str] = []
+        set_active_calls: list[int] = []
+        editor = SimpleNamespace(
+            active_label=4,
+            dtype=np.dtype(np.uint16),
+            set_active_label=lambda value: set_active_calls.append(int(value)),
+        )
+        window_like = SimpleNamespace(
+            _inference_running=False,
+            state=SimpleNamespace(
+                annotation_tool="flood_filler",
+                shared_tool_numeric_label=4,
+                flood_fill_target_label=4,
+                tool_label_text="4",
+            ),
+            _segmentation_editor=editor,
+            _refresh_annotation_ui_state=lambda: refresh_calls.append("refresh"),
+        )
+
+        MainWindow._handle_tool_label_changed(window_like, "8")
+
+        self.assertEqual(set_active_calls, [8])
+        self.assertEqual(window_like.state.shared_tool_numeric_label, 8)
+        self.assertEqual(window_like.state.flood_fill_target_label, 8)
+        self.assertEqual(window_like.state.tool_label_text, "8")
+        self.assertEqual(refresh_calls, ["refresh"])
+
+    def test_handle_eraser_target_changed_accepts_all_keyword(self) -> None:
+        refresh_calls: list[str] = []
+        window_like = SimpleNamespace(
+            _inference_running=False,
+            state=SimpleNamespace(
+                eraser_target_label=6,
+                tool_label_text="6",
+                shared_tool_numeric_label=6,
+                flood_fill_target_label=6,
+            ),
+            _segmentation_editor=SimpleNamespace(dtype=np.dtype(np.uint16)),
+            _refresh_annotation_ui_state=lambda: refresh_calls.append("refresh"),
+        )
+
+        MainWindow._handle_eraser_target_changed(window_like, "All")
+
+        self.assertIsNone(window_like.state.eraser_target_label)
+        self.assertEqual(window_like.state.tool_label_text, "All")
+        self.assertEqual(window_like.state.shared_tool_numeric_label, 6)
+        self.assertEqual(window_like.state.flood_fill_target_label, 6)
+        self.assertEqual(refresh_calls, ["refresh"])
 
     @unittest.skipUnless(Qt is not None, "Qt key enums are unavailable")
     def test_keypress_mapping_resolves_ctrl_b_e_f_tools(self) -> None:

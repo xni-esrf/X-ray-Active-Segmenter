@@ -448,7 +448,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertFalse(self.panel._save_segmentation_button.isEnabled())
         self.assertFalse(self.panel._annotation_toggle.isEnabled())
         self.assertFalse(self.panel._annotation_tool_combo.isEnabled())
-        self.assertFalse(self.panel._active_label_spin.isEnabled())
+        self.assertFalse(self.panel._tool_label_edit.isEnabled())
         self.assertFalse(self.panel._open_bounding_boxes_button.isEnabled())
         self.assertFalse(self.panel._save_bounding_boxes_button.isEnabled())
         self.assertFalse(self.panel._delete_bbox_button.isEnabled())
@@ -529,6 +529,33 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertIn("Ctrl+B", hint)
         self.assertIn("Ctrl+E", hint)
         self.assertIn("Ctrl+F", hint)
+
+    def test_tool_label_change_emits_unified_callback(self) -> None:
+        changes: list[str] = []
+        self.panel.on_tool_label_changed(changes.append)
+        self.panel.set_interaction_tools_enabled(True)
+        self.panel.set_annotation_mode(True)
+        self.panel.set_annotation_controls_enabled(True)
+        self.panel._tool_label_edit.setText(" 17 ")
+        self.panel._tool_label_edit.editingFinished.emit()
+        QApplication.processEvents()
+
+        self.assertEqual(changes, ["17"])
+        self.assertEqual(self.panel.state.tool_label_text, "17")
+
+    def test_tool_label_placeholder_tracks_annotation_tool(self) -> None:
+        self.panel.set_interaction_tools_enabled(True)
+        self.panel.set_annotation_mode(True)
+        self.panel.set_annotation_controls_enabled(True)
+
+        self.panel.set_annotation_tool("eraser")
+        self.assertEqual(self.panel._tool_label_edit.placeholderText(), "All")
+
+        self.panel.set_annotation_tool("brush")
+        self.assertEqual(self.panel._tool_label_edit.placeholderText(), "1")
+
+        self.panel.set_annotation_tool("flood_filler")
+        self.assertEqual(self.panel._tool_label_edit.placeholderText(), "1")
 
     def test_history_buttons_are_not_reset_by_annotation_controls(self) -> None:
         self.panel.set_undo_state(depth=2, enabled=True)

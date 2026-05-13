@@ -392,6 +392,8 @@ class MainWindowState:
     bbox_mode_enabled: bool = False
     annotation_tool: AnnotationTool = "brush"
     brush_radius: BrushRadius = 0
+    tool_label_text: str = "1"
+    shared_tool_numeric_label: int = 1
     eraser_target_label: Optional[int] = None
     picked_indices: Optional[Tuple[int, int, int]] = None
     picked_label: Optional[int] = None
@@ -962,11 +964,9 @@ class MainWindow(QMainWindow):
         self.bottom_panel.on_annotation_mode_changed(self._handle_annotation_mode_changed)
         self.bottom_panel.on_bounding_box_mode_changed(self._handle_bounding_box_mode_changed)
         self.bottom_panel.on_annotation_tool_changed(self._handle_annotation_tool_changed)
-        self.bottom_panel.on_active_label_changed(self._handle_active_label_changed)
+        self.bottom_panel.on_tool_label_changed(self._handle_tool_label_changed)
         self.bottom_panel.on_next_available_label_requested(self._handle_next_available_label_requested)
         self.bottom_panel.on_brush_radius_changed(self._handle_brush_radius_changed)
-        self.bottom_panel.on_eraser_target_changed(self._handle_eraser_target_changed)
-        self.bottom_panel.on_flood_fill_target_changed(self._handle_flood_fill_target_changed)
         self.bottom_panel.on_flood_fill_requested(self._handle_flood_fill_requested)
         self.bottom_panel.on_undo_requested(self._handle_undo_requested)
         self.bottom_panel.on_redo_requested(self._handle_redo_requested)
@@ -4258,7 +4258,38 @@ class MainWindow(QMainWindow):
         return cast(AnnotationTool, normalized)
 
     def _set_annotation_tool_from_action(self, tool: object) -> None:
+        previous_tool = self.state.annotation_tool
         normalized_tool = self._normalize_annotation_tool(tool)
+        editor = self._segmentation_editor
+        if normalized_tool == "eraser":
+            if self.state.eraser_target_label is None:
+                self.state.tool_label_text = "All"
+            else:
+                target_value = int(self.state.eraser_target_label)
+                self.state.shared_tool_numeric_label = int(target_value)
+                self.state.tool_label_text = str(int(target_value))
+        else:
+            try:
+                shared_label = int(self.state.shared_tool_numeric_label)
+            except (TypeError, ValueError):
+                shared_label = 1
+            if shared_label < 0:
+                shared_label = 1
+            if previous_tool == "eraser" and self.state.eraser_target_label is None:
+                shared_label = 1
+            elif previous_tool == "eraser" and self.state.eraser_target_label is not None:
+                shared_label = int(self.state.eraser_target_label)
+            if editor is not None:
+                max_label = self._annotation_label_ui_max()
+                shared_label = max(0, min(int(shared_label), int(max_label)))
+                try:
+                    editor.set_active_label(int(shared_label))
+                except ValueError:
+                    shared_label = 1 if max_label >= 1 else 0
+                    editor.set_active_label(int(shared_label))
+            self.state.shared_tool_numeric_label = int(shared_label)
+            self.state.flood_fill_target_label = int(shared_label)
+            self.state.tool_label_text = str(int(shared_label))
         self.state.annotation_tool = normalized_tool
         self._refresh_annotation_ui_state()
         for view in self.views.values():
@@ -4702,30 +4733,44 @@ class MainWindow(QMainWindow):
             max_label = int(np.iinfo(editor.dtype).max)
             if self.state.eraser_target_label > max_label:
                 self.state.eraser_target_label = None
-        eraser_target = (
-            ""
-            if self.state.eraser_target_label is None
-            else str(self.state.eraser_target_label)
-        )
-        self.bottom_panel.set_eraser_target(eraser_target)
+        try:
+            shared_label = int(self.state.shared_tool_numeric_label)
+        except (TypeError, ValueError):
+            shared_label = 1
+        if shared_label < 0:
+            shared_label = 1
+        if editor is not None:
+            shared_label = max(0, min(int(shared_label), self._annotation_label_ui_max()))
+        self.state.shared_tool_numeric_label = int(shared_label)
+        self.state.flood_fill_target_label = int(shared_label)
         if editor is None:
             self.bottom_panel.set_annotation_controls_enabled(False)
-            self.bottom_panel.set_active_label_bounds(0, 2_147_483_647)
-            self.bottom_panel.set_active_label(1)
-            self.bottom_panel.set_flood_fill_target_bounds(0, 2_147_483_647)
-            self.bottom_panel.set_flood_fill_target(self.state.flood_fill_target_label)
+            if self.state.annotation_tool == "eraser":
+                label_text = (
+                    "All"
+                    if self.state.eraser_target_label is None
+                    else str(int(self.state.eraser_target_label))
+                )
+            else:
+                label_text = str(int(self.state.shared_tool_numeric_label))
+            self.state.tool_label_text = str(label_text)
+            self.bottom_panel.set_tool_label(self.state.tool_label_text)
             self._refresh_picked_readout()
             self._apply_picker_state_to_views()
             self._refresh_undo_ui_state()
             return
 
         self.bottom_panel.set_annotation_controls_enabled(True)
-        self.bottom_panel.set_active_label_bounds(0, self._annotation_label_ui_max())
-        self.bottom_panel.set_active_label(editor.active_label)
-        fill_max = self._annotation_label_ui_max()
-        self.state.flood_fill_target_label = max(0, min(int(self.state.flood_fill_target_label), fill_max))
-        self.bottom_panel.set_flood_fill_target_bounds(0, fill_max)
-        self.bottom_panel.set_flood_fill_target(self.state.flood_fill_target_label)
+        if self.state.annotation_tool == "eraser":
+            label_text = (
+                "All"
+                if self.state.eraser_target_label is None
+                else str(self.state.eraser_target_label)
+            )
+        else:
+            label_text = str(int(self.state.shared_tool_numeric_label))
+        self.state.tool_label_text = str(label_text)
+        self.bottom_panel.set_tool_label(self.state.tool_label_text)
         self._refresh_picked_readout()
         self._apply_picker_state_to_views()
         self._refresh_undo_ui_state()
@@ -5176,6 +5221,9 @@ class MainWindow(QMainWindow):
             return
         try:
             editor.set_active_label(int(value))
+            self.state.shared_tool_numeric_label = int(editor.active_label)
+            self.state.flood_fill_target_label = int(editor.active_label)
+            self.state.tool_label_text = str(int(editor.active_label))
         except ValueError as exc:
             show_warning(str(exc), parent=self)
         self._refresh_annotation_ui_state()
@@ -5191,6 +5239,9 @@ class MainWindow(QMainWindow):
         try:
             next_label = editor.next_available_label()
             editor.set_active_label(next_label)
+            self.state.shared_tool_numeric_label = int(next_label)
+            self.state.flood_fill_target_label = int(next_label)
+            self.state.tool_label_text = str(int(next_label))
         except ValueError as exc:
             show_warning(str(exc), parent=self)
         self._refresh_annotation_ui_state()
@@ -5211,13 +5262,66 @@ class MainWindow(QMainWindow):
             return
         self._set_annotation_tool_from_action(tool)
 
+    def _handle_tool_label_changed(self, value: str) -> None:
+        if MainWindow._inference_navigation_lock_active(self):
+            self._refresh_annotation_ui_state()
+            return
+        text = str(value).strip()
+        try:
+            previous_numeric_label = int(self.state.shared_tool_numeric_label)
+        except (TypeError, ValueError):
+            previous_numeric_label = 1
+        if previous_numeric_label < 0:
+            previous_numeric_label = 1
+        self.state.tool_label_text = text
+        if self.state.annotation_tool == "eraser":
+            self._handle_eraser_target_changed(text)
+            return
+        try:
+            parsed = int(text)
+        except ValueError:
+            show_warning("Tool Label must be a non-negative integer.", parent=self)
+            self.state.tool_label_text = str(previous_numeric_label)
+            self._refresh_annotation_ui_state()
+            return
+        if parsed < 0:
+            show_warning("Tool Label must be a non-negative integer.", parent=self)
+            self.state.tool_label_text = str(previous_numeric_label)
+            self._refresh_annotation_ui_state()
+            return
+        editor = self._segmentation_editor
+        if editor is not None:
+            max_label = int(np.iinfo(editor.dtype).max)
+            if parsed > max_label:
+                show_warning(
+                    f"Tool Label {parsed} exceeds max value {max_label} for dtype {editor.dtype}.",
+                    parent=self,
+                )
+                self.state.tool_label_text = str(previous_numeric_label)
+                self._refresh_annotation_ui_state()
+                return
+            try:
+                editor.set_active_label(int(parsed))
+            except ValueError:
+                self.state.tool_label_text = str(previous_numeric_label)
+                self._refresh_annotation_ui_state()
+                return
+        self.state.shared_tool_numeric_label = int(parsed)
+        self.state.flood_fill_target_label = int(parsed)
+        self.state.tool_label_text = str(int(parsed))
+        if self.state.annotation_tool == "flood_filler":
+            self._refresh_annotation_ui_state()
+            return
+        self._refresh_annotation_ui_state()
+
     def _handle_eraser_target_changed(self, value: str) -> None:
         if MainWindow._inference_navigation_lock_active(self):
             self._refresh_annotation_ui_state()
             return
         text = str(value).strip()
-        if text == "":
+        if text == "" or text.lower() == "all":
             self.state.eraser_target_label = None
+            self.state.tool_label_text = "All"
             self._refresh_annotation_ui_state()
             return
         try:
@@ -5241,6 +5345,9 @@ class MainWindow(QMainWindow):
                 self._refresh_annotation_ui_state()
                 return
         self.state.eraser_target_label = parsed
+        self.state.tool_label_text = str(parsed)
+        self.state.shared_tool_numeric_label = int(parsed)
+        self.state.flood_fill_target_label = int(parsed)
         self._refresh_annotation_ui_state()
 
     def _handle_pick_voxel(
@@ -5287,13 +5394,7 @@ class MainWindow(QMainWindow):
         self.state.pending_bbox_corner = None
         self._apply_picker_state_to_views()
 
-    def _handle_flood_fill_target_changed(self, value: int) -> None:
-        if MainWindow._inference_navigation_lock_active(self):
-            self._refresh_annotation_ui_state()
-            return
-        self.state.flood_fill_target_label = int(value)
-
-    def _handle_flood_fill_requested(self, target_label: int) -> None:
+    def _handle_flood_fill_requested(self, _target_label: int) -> None:
         if MainWindow._inference_navigation_lock_active(self):
             return
         if not self.state.annotation_mode_enabled or self.state.annotation_tool != "flood_filler":
@@ -5308,8 +5409,10 @@ class MainWindow(QMainWindow):
             return
         editor.begin_modification("flood_fill")
         try:
-            target = int(target_label)
+            target = int(self.state.shared_tool_numeric_label)
             self.state.flood_fill_target_label = target
+            self.state.shared_tool_numeric_label = target
+            self.state.tool_label_text = str(target)
             operation = editor.flood_fill_from_seed(
                 seed,
                 label=target,
