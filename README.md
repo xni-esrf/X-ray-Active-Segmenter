@@ -51,3 +51,21 @@ python3 open_ui_raw_viewer.py --help
 - For each feature, start with easier examples, then progressively add harder cases.
 - You can close the application without stopping a running training job. When training finishes, the best checkpoint (best validation weighted Dice) is saved and can be used for inference.
 - Training can be stopped at any point. If at least the first epoch has finished (about 1 hour), the best state reached so far is restored and can be used for inference.
+
+### Pointer/Scaling Troubleshooting
+- If cursor location and click/pan target do not match on a specific client machine, run the baseline and validation guides:
+  - `docs/pointer_scaling_baseline_checklist.md`
+  - `docs/pointer_scaling_step6_validation.md`
+- The application logs one startup diagnostic line with pointer mapping and DPI values. Look for:
+  - `OpenGL context: ...`
+  - `Pointer mapping: mode=... | vispy_pixel_scale=... | qt_widget_dpr=... | qt_screen_dpr=...`
+- Use helper scripts to capture and compare two client machines:
+  - `tools/capture_pointer_env.sh`
+  - `tools/extract_pointer_diagnostics.sh`
+- Temporary compatibility switch (safety valve):
+  - `XRA_USE_LEGACY_POINTER_SCALE=1 python open_ui_raw_viewer.py ...`
+  - This switch is intended for one validation/release cycle and then should be removed once all target clients are stable.
+- Optional cursor-size fallback (for tiny cursor rendering on some remote/display stacks):
+  - `python open_ui_raw_viewer.py --cursor-size 32 ...`
+  - or `XRA_CURSOR_SIZE=32 python open_ui_raw_viewer.py ...`
+  - This forces a larger application cursor at startup without changing pointer-coordinate mapping.

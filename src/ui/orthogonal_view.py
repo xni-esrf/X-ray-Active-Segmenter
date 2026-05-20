@@ -1077,58 +1077,91 @@ class OrthogonalView(QWidget):
                     return True
         return super().eventFilter(obj, event)
 
+    def _canvas_position_from_view_event(self, event) -> Optional[QPointF]:
+        position_getter = getattr(event, "position", None)
+        if not callable(position_getter):
+            return None
+        canvas_widget = getattr(self, "_canvas_widget", None)
+        if canvas_widget is None:
+            return None
+        try:
+            view_pos = position_getter()
+            canvas_point = canvas_widget.mapFrom(self, view_pos.toPoint())
+        except Exception:
+            return None
+
+        rect_getter = getattr(canvas_widget, "rect", None)
+        if callable(rect_getter):
+            try:
+                canvas_rect = rect_getter()
+                contains = getattr(canvas_rect, "contains", None)
+                if callable(contains) and not bool(contains(canvas_point)):
+                    return None
+            except Exception:
+                pass
+        return QPointF(canvas_point)
+
     def mousePressEvent(self, event) -> None:  # type: ignore[override]
-        canvas_pos = self._canvas_widget.mapFrom(self, event.position().toPoint())
-        self._update_hover_from_position(QPointF(canvas_pos))
-        self._refresh_bounding_box_hover_for_position(QPointF(canvas_pos))
+        canvas_pos = self._canvas_position_from_view_event(event)
+        if canvas_pos is None:
+            super().mousePressEvent(event)
+            return
+        self._update_hover_from_position(canvas_pos)
+        self._refresh_bounding_box_hover_for_position(canvas_pos)
         if event.button() == Qt.LeftButton:
             if self._bounding_box_interaction_enabled():
-                if self._handle_bounding_box_press(QPointF(canvas_pos)):
+                if self._handle_bounding_box_press(canvas_pos):
                     event.accept()
                     return
-                self._handle_picker_press(QPointF(canvas_pos))
+                self._handle_picker_press(canvas_pos)
                 event.accept()
                 return
             if self._annotation_tool() == "flood_filler":
-                self._handle_picker_press(QPointF(canvas_pos))
+                self._handle_picker_press(canvas_pos)
             else:
-                self._handle_annotation_press(QPointF(canvas_pos))
+                self._handle_annotation_press(canvas_pos)
             event.accept()
             return
         if event.button() == Qt.RightButton:
             self._handle_right_button_press(
-                QPointF(canvas_pos),
+                canvas_pos,
                 shift_pressed=bool(event.modifiers() & Qt.ShiftModifier),
             )
             event.accept()
             return
 
     def mouseMoveEvent(self, event) -> None:  # type: ignore[override]
-        canvas_pos = self._canvas_widget.mapFrom(self, event.position().toPoint())
-        self._update_hover_from_position(QPointF(canvas_pos))
-        self._refresh_bounding_box_hover_for_position(QPointF(canvas_pos))
+        canvas_pos = self._canvas_position_from_view_event(event)
+        if canvas_pos is None:
+            super().mouseMoveEvent(event)
+            return
+        self._update_hover_from_position(canvas_pos)
+        self._refresh_bounding_box_hover_for_position(canvas_pos)
         if event.buttons() & Qt.LeftButton:
             if (
                 self._bbox_drag_hit is not None or self._bounding_box_interaction_enabled()
-            ) and self._handle_bounding_box_move(QPointF(canvas_pos)):
+            ) and self._handle_bounding_box_move(canvas_pos):
                 event.accept()
                 return
             if self._annotation_tool() != "flood_filler":
-                self._handle_annotation_move(QPointF(canvas_pos))
+                self._handle_annotation_move(canvas_pos)
             event.accept()
             return
         if event.buttons() & Qt.RightButton:
             self._handle_right_button_move(
-                QPointF(canvas_pos),
+                canvas_pos,
                 shift_pressed=bool(event.modifiers() & Qt.ShiftModifier),
             )
             event.accept()
             return
 
     def mouseReleaseEvent(self, event) -> None:  # type: ignore[override]
-        canvas_pos = self._canvas_widget.mapFrom(self, event.position().toPoint())
-        self._update_hover_from_position(QPointF(canvas_pos))
-        self._refresh_bounding_box_hover_for_position(QPointF(canvas_pos))
+        canvas_pos = self._canvas_position_from_view_event(event)
+        if canvas_pos is None:
+            super().mouseReleaseEvent(event)
+            return
+        self._update_hover_from_position(canvas_pos)
+        self._refresh_bounding_box_hover_for_position(canvas_pos)
         if event.button() == Qt.LeftButton:
             if self._bbox_drag_hit is not None and self._handle_bounding_box_release():
                 event.accept()

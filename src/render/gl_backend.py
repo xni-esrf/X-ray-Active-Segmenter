@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, Optional, Tuple
 
 import colorsys
+import os
 import logging
 
 import numpy as np
@@ -1314,9 +1315,14 @@ class GLBackend:
             self.initialize()
         if self._canvas is None or self._image_node is None:
             return None
-        scale = float(getattr(self._canvas, "pixel_scale", 1.0) or 1.0)
-        x_canvas = x * scale
-        y_canvas = y * scale
+
+        x_canvas = float(x)
+        y_canvas = float(y)
+        if self._use_legacy_pointer_scale():
+            scale = float(getattr(self._canvas, "pixel_scale", 1.0) or 1.0)
+            x_canvas *= scale
+            y_canvas *= scale
+
         try:
             transform = self._image_node.get_transform(map_from="canvas", map_to="visual")
         except TypeError:
@@ -1342,6 +1348,15 @@ class GLBackend:
         if mapped is None or mapped.size == 0:
             return None
         return float(mapped[0][0]), float(mapped[0][1])
+
+    @staticmethod
+    def _use_legacy_pointer_scale() -> bool:
+        # Temporary compatibility switch kept as a safety valve while validating
+        # pointer mapping behavior across heterogeneous client displays.
+        value = os.environ.get("XRA_USE_LEGACY_POINTER_SCALE")
+        if value is None:
+            return False
+        return value.strip().lower() in {"1", "true", "yes", "on"}
 
     def _log_gl_context_info(self) -> None:
         if self._gl_info_logged:
@@ -1370,6 +1385,7 @@ class GLBackend:
             renderer or "unknown",
             version or "unknown",
         )
+        self._log_pointer_mapping_diagnostics()
 
     def _query_gl_string(self, gl, token_name: str) -> Optional[str]:
         token = getattr(gl, token_name, None)
@@ -1406,3 +1422,66 @@ class GLBackend:
             return text or None
         text = str(value).strip()
         return text or None
+
+    def _log_pointer_mapping_diagnostics(self) -> None:
+        mode = "legacy_pixel_scale" if self._use_legacy_pointer_scale() else "logical_canvas"
+        vispy_pixel_scale = self._safe_float(getattr(self._canvas, "pixel_scale", None))
+        native = getattr(self._canvas, "native", None)
+        qt_widget_dpr = self._safe_call_float(native, "devicePixelRatioF")
+        if qt_widget_dpr is None:
+            qt_widget_dpr = self._safe_call_float(native, "devicePixelRatio")
+
+        window_handle = self._safe_call(native, "windowHandle")
+        screen = self._safe_call(window_handle, "screen")
+        if screen is None:
+            screen = self._safe_call(native, "screen")
+        qt_screen_dpr = self._safe_call_float(screen, "devicePixelRatio")
+
+        logger.info(
+            "Pointer mapping: mode=%s | vispy_pixel_scale=%s | qt_widget_dpr=%s | qt_screen_dpr=%s | "
+            "env_QT_SCALE_FACTOR=%s | env_QT_AUTO_SCREEN_SCALE_FACTOR=%s | env_QT_SCREEN_SCALE_FACTORS=%s | "
+            "env_XRA_USE_LEGACY_POINTER_SCALE=%s",
+            mode,
+            self._fmt_optional_float(vispy_pixel_scale),
+            self._fmt_optional_float(qt_widget_dpr),
+            self._fmt_optional_float(qt_screen_dpr),
+            os.environ.get("QT_SCALE_FACTOR", ""),
+            os.environ.get("QT_AUTO_SCREEN_SCALE_FACTOR", ""),
+            os.environ.get("QT_SCREEN_SCALE_FACTORS", ""),
+            os.environ.get("XRA_USE_LEGACY_POINTER_SCALE", ""),
+        )
+
+    @staticmethod
+    def _safe_call(obj: object, method_name: str) -> Optional[object]:
+        if obj is None:
+            return None
+        method = getattr(obj, method_name, None)
+        if not callable(method):
+            return None
+        try:
+            return method()
+        except Exception:
+            return None
+
+    @staticmethod
+    def _safe_call_float(obj: object, method_name: str) -> Optional[float]:
+        value = GLBackend._safe_call(obj, method_name)
+        return GLBackend._safe_float(value)
+
+    @staticmethod
+    def _safe_float(value: object) -> Optional[float]:
+        if value is None:
+            return None
+        try:
+            numeric = float(value)
+        except Exception:
+            return None
+        if not np.isfinite(numeric):
+            return None
+        return numeric
+
+    @staticmethod
+    def _fmt_optional_float(value: Optional[float]) -> str:
+        if value is None:
+            return "n/a"
+        return f"{value:.6g}"

@@ -5,6 +5,7 @@ import unittest
 from types import SimpleNamespace
 
 import numpy as np
+from PySide6.QtCore import QPoint, QPointF, QRect
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -240,6 +241,43 @@ class OrthogonalViewShiftClickTests(unittest.TestCase):
                 view_like.state = SimpleNamespace(axis=axis)
                 result = OrthogonalView._indices_from_position(view_like, position=object())
                 self.assertEqual(result, expected)
+
+    def test_canvas_position_from_view_event_returns_canvas_position_when_inside_rect(self) -> None:
+        class _Event:
+            @staticmethod
+            def position() -> QPointF:
+                return QPointF(4.2, 6.8)
+
+        view_like = SimpleNamespace(
+            _canvas_widget=SimpleNamespace(
+                mapFrom=lambda _parent, point: QPoint(point.x(), point.y()),
+                rect=lambda: QRect(0, 0, 100, 100),
+            ),
+        )
+
+        result = OrthogonalView._canvas_position_from_view_event(view_like, _Event())
+
+        self.assertIsNotNone(result)
+        assert result is not None
+        self.assertAlmostEqual(result.x(), 4.0, places=6)
+        self.assertAlmostEqual(result.y(), 7.0, places=6)
+
+    def test_canvas_position_from_view_event_returns_none_when_outside_canvas_rect(self) -> None:
+        class _Event:
+            @staticmethod
+            def position() -> QPointF:
+                return QPointF(120.0, 20.0)
+
+        view_like = SimpleNamespace(
+            _canvas_widget=SimpleNamespace(
+                mapFrom=lambda _parent, point: QPoint(point.x(), point.y()),
+                rect=lambda: QRect(0, 0, 100, 100),
+            ),
+        )
+
+        result = OrthogonalView._canvas_position_from_view_event(view_like, _Event())
+
+        self.assertIsNone(result)
 
 
 if __name__ == "__main__":

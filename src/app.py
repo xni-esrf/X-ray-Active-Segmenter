@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from typing import Optional
 
+from PySide6.QtCore import QPointF, Qt
+from PySide6.QtGui import QColor, QCursor, QPainter, QPainterPath, QPen, QPixmap
 from PySide6.QtWidgets import QApplication
 
 from .annotation import SegmentationEditor
@@ -34,6 +37,94 @@ class AppContext:
     segmentation_editor: Optional[SegmentationEditor] = None
 
 
+def _resolve_forced_cursor_size(
+    forced_cursor_size: Optional[int],
+    *,
+    logger,
+) -> Optional[int]:
+    source = "--cursor-size"
+    raw_value: Optional[object] = forced_cursor_size
+    if raw_value is None:
+        source = "XRA_CURSOR_SIZE"
+        env_value = os.environ.get("XRA_CURSOR_SIZE")
+        if env_value is None or not str(env_value).strip():
+            return None
+        raw_value = env_value
+
+    try:
+        normalized = int(raw_value)
+    except (TypeError, ValueError):
+        logger.warning("Ignoring invalid %s value: %r", source, raw_value)
+        return None
+
+    if normalized <= 0:
+        logger.warning("Ignoring non-positive %s value: %d", source, normalized)
+        return None
+
+    if normalized < 12:
+        logger.info("Clamping %s from %d to minimum cursor size 12 px", source, normalized)
+        normalized = 12
+    if normalized > 128:
+        logger.info("Clamping %s from %d to maximum cursor size 128 px", source, normalized)
+        normalized = 128
+    return normalized
+
+
+def _build_forced_arrow_cursor(size_px: int) -> QCursor:
+    pixmap = QPixmap(size_px, size_px)
+    pixmap.fill(Qt.GlobalColor.transparent)
+
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+    # Draw a high-contrast arrow with a dark outline for remote-display visibility.
+    path = QPainterPath()
+    points = (
+        QPointF(size_px * 0.10, size_px * 0.05),
+        QPointF(size_px * 0.10, size_px * 0.88),
+        QPointF(size_px * 0.30, size_px * 0.67),
+        QPointF(size_px * 0.42, size_px * 0.97),
+        QPointF(size_px * 0.57, size_px * 0.90),
+        QPointF(size_px * 0.45, size_px * 0.60),
+        QPointF(size_px * 0.74, size_px * 0.60),
+    )
+    path.moveTo(points[0])
+    for point in points[1:]:
+        path.lineTo(point)
+    path.closeSubpath()
+
+    outline_width = max(1.0, float(size_px) * 0.08)
+    painter.setPen(
+        QPen(
+            QColor(0, 0, 0, 230),
+            outline_width,
+            Qt.PenStyle.SolidLine,
+            Qt.PenCapStyle.RoundCap,
+            Qt.PenJoinStyle.RoundJoin,
+        )
+    )
+    painter.setBrush(QColor(255, 255, 255, 240))
+    painter.drawPath(path)
+    painter.end()
+
+    hot_x = max(0, min(size_px - 1, int(round(size_px * 0.12))))
+    hot_y = max(0, min(size_px - 1, int(round(size_px * 0.06))))
+    return QCursor(pixmap, hot_x, hot_y)
+
+
+def _apply_forced_cursor_size(
+    app: QApplication,
+    forced_cursor_size: Optional[int],
+    *,
+    logger,
+) -> None:
+    size_px = _resolve_forced_cursor_size(forced_cursor_size, logger=logger)
+    if size_px is None:
+        return
+    app.setOverrideCursor(_build_forced_arrow_cursor(size_px))
+    logger.info("Applied forced application cursor size: %d px", size_px)
+
+
 def run(
     *,
     config: Optional[AppConfig] = None,
@@ -41,6 +132,7 @@ def run(
     semantic_path: Optional[str] = None,
     instance_path: Optional[str] = None,
     bbox_path: Optional[str] = None,
+    forced_cursor_size: Optional[int] = None,
     run_event_loop: bool = True,
 ) -> AppContext:
     config = config or AppConfig()
@@ -48,6 +140,7 @@ def run(
     logger = get_logger(__name__)
 
     app = QApplication.instance() or QApplication([])
+    _apply_forced_cursor_size(app, forced_cursor_size, logger=logger)
 
     renderer = Renderer(eager_statistics=(config.load_mode == "ram"))
     sync_manager = SyncManager()
