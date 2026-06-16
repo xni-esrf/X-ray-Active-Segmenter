@@ -77,6 +77,8 @@ class SegmentationEditor:
         active_label: Optional[int] = None,
         max_history_entries: int = _MAX_UNDO_ENTRIES,
         max_undo_bytes: int = _DEFAULT_MAX_UNDO_BYTES,
+        copy_array: bool = True,
+        initial_label_counts: Optional[Dict[int, int]] = None,
     ) -> None:
         if kind not in ("semantic", "instance"):
             raise ValueError("kind must be 'semantic' or 'instance'")
@@ -87,7 +89,7 @@ class SegmentationEditor:
         if not np.issubdtype(data.dtype, np.integer):
             raise ValueError("Segmentation editor expects an integer array dtype")
 
-        self._array = np.array(data, copy=True)
+        self._array = np.array(data, copy=bool(copy_array))
         self._kind = kind
         self._voxel_spacing = voxel_spacing
         self._axes = axes
@@ -107,7 +109,11 @@ class SegmentationEditor:
         self._redo_stack: List[_UndoEntry] = []
         self._redo_total_bytes = 0
         self._active_modification: Optional[_PendingModification] = None
-        self._label_counts = self._build_label_counts(self._array)
+        self._label_counts = (
+            self._normalize_label_counts(initial_label_counts)
+            if initial_label_counts is not None
+            else self._build_label_counts(self._array)
+        )
         self._active_label = 1
 
         if active_label is None:
@@ -157,6 +163,7 @@ class SegmentationEditor:
         if len(shape) != 3:
             raise ValueError("shape must contain exactly 3 dimensions (z, y, x)")
         array = np.zeros(shape, dtype=normalized_dtype)
+        voxel_count = int(np.prod(tuple(int(dim) for dim in shape), dtype=np.int64))
         return cls(
             array,
             kind=kind,
@@ -166,6 +173,8 @@ class SegmentationEditor:
             active_label=active_label,
             max_history_entries=max_history_entries,
             max_undo_bytes=max_undo_bytes,
+            copy_array=False,
+            initial_label_counts={0: voxel_count} if voxel_count > 0 else {},
         )
 
     @property
@@ -1306,6 +1315,18 @@ class SegmentationEditor:
             return {}
         labels, counts = np.unique(array, return_counts=True)
         return {int(label): int(count) for label, count in zip(labels, counts)}
+
+    def _normalize_label_counts(
+        self,
+        label_counts: Dict[int, int],
+    ) -> Dict[int, int]:
+        normalized: Dict[int, int] = {}
+        for label, count in label_counts.items():
+            label_int = int(label)
+            count_int = int(count)
+            if count_int > 0:
+                normalized[label_int] = count_int
+        return normalized
 
     def _update_counts_after_assignment(self, previous_values: np.ndarray, target_label: int) -> None:
         if previous_values.size == 0:

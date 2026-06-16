@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 import numpy as np
@@ -23,6 +24,34 @@ class SegmentationEditorTests(unittest.TestCase):
         )
         editor = SegmentationEditor(volume, kind="instance")
         self.assertEqual(editor.active_label, 3)
+
+    def test_constructor_copies_source_array(self) -> None:
+        array = np.array([[[0, 1, 2]]], dtype=np.uint8)
+        editor = SegmentationEditor(array, kind="semantic")
+
+        array[0, 0, 1] = 9
+
+        np.testing.assert_array_equal(
+            editor.array_view(),
+            np.array([[[0, 1, 2]]], dtype=np.uint8),
+        )
+
+    def test_create_empty_skips_full_label_count_scan(self) -> None:
+        with mock.patch.object(
+            SegmentationEditor,
+            "_build_label_counts",
+            side_effect=AssertionError("create_empty should seed zero counts directly"),
+        ):
+            editor = SegmentationEditor.create_empty(
+                (2, 3, 4),
+                kind="semantic",
+                dtype=np.uint16,
+            )
+
+        self.assertEqual(editor.labels_in_use(include_background=True), (0,))
+        self.assertEqual(editor.active_label, 1)
+        self.assertEqual(editor.array_view().shape, (2, 3, 4))
+        self.assertEqual(editor.array_view().dtype, np.dtype(np.uint16))
 
     def test_paint_voxel_updates_data_and_history(self) -> None:
         editor = SegmentationEditor.create_empty((3, 3, 3), kind="semantic", dtype=np.uint8)

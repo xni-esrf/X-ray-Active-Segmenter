@@ -2,7 +2,10 @@ from __future__ import annotations
 
 import os
 import unittest
+from unittest import mock
 from types import SimpleNamespace
+
+import numpy as np
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
@@ -14,6 +17,67 @@ except Exception:  # pragma: no cover - environment dependent
 
 @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
 class MainWindowSetVolumeTests(unittest.TestCase):
+    def test_manual_segmentation_generation_skips_full_label_count_scan(self) -> None:
+        attach_calls: list[tuple[object, object]] = []
+        label_calls: list[tuple[int, ...]] = []
+        level_calls: list[tuple[object, ...]] = []
+        refresh_calls: list[str] = []
+        hover_calls: list[str] = []
+
+        raw_volume = SimpleNamespace(
+            info=SimpleNamespace(
+                shape=(2, 3, 4),
+                voxel_spacing=(1.0, 1.0, 1.0),
+                axes="zyx",
+            ),
+            loader=SimpleNamespace(path="/tmp/raw-volume.npy"),
+        )
+        renderer = SimpleNamespace(
+            attach_segmentation=lambda volume, *, levels=None: attach_calls.append((volume, levels)),
+            set_segmentation_labels=lambda labels: label_calls.append(tuple(labels)),
+        )
+        window_like = SimpleNamespace(
+            _segmentation_editor=None,
+            _raw_volume=raw_volume,
+            _annotation_kind="semantic",
+            _semantic_volume=None,
+            _semantic_worker=None,
+            _instance_volume=None,
+            _instance_worker=None,
+            _annotation_labels_dirty=True,
+            renderer=renderer,
+            bottom_panel=SimpleNamespace(
+                set_pyramid_levels=lambda *args, **_kwargs: level_calls.append(tuple(args)),
+            ),
+            _editable_segmentation_levels=lambda volume: (volume,),
+            _sync_level_mode_controls_from_renderer=lambda: None,
+            _refresh_hover_readout=lambda: hover_calls.append("hover"),
+            _refresh_annotation_ui_state=lambda: refresh_calls.append("refresh"),
+        )
+        window_like._attach_segmentation_editor = (
+            lambda editor, *, kind: MainWindow._attach_segmentation_editor(
+                window_like,
+                editor,
+                kind=kind,
+            )
+        )
+
+        with mock.patch(
+            "src.annotation.segmentation_editor.SegmentationEditor._build_label_counts",
+            side_effect=AssertionError("manual empty segmentation should not scan all voxels"),
+        ):
+            self.assertTrue(MainWindow._ensure_editable_segmentation_for_annotation(window_like))
+
+        self.assertIsNotNone(window_like._segmentation_editor)
+        self.assertEqual(window_like._segmentation_editor.array_view().shape, (2, 3, 4))
+        self.assertEqual(window_like._segmentation_editor.array_view().dtype, np.dtype(np.uint32))
+        self.assertEqual(window_like._segmentation_editor.labels_in_use(include_background=True), (0,))
+        self.assertEqual(label_calls, [(0,)])
+        self.assertEqual(len(attach_calls), 1)
+        self.assertEqual(len(level_calls), 1)
+        self.assertEqual(refresh_calls, ["refresh", "refresh"])
+        self.assertEqual(hover_calls, ["hover"])
+
     def test_set_volume_resets_contrast_window_on_new_raw_load(self) -> None:
         contrast_calls: list[tuple[str, object]] = []
         level_mode_calls: list[dict[str, object]] = []
