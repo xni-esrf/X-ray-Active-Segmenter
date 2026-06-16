@@ -15,10 +15,36 @@ except Exception:  # pragma: no cover - environment dependent
 
 @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
 class MainWindowModelInstantiationFlowTests(unittest.TestCase):
+    def test_handle_load_model_request_does_not_prepare_learning_state(self) -> None:
+        calls = []
+        window_like = SimpleNamespace(
+            _abort_if_learning_training_running=lambda: False,
+            _ensure_learning_state_for_action=lambda _action: calls.append("prepare"),
+            _instantiate_foundation_model_with_dialog=lambda: calls.append("load"),
+        )
+
+        with patch.object(
+            MainWindow,
+            "_inference_navigation_lock_active",
+            return_value=False,
+        ):
+            MainWindow._handle_load_model_request(window_like)
+
+        self.assertEqual(calls, ["load"])
+
     def test_instantiate_model_aborts_when_reinitialize_is_declined(self) -> None:
         existing_runtime = object()
         window_like = SimpleNamespace()
-        preconditions = SimpleNamespace(num_classes=6, device_ids=(0, 1))
+        preconditions = SimpleNamespace(
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            num_classes=6,
+            label_values=(0, 1, 2, 3, 4, 5),
+            device_ids=(0, 1),
+        )
+        checkpoint_dialog_result = SimpleNamespace(
+            accepted=True,
+            path="foundation_model/weights_epoch_190.cp",
+        )
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
@@ -27,10 +53,11 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
             "src.ui.main_window.confirm_reinitialize_model",
             return_value=False,
         ) as confirm_mock, patch(
-            "src.ui.main_window.validate_foundation_model_instantiation_preconditions",
+            "src.ui.main_window.validate_foundation_checkpoint_load_preconditions",
             return_value=preconditions,
         ) as validate_mock, patch(
             "src.ui.main_window.open_model_checkpoint_dialog",
+            return_value=checkpoint_dialog_result,
         ) as checkpoint_dialog_mock, patch(
             "src.ui.main_window.instantiate_foundation_model_runtime"
         ) as instantiate_mock, patch(
@@ -41,9 +68,12 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
             result = MainWindow._instantiate_foundation_model_with_dialog(window_like)
 
         self.assertFalse(result)
+        checkpoint_dialog_mock.assert_called_once_with(window_like)
+        validate_mock.assert_called_once_with(
+            "foundation_model/weights_epoch_190.cp",
+            require_min_gpu_count=2,
+        )
         confirm_mock.assert_called_once_with(parent=window_like)
-        validate_mock.assert_called_once_with(require_min_gpu_count=2)
-        checkpoint_dialog_mock.assert_not_called()
         instantiate_mock.assert_not_called()
         show_warning_mock.assert_not_called()
         show_info_mock.assert_not_called()
@@ -51,11 +81,17 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
     def test_instantiate_model_confirms_then_reinitializes_existing_runtime(self) -> None:
         existing_runtime = object()
         window_like = SimpleNamespace()
-        preconditions = SimpleNamespace(num_classes=6, device_ids=(0, 1))
+        preconditions = SimpleNamespace(
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            num_classes=6,
+            label_values=(0, 1, 2, 3, 4, 5),
+            device_ids=(0, 1),
+        )
         instantiated_runtime = SimpleNamespace(
             checkpoint_path="foundation_model/weights_epoch_190.cp",
             num_classes=6,
             device_ids=(0, 1),
+            hyperparameters={},
         )
         checkpoint_dialog_result = SimpleNamespace(
             accepted=True,
@@ -69,7 +105,7 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
             "src.ui.main_window.confirm_reinitialize_model",
             return_value=True,
         ) as confirm_mock, patch(
-            "src.ui.main_window.validate_foundation_model_instantiation_preconditions",
+            "src.ui.main_window.validate_foundation_checkpoint_load_preconditions",
             return_value=preconditions,
         ) as validate_mock, patch(
             "src.ui.main_window.open_model_checkpoint_dialog",
@@ -86,13 +122,17 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
 
         self.assertTrue(result)
         confirm_mock.assert_called_once_with(parent=window_like)
-        validate_mock.assert_called_once_with(require_min_gpu_count=2)
         checkpoint_dialog_mock.assert_called_once_with(window_like)
+        validate_mock.assert_called_once_with(
+            "foundation_model/weights_epoch_190.cp",
+            require_min_gpu_count=2,
+        )
         instantiate_mock.assert_called_once_with(
             num_classes=6,
             device_ids=(0, 1),
             checkpoint_path="foundation_model/weights_epoch_190.cp",
         )
+        self.assertEqual(instantiated_runtime.hyperparameters.get("label_values"), (0, 1, 2, 3, 4, 5))
         show_warning_mock.assert_not_called()
         show_info_mock.assert_called_once()
         info_text = show_info_mock.call_args.args[0]
@@ -101,6 +141,10 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
 
     def test_instantiate_model_warns_and_aborts_when_gpu_count_is_too_low(self) -> None:
         window_like = SimpleNamespace()
+        checkpoint_dialog_result = SimpleNamespace(
+            accepted=True,
+            path="foundation_model/weights_epoch_190.cp",
+        )
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
@@ -108,12 +152,13 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
         ), patch(
             "src.ui.main_window.confirm_reinitialize_model"
         ) as confirm_mock, patch(
-            "src.ui.main_window.validate_foundation_model_instantiation_preconditions",
+            "src.ui.main_window.validate_foundation_checkpoint_load_preconditions",
             side_effect=RuntimeError(
                 "At least 2 CUDA devices are required to instantiate the model; found 1."
             ),
         ) as validate_mock, patch(
             "src.ui.main_window.open_model_checkpoint_dialog",
+            return_value=checkpoint_dialog_result,
         ) as checkpoint_dialog_mock, patch(
             "src.ui.main_window.instantiate_foundation_model_runtime"
         ) as instantiate_mock, patch(
@@ -125,15 +170,22 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
 
         self.assertFalse(result)
         confirm_mock.assert_not_called()
-        validate_mock.assert_called_once_with(require_min_gpu_count=2)
-        checkpoint_dialog_mock.assert_not_called()
+        checkpoint_dialog_mock.assert_called_once_with(window_like)
+        validate_mock.assert_called_once_with(
+            "foundation_model/weights_epoch_190.cp",
+            require_min_gpu_count=2,
+        )
         instantiate_mock.assert_not_called()
         show_info_mock.assert_not_called()
         show_warning_mock.assert_called_once()
         self.assertIn("At least 2 CUDA devices", show_warning_mock.call_args.args[0])
 
-    def test_instantiate_model_warns_when_training_runtime_missing(self) -> None:
+    def test_instantiate_model_warns_when_checkpoint_metadata_is_missing(self) -> None:
         window_like = SimpleNamespace()
+        checkpoint_dialog_result = SimpleNamespace(
+            accepted=True,
+            path="foundation_model/weights_epoch_190.cp",
+        )
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
@@ -141,12 +193,13 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
         ), patch(
             "src.ui.main_window.confirm_reinitialize_model"
         ) as confirm_mock, patch(
-            "src.ui.main_window.validate_foundation_model_instantiation_preconditions",
+            "src.ui.main_window.validate_foundation_checkpoint_load_preconditions",
             side_effect=ValueError(
-                "No training dataloader runtime is available in session storage."
+                "Checkpoint metadata.hyperparameters.label_values is missing."
             ),
         ) as validate_mock, patch(
             "src.ui.main_window.open_model_checkpoint_dialog",
+            return_value=checkpoint_dialog_result,
         ) as checkpoint_dialog_mock, patch(
             "src.ui.main_window.instantiate_foundation_model_runtime"
         ) as instantiate_mock, patch(
@@ -158,27 +211,27 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
 
         self.assertFalse(result)
         confirm_mock.assert_not_called()
-        validate_mock.assert_called_once_with(require_min_gpu_count=2)
-        checkpoint_dialog_mock.assert_not_called()
+        checkpoint_dialog_mock.assert_called_once_with(window_like)
+        validate_mock.assert_called_once_with(
+            "foundation_model/weights_epoch_190.cp",
+            require_min_gpu_count=2,
+        )
         instantiate_mock.assert_not_called()
         show_info_mock.assert_not_called()
         show_warning_mock.assert_called_once()
         warning_text = show_warning_mock.call_args.args[0]
-        self.assertIn("No training dataloader runtime", warning_text)
+        self.assertIn("label_values is missing", warning_text)
 
-    def test_instantiate_model_persists_label_values_from_eval_runtimes(self) -> None:
+    def test_instantiate_model_persists_label_values_from_checkpoint_metadata(self) -> None:
         window_like = SimpleNamespace()
         preconditions = SimpleNamespace(
+            checkpoint_path="normalized/weights_epoch_190.cp",
             num_classes=3,
+            label_values=(0, 1, 2),
             device_ids=(0, 1),
-            eval_runtimes_by_box_id={
-                "bbox_1001": SimpleNamespace(
-                    buffer=SimpleNamespace(label_values=(0, 1, 2))
-                )
-            },
         )
         instantiated_runtime = SimpleNamespace(
-            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            checkpoint_path="normalized/weights_epoch_190.cp",
             num_classes=3,
             device_ids=(0, 1),
             hyperparameters={},
@@ -194,7 +247,7 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
         ), patch(
             "src.ui.main_window.confirm_reinitialize_model"
         ) as confirm_mock, patch(
-            "src.ui.main_window.validate_foundation_model_instantiation_preconditions",
+            "src.ui.main_window.validate_foundation_checkpoint_load_preconditions",
             return_value=preconditions,
         ) as validate_mock, patch(
             "src.ui.main_window.open_model_checkpoint_dialog",
@@ -211,12 +264,15 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
 
         self.assertTrue(result)
         confirm_mock.assert_not_called()
-        validate_mock.assert_called_once_with(require_min_gpu_count=2)
         checkpoint_dialog_mock.assert_called_once_with(window_like)
+        validate_mock.assert_called_once_with(
+            "foundation_model/weights_epoch_190.cp",
+            require_min_gpu_count=2,
+        )
         instantiate_mock.assert_called_once_with(
             num_classes=3,
             device_ids=(0, 1),
-            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            checkpoint_path="normalized/weights_epoch_190.cp",
         )
         show_warning_mock.assert_not_called()
         show_info_mock.assert_called_once()

@@ -65,6 +65,7 @@ from ..learning import (
     instantiate_foundation_model_runtime,
     save_foundation_model_checkpoint,
     train_learning_model_with_validation_loop,
+    validate_foundation_checkpoint_load_preconditions,
     validate_foundation_model_instantiation_preconditions,
     validate_learning_model_training_preconditions,
 )
@@ -248,14 +249,9 @@ def _resolve_inference_label_values_for_runtime(model_runtime: object) -> Tuple[
             )
         return resolved_label_values
 
-    eval_runtimes_by_box_id = get_current_learning_eval_runtimes_by_box_id()
-    if eval_runtimes_by_box_id:
-        return _resolve_shared_eval_label_values(eval_runtimes_by_box_id)
-
     raise ValueError(
-        "Inference requires class label_values, but the loaded model metadata does not provide them "
-        "and no evaluation runtimes/buffers are available as fallback. "
-        "Load a checkpoint with label_values metadata or build training/validation learning state once."
+        "Inference requires class label_values in loaded model metadata. "
+        "Load a checkpoint saved with label_values metadata."
     )
 
 
@@ -2012,10 +2008,6 @@ class MainWindow(QMainWindow):
             return
         if self._abort_if_learning_training_running():
             return
-        ensure_learning_state = getattr(self, "_ensure_learning_state_for_action", None)
-        if callable(ensure_learning_state):
-            if not bool(ensure_learning_state("load_model")):
-                return
         self._instantiate_foundation_model_with_dialog()
 
     def _handle_save_model_request(self) -> None:
@@ -4135,14 +4127,6 @@ class MainWindow(QMainWindow):
 
     def _instantiate_foundation_model_with_dialog(self) -> bool:
         try:
-            preconditions = validate_foundation_model_instantiation_preconditions(
-                require_min_gpu_count=2,
-            )
-            existing_runtime = get_current_learning_model_runtime()
-            if existing_runtime is not None:
-                if not confirm_reinitialize_model(parent=self):
-                    return False
-
             dialog_result = open_model_checkpoint_dialog(self)
             if not dialog_result.accepted or not dialog_result.path:
                 return False
@@ -4154,29 +4138,32 @@ class MainWindow(QMainWindow):
                 )
                 return False
 
+            preconditions = validate_foundation_checkpoint_load_preconditions(
+                checkpoint_path,
+                require_min_gpu_count=2,
+            )
+            checkpoint_path = str(preconditions.checkpoint_path)
+            existing_runtime = get_current_learning_model_runtime()
+            if existing_runtime is not None:
+                if not confirm_reinitialize_model(parent=self):
+                    return False
+
             runtime = instantiate_foundation_model_runtime(
                 num_classes=preconditions.num_classes,
                 device_ids=preconditions.device_ids,
                 checkpoint_path=checkpoint_path,
             )
-            eval_runtimes_by_box_id = getattr(preconditions, "eval_runtimes_by_box_id", None)
-            if isinstance(eval_runtimes_by_box_id, Mapping):
-                persist_label_values = getattr(
-                    self,
-                    "_persist_model_runtime_label_values_from_eval_runtimes",
-                    None,
+            hyperparameters_obj = getattr(runtime, "hyperparameters", None)
+            if not isinstance(hyperparameters_obj, dict):
+                raise ValueError("Loaded model runtime does not expose mutable hyperparameters.")
+            hyperparameters_obj["label_values"] = tuple(
+                int(value) for value in tuple(preconditions.label_values)
+            )
+            resolved_label_values = _resolve_inference_label_values_for_runtime(runtime)
+            if tuple(resolved_label_values) != tuple(preconditions.label_values):
+                raise ValueError(
+                    "Loaded model runtime label_values do not match checkpoint metadata."
                 )
-                if callable(persist_label_values):
-                    persist_label_values(
-                        runtime,
-                        eval_runtimes_by_box_id=eval_runtimes_by_box_id,
-                    )
-                else:
-                    MainWindow._persist_model_runtime_label_values_from_eval_runtimes(
-                        self,
-                        runtime,
-                        eval_runtimes_by_box_id=eval_runtimes_by_box_id,
-                    )
         except Exception as exc:
             show_warning(_exception_message(exc), parent=self)
             return False

@@ -220,6 +220,20 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         )
         return window_like
 
+    def _make_model_runtime(
+        self,
+        *,
+        label_values: tuple[int, ...] = (0, 1),
+        model: object | None = None,
+        device_ids: tuple[int, ...] = tuple(),
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            model=_FakeModel() if model is None else model,
+            device_ids=tuple(device_ids),
+            num_classes=len(tuple(label_values)),
+            hyperparameters={"label_values": tuple(label_values)},
+        )
+
     def test_segment_inference_aborts_when_model_is_missing(self) -> None:
         inference_box = self._make_box(
             box_id="bbox_0001",
@@ -276,7 +290,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         warning_mock.assert_called_once()
         self.assertIn("labeled 'inference'", warning_mock.call_args.args[0])
 
-    def test_segment_inference_aborts_when_label_values_and_eval_fallback_are_missing(self) -> None:
+    def test_segment_inference_aborts_when_model_metadata_label_values_are_missing(self) -> None:
         inference_box = self._make_box(
             box_id="bbox_0001",
             label="inference",
@@ -296,10 +310,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=object(),
-        ), patch(
-            "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
-            return_value={},
+            return_value=SimpleNamespace(hyperparameters={}, num_classes=2),
         ), patch("src.ui.main_window.show_warning") as warning_mock:
             result = MainWindow._segment_inference_bboxes_with_dialog(window_like)
 
@@ -307,9 +318,9 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         warning_mock.assert_called_once()
         warning_text = warning_mock.call_args.args[0].lower()
         self.assertIn("inference requires class label_values", warning_text)
-        self.assertIn("no evaluation runtimes/buffers", warning_text)
+        self.assertIn("loaded model metadata", warning_text)
 
-    def test_segment_inference_aborts_when_eval_label_order_disagrees(self) -> None:
+    def test_segment_inference_aborts_when_model_label_values_do_not_match_num_classes(self) -> None:
         inference_box = self._make_box(
             box_id="bbox_0001",
             label="inference",
@@ -327,23 +338,18 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
             raw_volume=object(),
         )
 
-        eval_runtimes = {
-            "bbox_1001": SimpleNamespace(buffer=SimpleNamespace(label_values=(0, 1, 2))),
-            "bbox_1002": SimpleNamespace(buffer=SimpleNamespace(label_values=(0, 2, 1))),
-        }
-
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=object(),
-        ), patch(
-            "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
-            return_value=eval_runtimes,
+            return_value=SimpleNamespace(
+                hyperparameters={"label_values": (0, 1)},
+                num_classes=3,
+            ),
         ), patch("src.ui.main_window.show_warning") as warning_mock:
             result = MainWindow._segment_inference_bboxes_with_dialog(window_like)
 
         self.assertFalse(result)
         warning_mock.assert_called_once()
-        self.assertIn("share the same label_values ordering", warning_mock.call_args.args[0])
+        self.assertIn("label_values length does not match", warning_mock.call_args.args[0])
 
     def test_segment_inference_blocks_instance_map_without_semantic(self) -> None:
         inference_box = self._make_box(
@@ -368,7 +374,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=object(),
+            return_value=self._make_model_runtime(label_values=(0, 1, 2)),
         ), patch(
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
@@ -404,7 +410,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=object(),
+            return_value=self._make_model_runtime(label_values=(0, 1, 2)),
         ), patch(
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
@@ -482,7 +488,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=object(),
+            return_value=self._make_model_runtime(label_values=(0, 1, 2)),
         ), patch(
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
@@ -521,7 +527,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=object(),
+            return_value=self._make_model_runtime(label_values=(0, 1, 2)),
         ), patch(
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
@@ -570,7 +576,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         with patch.dict(sys.modules, {"torch": _FakeTorchModule}), patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=SimpleNamespace(model=_FakeModel(), device_ids=tuple()),
+            return_value=self._make_model_runtime(model=_FakeModel()),
         ), patch(
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
@@ -631,7 +637,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         with patch.dict(sys.modules, {"torch": _FakeTorchModule}), patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=SimpleNamespace(model=_FakeModel(), device_ids=tuple()),
+            return_value=self._make_model_runtime(model=_FakeModel()),
         ), patch(
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
@@ -717,7 +723,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         with patch.dict(sys.modules, {"torch": _FakeTorchModule}), patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=SimpleNamespace(model=_FakeModel(), device_ids=tuple()),
+            return_value=self._make_model_runtime(model=_FakeModel()),
         ), patch(
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
@@ -780,7 +786,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         with patch.dict(sys.modules, {"torch": _FakeTorchModule}), patch(
             "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=SimpleNamespace(model=_FakeModel(), device_ids=tuple()),
+            return_value=self._make_model_runtime(model=_FakeModel()),
         ), patch(
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
@@ -865,7 +871,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         self.assertIn("label_values", started_kwargs)
         self.assertEqual(tuple(started_kwargs["label_values"]), (0, 1))
 
-    def test_segment_inference_uses_eval_runtime_label_values_fallback_when_metadata_missing(self) -> None:
+    def test_segment_inference_rejects_eval_runtime_label_values_fallback_when_metadata_missing(self) -> None:
         inference_box = self._make_box(
             box_id="bbox_0001",
             label="inference",
@@ -882,21 +888,12 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
             semantic_volume=_FakeVolume(np.zeros((32, 32, 32), dtype=np.int16)),
             raw_volume=_FakeVolume(np.zeros((32, 32, 32), dtype=np.float32)),
         )
-        call_order: list[str] = []
-        started_calls: list[dict[str, object]] = []
         eval_runtimes = {
             "bbox_1001": SimpleNamespace(buffer=SimpleNamespace(label_values=(0, 1))),
         }
 
-        def _show_notice() -> None:
-            call_order.append("notice")
-
-        def _start_background(**kwargs: object) -> None:
-            call_order.append("start")
-            started_calls.append(dict(kwargs))
-
-        window_like._show_inference_navigation_only_notice = _show_notice
-        window_like._start_learning_inference_background = _start_background
+        window_like._show_inference_navigation_only_notice = lambda: None
+        window_like._start_learning_inference_background = lambda **_kwargs: None
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
@@ -915,14 +912,12 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         ) as warning_mock:
             result = MainWindow._segment_inference_bboxes_with_dialog(window_like)
 
-        self.assertTrue(result)
-        warning_mock.assert_not_called()
-        shared_label_values_mock.assert_called_once_with(eval_runtimes)
-        self.assertEqual(call_order, ["notice", "start"])
-        self.assertEqual(len(started_calls), 1)
-        started_kwargs = started_calls[0]
-        self.assertIn("label_values", started_kwargs)
-        self.assertEqual(tuple(started_kwargs["label_values"]), (0, 1))
+        self.assertFalse(result)
+        shared_label_values_mock.assert_not_called()
+        warning_mock.assert_called_once()
+        warning_text = warning_mock.call_args.args[0].lower()
+        self.assertIn("label_values", warning_text)
+        self.assertIn("loaded model metadata", warning_text)
 
 
 if __name__ == "__main__":

@@ -17,8 +17,10 @@ from src.learning.model_instantiation import (
     FoundationModelConfig,
     FoundationInstantiationPreconditions,
     _extract_encoder_weights,
+    inspect_foundation_checkpoint_metadata,
     instantiate_foundation_model_runtime,
     save_foundation_model_checkpoint,
+    validate_foundation_checkpoint_load_preconditions,
     validate_foundation_model_instantiation_preconditions,
 )
 
@@ -46,6 +48,116 @@ class FoundationModelInstantiationHelperTests(unittest.TestCase):
             _extract_encoder_weights({})
         with self.assertRaises(TypeError):
             _extract_encoder_weights(object())  # type: ignore[arg-type]
+
+
+class FoundationCheckpointMetadataTests(unittest.TestCase):
+    class _FakeTorchModule:
+        def __init__(self, state, *, gpu_count: int = 2) -> None:
+            self.state = state
+            self.calls = []
+            self.cuda = SimpleNamespace(device_count=lambda: int(gpu_count))
+
+        def load(self, path, *, map_location):
+            self.calls.append((str(path), map_location))
+            return self.state
+
+    def test_inspect_foundation_checkpoint_metadata_reads_num_classes_and_label_values(self) -> None:
+        torch_module = self._FakeTorchModule(
+            {
+                "metadata": {
+                    "num_classes": 3,
+                    "hyperparameters": {"label_values": (0, 1, 2)},
+                }
+            }
+        )
+
+        metadata = inspect_foundation_checkpoint_metadata(
+            "model.cp",
+            torch_module=torch_module,
+        )
+
+        self.assertEqual(metadata.checkpoint_path, "model.cp")
+        self.assertEqual(metadata.num_classes, 3)
+        self.assertEqual(metadata.label_values, (0, 1, 2))
+        self.assertEqual(torch_module.calls, [("model.cp", "cpu")])
+
+    def test_inspect_foundation_checkpoint_metadata_rejects_missing_metadata(self) -> None:
+        torch_module = self._FakeTorchModule({})
+
+        with self.assertRaisesRegex(ValueError, "metadata is missing"):
+            inspect_foundation_checkpoint_metadata(
+                "model.cp",
+                torch_module=torch_module,
+            )
+
+    def test_inspect_foundation_checkpoint_metadata_rejects_missing_num_classes(self) -> None:
+        torch_module = self._FakeTorchModule(
+            {
+                "metadata": {
+                    "hyperparameters": {"label_values": (0, 1)},
+                }
+            }
+        )
+
+        with self.assertRaisesRegex(TypeError, "metadata.num_classes"):
+            inspect_foundation_checkpoint_metadata(
+                "model.cp",
+                torch_module=torch_module,
+            )
+
+    def test_inspect_foundation_checkpoint_metadata_rejects_missing_label_values(self) -> None:
+        torch_module = self._FakeTorchModule(
+            {
+                "metadata": {
+                    "num_classes": 3,
+                    "hyperparameters": {},
+                }
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "label_values is missing"):
+            inspect_foundation_checkpoint_metadata(
+                "model.cp",
+                torch_module=torch_module,
+            )
+
+    def test_inspect_foundation_checkpoint_metadata_rejects_label_value_count_mismatch(self) -> None:
+        torch_module = self._FakeTorchModule(
+            {
+                "metadata": {
+                    "num_classes": 3,
+                    "hyperparameters": {"label_values": (0, 1)},
+                }
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "length must match num_classes"):
+            inspect_foundation_checkpoint_metadata(
+                "model.cp",
+                torch_module=torch_module,
+            )
+
+    def test_validate_foundation_checkpoint_load_preconditions_uses_metadata_and_gpus(self) -> None:
+        torch_module = self._FakeTorchModule(
+            {
+                "metadata": {
+                    "num_classes": 2,
+                    "hyperparameters": {"label_values": (0, 1)},
+                }
+            },
+            gpu_count=3,
+        )
+
+        preconditions = validate_foundation_checkpoint_load_preconditions(
+            "model.cp",
+            require_min_gpu_count=2,
+            torch_module=torch_module,
+        )
+
+        self.assertEqual(preconditions.num_classes, 2)
+        self.assertEqual(preconditions.label_values, (0, 1))
+        self.assertEqual(preconditions.available_gpu_count, 3)
+        self.assertEqual(preconditions.device_ids, (0, 1, 2))
 
 
 class FoundationModelInstantiationFlowTests(unittest.TestCase):

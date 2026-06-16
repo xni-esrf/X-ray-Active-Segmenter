@@ -576,6 +576,117 @@ class FoundationInstantiationPreconditions:
     device_ids: Tuple[int, ...]
 
 
+@dataclass(frozen=True)
+class FoundationCheckpointMetadata:
+    checkpoint_path: str
+    num_classes: int
+    label_values: Tuple[int, ...]
+
+
+@dataclass(frozen=True)
+class FoundationCheckpointLoadPreconditions:
+    checkpoint_path: str
+    num_classes: int
+    label_values: Tuple[int, ...]
+    available_gpu_count: int
+    device_ids: Tuple[int, ...]
+
+
+def inspect_foundation_checkpoint_metadata(
+    checkpoint_path: str,
+    *,
+    torch_module: Optional[object] = None,
+    checkpoint_loader: Optional[Callable[..., object]] = None,
+) -> FoundationCheckpointMetadata:
+    torch_mod = _require_torch() if torch_module is None else torch_module
+    resolved_checkpoint_path = _coerce_non_empty_path(
+        checkpoint_path,
+        name="checkpoint_path",
+    )
+    if Path(resolved_checkpoint_path).suffix.lower() != ".cp":
+        raise ValueError("Model checkpoints must use the .cp extension.")
+
+    if checkpoint_loader is None:
+        checkpoint_loader = lambda path, *, map_location: torch_mod.load(  # noqa: E731
+            path,
+            map_location=map_location,
+        )
+    checkpoint_state = checkpoint_loader(
+        resolved_checkpoint_path,
+        map_location="cpu",
+    )
+    if not isinstance(checkpoint_state, Mapping):
+        raise TypeError(
+            "Checkpoint must be a mapping containing metadata, "
+            f"got {type(checkpoint_state).__name__}."
+        )
+
+    metadata_obj = checkpoint_state.get("metadata")
+    if not isinstance(metadata_obj, Mapping):
+        raise ValueError("Checkpoint metadata is missing.")
+
+    num_classes = _coerce_positive_int(
+        metadata_obj.get("num_classes"),
+        name="metadata.num_classes",
+    )
+    hyperparameters_obj = metadata_obj.get("hyperparameters")
+    if not isinstance(hyperparameters_obj, Mapping):
+        raise ValueError("Checkpoint metadata.hyperparameters is missing.")
+
+    if "label_values" not in hyperparameters_obj:
+        raise ValueError("Checkpoint metadata.hyperparameters.label_values is missing.")
+    label_values = _coerce_label_values(
+        hyperparameters_obj.get("label_values"),
+        name="metadata.hyperparameters.label_values",
+    )
+    if int(len(label_values)) != int(num_classes):
+        raise ValueError(
+            "Checkpoint metadata label_values length must match num_classes: "
+            f"len(label_values)={len(label_values)} num_classes={num_classes}."
+        )
+
+    return FoundationCheckpointMetadata(
+        checkpoint_path=resolved_checkpoint_path,
+        num_classes=int(num_classes),
+        label_values=tuple(int(value) for value in tuple(label_values)),
+    )
+
+
+def validate_foundation_checkpoint_load_preconditions(
+    checkpoint_path: str,
+    *,
+    require_min_gpu_count: int = 2,
+    torch_module: Optional[object] = None,
+    checkpoint_loader: Optional[Callable[..., object]] = None,
+) -> FoundationCheckpointLoadPreconditions:
+    torch_mod = _require_torch() if torch_module is None else torch_module
+    normalized_min_gpu_count = _coerce_positive_int(
+        require_min_gpu_count,
+        name="require_min_gpu_count",
+    )
+    metadata = inspect_foundation_checkpoint_metadata(
+        checkpoint_path,
+        torch_module=torch_mod,
+        checkpoint_loader=checkpoint_loader,
+    )
+
+    available_gpu_count = int(getattr(getattr(torch_mod, "cuda"), "device_count")())
+    if available_gpu_count < normalized_min_gpu_count:
+        raise RuntimeError(
+            f"At least {normalized_min_gpu_count} CUDA devices are required to instantiate the model; "
+            f"found {available_gpu_count}."
+        )
+    device_ids = tuple(range(available_gpu_count))
+
+    return FoundationCheckpointLoadPreconditions(
+        checkpoint_path=metadata.checkpoint_path,
+        num_classes=metadata.num_classes,
+        label_values=metadata.label_values,
+        available_gpu_count=available_gpu_count,
+        device_ids=device_ids,
+    )
+
+
 def _resolve_shared_num_classes_from_eval_runtimes(
     eval_runtimes_by_box_id: Mapping[str, LearningBBoxEvalRuntime],
 ) -> int:
