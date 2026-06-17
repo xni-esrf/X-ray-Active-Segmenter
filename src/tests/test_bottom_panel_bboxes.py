@@ -16,8 +16,24 @@ except Exception:  # pragma: no cover - environment dependent
 from src.bbox import BoundingBox
 try:
     from src.ui.bottom_panel import BottomPanel
+    from src.ui.bottom_panel_subpanels import (
+        AnnotationPanel,
+        BoundingBoxesPanel,
+        ContrastPanel,
+        FilesPanel,
+        HistoryPanel,
+        LearningPanel,
+        NavigationPanel,
+    )
 except Exception:  # pragma: no cover - environment dependent
+    AnnotationPanel = None  # type: ignore[assignment]
+    BoundingBoxesPanel = None  # type: ignore[assignment]
+    ContrastPanel = None  # type: ignore[assignment]
     BottomPanel = None  # type: ignore[assignment]
+    FilesPanel = None  # type: ignore[assignment]
+    HistoryPanel = None  # type: ignore[assignment]
+    LearningPanel = None  # type: ignore[assignment]
+    NavigationPanel = None  # type: ignore[assignment]
 
 
 @unittest.skipUnless(QApplication is not None and BottomPanel is not None, "PySide6 is not available")
@@ -51,6 +67,162 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
             volume_shape=(20, 30, 40),
         )
         return (box1, box2)
+
+    def test_sections_are_composed_subpanels_with_compatibility_aliases(
+        self,
+    ) -> None:
+        self.assertIsInstance(self.panel._files_panel, FilesPanel)
+        self.assertIsInstance(self.panel._history_panel, HistoryPanel)
+        self.assertIsInstance(self.panel._learning_panel, LearningPanel)
+        self.assertIsInstance(self.panel._navigation_panel, NavigationPanel)
+        self.assertIsInstance(self.panel._contrast_panel, ContrastPanel)
+        self.assertIsInstance(self.panel._annotation_panel, AnnotationPanel)
+        self.assertIsInstance(self.panel._bounding_boxes_panel, BoundingBoxesPanel)
+
+        self.assertIs(self.panel._open_button, self.panel._files_panel.open_button)
+        self.assertIs(
+            self.panel._open_semantic_button,
+            self.panel._files_panel.open_semantic_button,
+        )
+        self.assertIs(
+            self.panel._open_instance_button,
+            self.panel._files_panel.open_instance_button,
+        )
+        self.assertIs(
+            self.panel._save_segmentation_button,
+            self.panel._files_panel.save_segmentation_button,
+        )
+        self.assertIs(self.panel._undo_button, self.panel._history_panel.undo_button)
+        self.assertIs(self.panel._redo_button, self.panel._history_panel.redo_button)
+        self.assertIs(
+            self.panel._load_model_button,
+            self.panel._learning_panel.load_model_button,
+        )
+        self.assertIs(
+            self.panel._save_model_button,
+            self.panel._learning_panel.save_model_button,
+        )
+        self.assertIs(
+            self.panel._segment_inference_button,
+            self.panel._learning_panel.segment_inference_button,
+        )
+        self.assertIs(
+            self.panel._stop_inference_button,
+            self.panel._learning_panel.stop_inference_button,
+        )
+        self.assertIs(
+            self.panel._train_model_button,
+            self.panel._learning_panel.train_model_button,
+        )
+        self.assertIs(
+            self.panel._stop_training_button,
+            self.panel._learning_panel.stop_training_button,
+        )
+        self.assertIs(
+            self.panel._learning_training_status,
+            self.panel._learning_panel.training_status,
+        )
+        self.assertIs(self.panel._cursor_z, self.panel._navigation_panel.cursor_z)
+        self.assertIs(self.panel._cursor_y, self.panel._navigation_panel.cursor_y)
+        self.assertIs(self.panel._cursor_x, self.panel._navigation_panel.cursor_x)
+        self.assertIs(self.panel._zoom_spin, self.panel._navigation_panel.zoom_spin)
+        self.assertIs(
+            self.panel._auto_level_checkbox,
+            self.panel._navigation_panel.auto_level_checkbox,
+        )
+        self.assertIs(
+            self.panel._view_layout_button_group,
+            self.panel._navigation_panel.view_layout_button_group,
+        )
+        self.assertIs(
+            self.panel._view_layout_all_radio,
+            self.panel._navigation_panel.view_layout_all_radio,
+        )
+        self.assertIs(
+            self.panel._level_status,
+            self.panel._navigation_panel.level_status,
+        )
+        self.assertIs(
+            self.panel._contrast_min_slider,
+            self.panel._contrast_panel.contrast_min_slider,
+        )
+        self.assertIs(
+            self.panel._contrast_max_slider,
+            self.panel._contrast_panel.contrast_max_slider,
+        )
+        self.assertIs(
+            self.panel._segmentation_opacity_slider,
+            self.panel._contrast_panel.segmentation_opacity_slider,
+        )
+        self.assertIs(
+            self.panel._segmentation_opacity_value,
+            self.panel._contrast_panel.segmentation_opacity_value,
+        )
+        self.assertIs(
+            self.panel._annotation_toggle,
+            self.panel._annotation_panel.annotation_toggle,
+        )
+        self.assertIs(
+            self.panel._annotation_tool_combo,
+            self.panel._annotation_panel.annotation_tool_combo,
+        )
+        self.assertIs(
+            self.panel._tool_label_edit,
+            self.panel._annotation_panel.tool_label_edit,
+        )
+        self.assertIs(
+            self.panel._brush_radius_spin,
+            self.panel._annotation_panel.brush_radius_spin,
+        )
+        self.assertIs(
+            self.panel._flood_fill_button,
+            self.panel._annotation_panel.flood_fill_button,
+        )
+        self.assertIs(
+            self.panel._next_available_button,
+            self.panel._annotation_panel.next_available_button,
+        )
+        self.assertIs(
+            self.panel._bounding_boxes_group,
+            self.panel._bounding_boxes_panel,
+        )
+        self.assertIs(
+            self.panel._bounding_box_mode_toggle,
+            self.panel._bounding_boxes_panel.bounding_box_mode_toggle,
+        )
+        self.assertIs(self.panel._bbox_table, self.panel._bounding_boxes_panel.bbox_table)
+        self.assertIs(
+            self.panel._bbox_label_combo,
+            self.panel._bounding_boxes_panel.bbox_label_combo,
+        )
+        self.assertIs(
+            self.panel._open_bounding_boxes_button,
+            self.panel._bounding_boxes_panel.open_bounding_boxes_button,
+        )
+        self.assertIs(
+            self.panel._save_bounding_boxes_button,
+            self.panel._bounding_boxes_panel.save_bounding_boxes_button,
+        )
+        self.assertIs(
+            self.panel._delete_bbox_button,
+            self.panel._bounding_boxes_panel.delete_bbox_button,
+        )
+        self.assertIs(
+            self.panel._median_filter_selected_button,
+            self.panel._bounding_boxes_panel.median_filter_selected_button,
+        )
+        self.assertIs(
+            self.panel._erosion_selected_button,
+            self.panel._bounding_boxes_panel.erosion_selected_button,
+        )
+        self.assertIs(
+            self.panel._dilation_selected_button,
+            self.panel._bounding_boxes_panel.dilation_selected_button,
+        )
+        self.assertIs(
+            self.panel._erase_bbox_segmentation_button,
+            self.panel._bounding_boxes_panel.erase_bbox_segmentation_button,
+        )
 
     def test_set_bounding_boxes_populates_table(self) -> None:
         box1, box2 = self._boxes()

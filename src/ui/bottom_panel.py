@@ -7,29 +7,23 @@ import numpy as np
 
 from ..bbox import BoundingBox, BoundingBoxLabel
 
-from PySide6.QtCore import QItemSelectionModel, Qt
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
-    QAbstractItemView,
-    QButtonGroup,
-    QCheckBox,
-    QComboBox,
-    QDoubleSpinBox,
-    QFormLayout,
-    QGridLayout,
     QGroupBox,
-    QHeaderView,
-    QHBoxLayout,
-    QLabel,
-    QLineEdit,
-    QPushButton,
-    QRadioButton,
-    QSlider,
     QSizePolicy,
-    QSpinBox,
-    QTableWidget,
     QTableWidgetItem,
     QVBoxLayout,
     QWidget,
+)
+
+from .bottom_panel_subpanels import (
+    AnnotationPanel,
+    BoundingBoxesPanel,
+    ContrastPanel,
+    FilesPanel,
+    HistoryPanel,
+    LearningPanel,
+    NavigationPanel,
 )
 
 
@@ -184,324 +178,215 @@ class BottomPanel(QWidget):
         self._undo_enabled_requested = False
         self._redo_enabled_requested = False
 
-        self._open_button = QPushButton("Open")
-        self._open_semantic_button = QPushButton("Open Semantic")
-        self._open_instance_button = QPushButton("Open Instance")
-        self._save_segmentation_button = QPushButton("Save Segmentation")
-        self._annotation_toggle = QCheckBox("Manual Segmentation")
-        self._bounding_box_mode_toggle = QCheckBox("Bounding Box Tool")
-        self._annotation_tool_label = QLabel("Tool")
-        self._annotation_tool_combo = QComboBox()
-        self._annotation_tool_combo.addItem("Brush (Ctrl+B)", "brush")
-        self._annotation_tool_combo.addItem("Eraser (Ctrl+E)", "eraser")
-        self._annotation_tool_combo.addItem("Flood Fill (Ctrl+F)", "flood_filler")
-        annotation_shortcuts_hint = (
-            "Shortcuts: Ctrl+B brush, Ctrl+E eraser, Ctrl+F flood fill. "
-            "Using them auto-enables Manual Segmentation."
-        )
-        self._annotation_tool_label.setToolTip(annotation_shortcuts_hint)
-        self._annotation_tool_combo.setToolTip(annotation_shortcuts_hint)
-        self._annotation_toggle.setToolTip(
-            "Enable manual segmentation. Ctrl+B/Ctrl+E/Ctrl+F also enables it automatically."
-        )
-        self._tool_label_label = QLabel("Tool Label")
-        self._tool_label_edit = QLineEdit()
-        self._tool_label_edit.setPlaceholderText("1")
-        self._tool_label_edit.setText("1")
-        self._tool_label_edit.setClearButtonEnabled(True)
-        self._brush_radius_label = QLabel("Brush Radius")
-        self._brush_radius_spin = QSpinBox()
-        self._brush_radius_spin.setRange(0, 9)
-        self._brush_radius_spin.setValue(0)
-        self._flood_fill_button = QPushButton("Flood Fill")
-        self._undo_button = QPushButton("Undo")
-        self._redo_button = QPushButton("Redo")
-        self._next_available_button = QPushButton("Next Available")
-        self._cursor_label = QLabel("Cursor")
-        self._cursor_z = QSpinBox()
-        self._cursor_y = QSpinBox()
-        self._cursor_x = QSpinBox()
-        self._hover_label = QLabel("Hover")
-        self._hover_value = QLabel("Z:- Y:- X:- | ID:-")
-        self._picked_label = QLabel("Selected")
-        self._picked_value = QLabel("Z:- Y:- X:- | ID:-")
-        self._cursor_z.setPrefix("Z:")
-        self._cursor_y.setPrefix("Y:")
-        self._cursor_x.setPrefix("X:")
-        self._cursor_z.setRange(0, 0)
-        self._cursor_y.setRange(0, 0)
-        self._cursor_x.setRange(0, 0)
-        self._zoom_spin = QDoubleSpinBox()
-        self._zoom_spin.setRange(self._ZOOM_MIN, self._ZOOM_MAX)
-        self._zoom_spin.setSingleStep(0.1)
-        self._zoom_spin.setValue(1.0)
-        self._auto_level_checkbox = QCheckBox("Auto Level")
-        self._auto_level_checkbox.setChecked(True)
-        self._manual_level_label = QLabel("Manual Level")
-        self._manual_level_spin = QSpinBox()
-        self._manual_level_spin.setPrefix("L:")
-        self._manual_level_spin.setRange(0, 0)
-        self._manual_level_spin.setValue(0)
-        self._view_layout_label = QLabel("View Layout")
-        self._view_layout_button_group = QButtonGroup(self)
-        self._view_layout_button_group.setExclusive(True)
-        self._view_layout_all_radio = QRadioButton("All (3 views)")
-        self._view_layout_axial_radio = QRadioButton("Axial only")
-        self._view_layout_coronal_radio = QRadioButton("Coronal only")
-        self._view_layout_sagittal_radio = QRadioButton("Sagittal only")
-        self._view_layout_all_radio.setChecked(True)
-        self._view_layout_button_group.addButton(self._view_layout_all_radio)
-        self._view_layout_button_group.addButton(self._view_layout_axial_radio)
-        self._view_layout_button_group.addButton(self._view_layout_coronal_radio)
-        self._view_layout_button_group.addButton(self._view_layout_sagittal_radio)
-        self._contrast_min_label = QLabel("Window Min")
-        self._contrast_min_slider = QSlider(Qt.Orientation.Horizontal)
-        self._contrast_min_slider.setRange(0, self._CONTRAST_MAX_STEP)
-        self._contrast_min_slider.setSingleStep(1)
-        self._contrast_min_slider.setPageStep(10)
-        self._contrast_max_label = QLabel("Window Max")
-        self._contrast_max_slider = QSlider(Qt.Orientation.Horizontal)
-        self._contrast_max_slider.setRange(0, self._CONTRAST_MAX_STEP)
-        self._contrast_max_slider.setSingleStep(1)
-        self._contrast_max_slider.setPageStep(10)
-        self._contrast_min_value = QLabel("Min: -")
-        self._contrast_max_value = QLabel("Max: -")
-        self._segmentation_opacity_label = QLabel("Seg Alpha")
-        self._segmentation_opacity_slider = QSlider(Qt.Orientation.Horizontal)
-        self._segmentation_opacity_slider.setRange(0, self._SEGMENTATION_OPACITY_MAX_STEP)
-        self._segmentation_opacity_slider.setSingleStep(1)
-        self._segmentation_opacity_slider.setPageStep(5)
-        self._segmentation_opacity_value = QLabel("30%")
-        self._pyramid_status = QLabel("Pyramid: -")
-        self._level_status = QLabel("Level: L0 (x1)")
-        self._bbox_table = QTableWidget(0, 5)
-        self._bbox_table.setHorizontalHeaderLabels(
-            ["ID", "bbox_name", "Label", "Size (dz, dy, dx)", "Center (z, y, x)"]
-        )
-        self._bbox_table.setSelectionBehavior(QAbstractItemView.SelectRows)
-        self._bbox_table.setSelectionMode(QAbstractItemView.ExtendedSelection)
-        self._bbox_table.setEditTriggers(QAbstractItemView.NoEditTriggers)
-        self._bbox_table.setAlternatingRowColors(True)
-        self._bbox_table.verticalHeader().setVisible(False)
-        bbox_header = self._bbox_table.horizontalHeader()
-        bbox_header.setStretchLastSection(False)
-        bbox_header.setSectionResizeMode(0, QHeaderView.ResizeToContents)
-        bbox_header.setSectionResizeMode(1, QHeaderView.ResizeToContents)
-        bbox_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
-        bbox_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
-        bbox_header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
-        self._bbox_label_label = QLabel("Selected Label")
-        self._bbox_label_combo = QComboBox()
-        self._bbox_label_combo.addItem("Train", "train")
-        self._bbox_label_combo.addItem("Validation", "validation")
-        self._bbox_label_combo.addItem("Inference", "inference")
-        self._bbox_label_combo.setEnabled(False)
-        self._bbox_label_label.setEnabled(False)
-        self._open_bounding_boxes_button = QPushButton("Open Boxes...")
-        self._save_bounding_boxes_button = QPushButton("Save Boxes...")
-        self._load_model_button = QPushButton("Load Model")
-        self._save_model_button = QPushButton("Save Model")
-        self._segment_inference_button = QPushButton("Segment Inference BBox")
-        self._stop_inference_button = QPushButton("Stop Inference")
-        self._stop_inference_button.setEnabled(False)
-        self._train_model_button = QPushButton("Train Model")
-        self._stop_training_button = QPushButton("Stop Training")
-        self._stop_training_button.setEnabled(False)
-        self._learning_training_status = QLabel("Training: Idle")
-        self._delete_bbox_button = QPushButton("Delete Selected")
-        self._delete_bbox_button.setEnabled(False)
-        self._median_filter_selected_button = QPushButton("Median Filter Selected")
-        self._erosion_selected_button = QPushButton("Erosion Selected")
-        self._dilation_selected_button = QPushButton("Dilation Selected")
-        self._erase_bbox_segmentation_button = QPushButton("Erase BBox Segmentation")
+        self._files_panel = FilesPanel()
+        self._open_button = self._files_panel.open_button
+        self._open_semantic_button = self._files_panel.open_semantic_button
+        self._open_instance_button = self._files_panel.open_instance_button
+        self._save_segmentation_button = self._files_panel.save_segmentation_button
+        self._files_panel.on_open_requested(self._handle_open)
+        self._files_panel.on_open_semantic_requested(self._handle_open_semantic)
+        self._files_panel.on_open_instance_requested(self._handle_open_instance)
+        self._files_panel.on_save_segmentation_requested(self._handle_save_segmentation)
 
-        self._open_button.clicked.connect(self._handle_open)
-        self._open_semantic_button.clicked.connect(self._handle_open_semantic)
-        self._open_instance_button.clicked.connect(self._handle_open_instance)
-        self._save_segmentation_button.clicked.connect(self._handle_save_segmentation)
-        self._annotation_toggle.toggled.connect(self._handle_annotation_mode_changed)
-        self._bounding_box_mode_toggle.toggled.connect(self._handle_bounding_box_mode_changed)
-        self._annotation_tool_combo.currentIndexChanged.connect(self._handle_annotation_tool_changed)
-        self._tool_label_edit.editingFinished.connect(self._handle_tool_label_changed)
-        self._brush_radius_spin.valueChanged.connect(self._handle_brush_radius_changed)
-        self._flood_fill_button.clicked.connect(self._handle_flood_fill_requested)
-        self._undo_button.clicked.connect(self._handle_undo_requested)
-        self._redo_button.clicked.connect(self._handle_redo_requested)
-        self._next_available_button.clicked.connect(self._handle_next_available_label_requested)
-        self._cursor_z.valueChanged.connect(self._handle_cursor)
-        self._cursor_y.valueChanged.connect(self._handle_cursor)
-        self._cursor_x.valueChanged.connect(self._handle_cursor)
-        self._zoom_spin.valueChanged.connect(self._handle_zoom)
-        self._auto_level_checkbox.toggled.connect(self._handle_auto_level_mode_changed)
-        manual_level_line_edit = self._manual_level_spin.lineEdit()
-        if manual_level_line_edit is not None:
-            manual_level_line_edit.returnPressed.connect(self._handle_manual_level_requested)
-        else:
-            self._manual_level_spin.editingFinished.connect(self._handle_manual_level_requested)
-        self._contrast_min_slider.valueChanged.connect(self._handle_contrast_min_changed)
-        self._contrast_max_slider.valueChanged.connect(self._handle_contrast_max_changed)
-        self._segmentation_opacity_slider.valueChanged.connect(self._handle_segmentation_opacity_changed)
-        self._view_layout_all_radio.toggled.connect(self._handle_view_layout_mode_changed)
-        self._view_layout_axial_radio.toggled.connect(self._handle_view_layout_mode_changed)
-        self._view_layout_coronal_radio.toggled.connect(self._handle_view_layout_mode_changed)
-        self._view_layout_sagittal_radio.toggled.connect(self._handle_view_layout_mode_changed)
-        self._open_bounding_boxes_button.clicked.connect(self._handle_open_bounding_boxes_requested)
-        self._save_bounding_boxes_button.clicked.connect(self._handle_save_bounding_boxes_requested)
-        self._load_model_button.clicked.connect(
-            self._handle_load_model_requested
-        )
-        self._save_model_button.clicked.connect(
-            self._handle_save_model_requested
-        )
-        self._segment_inference_button.clicked.connect(
+        self._history_panel = HistoryPanel()
+        self._undo_button = self._history_panel.undo_button
+        self._redo_button = self._history_panel.redo_button
+        self._history_panel.on_undo_requested(self._handle_undo_requested)
+        self._history_panel.on_redo_requested(self._handle_redo_requested)
+
+        self._learning_panel = LearningPanel()
+        self._load_model_button = self._learning_panel.load_model_button
+        self._save_model_button = self._learning_panel.save_model_button
+        self._segment_inference_button = self._learning_panel.segment_inference_button
+        self._stop_inference_button = self._learning_panel.stop_inference_button
+        self._train_model_button = self._learning_panel.train_model_button
+        self._stop_training_button = self._learning_panel.stop_training_button
+        self._learning_training_status = self._learning_panel.training_status
+        self._learning_panel.on_load_model_requested(self._handle_load_model_requested)
+        self._learning_panel.on_save_model_requested(self._handle_save_model_requested)
+        self._learning_panel.on_segment_inference_requested(
             self._handle_segment_inference_requested
         )
-        self._stop_inference_button.clicked.connect(
+        self._learning_panel.on_stop_inference_requested(
             self._handle_stop_inference_requested
         )
-        self._train_model_button.clicked.connect(
-            self._handle_train_model_requested
-        )
-        self._stop_training_button.clicked.connect(
+        self._learning_panel.on_train_model_requested(self._handle_train_model_requested)
+        self._learning_panel.on_stop_training_requested(
             self._handle_stop_training_requested
         )
-        self._median_filter_selected_button.clicked.connect(
+
+        self._navigation_panel = NavigationPanel(
+            zoom_min=self._ZOOM_MIN,
+            zoom_max=self._ZOOM_MAX,
+        )
+        self._cursor_label = self._navigation_panel.cursor_label
+        self._cursor_z = self._navigation_panel.cursor_z
+        self._cursor_y = self._navigation_panel.cursor_y
+        self._cursor_x = self._navigation_panel.cursor_x
+        self._hover_label = self._navigation_panel.hover_label
+        self._hover_value = self._navigation_panel.hover_value
+        self._picked_label = self._navigation_panel.picked_label
+        self._picked_value = self._navigation_panel.picked_value
+        self._zoom_spin = self._navigation_panel.zoom_spin
+        self._auto_level_checkbox = self._navigation_panel.auto_level_checkbox
+        self._manual_level_label = self._navigation_panel.manual_level_label
+        self._manual_level_spin = self._navigation_panel.manual_level_spin
+        self._view_layout_label = self._navigation_panel.view_layout_label
+        self._view_layout_button_group = (
+            self._navigation_panel.view_layout_button_group
+        )
+        self._view_layout_all_radio = self._navigation_panel.view_layout_all_radio
+        self._view_layout_axial_radio = self._navigation_panel.view_layout_axial_radio
+        self._view_layout_coronal_radio = (
+            self._navigation_panel.view_layout_coronal_radio
+        )
+        self._view_layout_sagittal_radio = (
+            self._navigation_panel.view_layout_sagittal_radio
+        )
+        self._pyramid_status = self._navigation_panel.pyramid_status
+        self._level_status = self._navigation_panel.level_status
+        self._navigation_panel.on_cursor_changed(self._handle_cursor)
+        self._navigation_panel.on_zoom_changed(self._handle_zoom)
+        self._navigation_panel.on_auto_level_mode_changed(
+            self._handle_auto_level_mode_changed
+        )
+        self._navigation_panel.on_manual_level_requested(
+            self._handle_manual_level_requested
+        )
+        self._navigation_panel.on_view_layout_mode_changed(
+            self._handle_view_layout_mode_changed
+        )
+
+        self._contrast_panel = ContrastPanel(
+            contrast_max_step=self._CONTRAST_MAX_STEP,
+            segmentation_opacity_max_step=self._SEGMENTATION_OPACITY_MAX_STEP,
+        )
+        self._contrast_min_label = self._contrast_panel.contrast_min_label
+        self._contrast_min_slider = self._contrast_panel.contrast_min_slider
+        self._contrast_max_label = self._contrast_panel.contrast_max_label
+        self._contrast_max_slider = self._contrast_panel.contrast_max_slider
+        self._contrast_min_value = self._contrast_panel.contrast_min_value
+        self._contrast_max_value = self._contrast_panel.contrast_max_value
+        self._segmentation_opacity_label = (
+            self._contrast_panel.segmentation_opacity_label
+        )
+        self._segmentation_opacity_slider = (
+            self._contrast_panel.segmentation_opacity_slider
+        )
+        self._segmentation_opacity_value = (
+            self._contrast_panel.segmentation_opacity_value
+        )
+        self._contrast_panel.on_contrast_min_changed(
+            self._handle_contrast_min_changed
+        )
+        self._contrast_panel.on_contrast_max_changed(
+            self._handle_contrast_max_changed
+        )
+        self._contrast_panel.on_segmentation_opacity_changed(
+            self._handle_segmentation_opacity_changed
+        )
+
+        self._annotation_panel = AnnotationPanel()
+        self._annotation_toggle = self._annotation_panel.annotation_toggle
+        self._annotation_tool_label = self._annotation_panel.annotation_tool_label
+        self._annotation_tool_combo = self._annotation_panel.annotation_tool_combo
+        self._tool_label_label = self._annotation_panel.tool_label_label
+        self._tool_label_edit = self._annotation_panel.tool_label_edit
+        self._brush_radius_label = self._annotation_panel.brush_radius_label
+        self._brush_radius_spin = self._annotation_panel.brush_radius_spin
+        self._flood_fill_button = self._annotation_panel.flood_fill_button
+        self._next_available_button = self._annotation_panel.next_available_button
+        self._annotation_panel.on_annotation_mode_changed(
+            self._handle_annotation_mode_changed
+        )
+        self._annotation_panel.on_annotation_tool_changed(
+            self._handle_annotation_tool_changed
+        )
+        self._annotation_panel.on_tool_label_changed(self._handle_tool_label_changed)
+        self._annotation_panel.on_brush_radius_changed(
+            self._handle_brush_radius_changed
+        )
+        self._annotation_panel.on_flood_fill_requested(
+            self._handle_flood_fill_requested
+        )
+        self._annotation_panel.on_next_available_label_requested(
+            self._handle_next_available_label_requested
+        )
+
+        self._bounding_boxes_panel = BoundingBoxesPanel()
+        self._bounding_boxes_group = self._bounding_boxes_panel
+        self._bounding_box_mode_toggle = (
+            self._bounding_boxes_panel.bounding_box_mode_toggle
+        )
+        self._bbox_table = self._bounding_boxes_panel.bbox_table
+        self._bbox_label_label = self._bounding_boxes_panel.bbox_label_label
+        self._bbox_label_combo = self._bounding_boxes_panel.bbox_label_combo
+        self._open_bounding_boxes_button = (
+            self._bounding_boxes_panel.open_bounding_boxes_button
+        )
+        self._save_bounding_boxes_button = (
+            self._bounding_boxes_panel.save_bounding_boxes_button
+        )
+        self._delete_bbox_button = self._bounding_boxes_panel.delete_bbox_button
+        self._median_filter_selected_button = (
+            self._bounding_boxes_panel.median_filter_selected_button
+        )
+        self._erosion_selected_button = (
+            self._bounding_boxes_panel.erosion_selected_button
+        )
+        self._dilation_selected_button = (
+            self._bounding_boxes_panel.dilation_selected_button
+        )
+        self._erase_bbox_segmentation_button = (
+            self._bounding_boxes_panel.erase_bbox_segmentation_button
+        )
+        self._bounding_boxes_panel.on_bounding_box_mode_changed(
+            self._handle_bounding_box_mode_changed
+        )
+        self._bounding_boxes_panel.on_selection_changed(
+            self._handle_bounding_box_selection_changed
+        )
+        self._bounding_boxes_panel.on_item_double_clicked(
+            self._handle_bounding_box_double_clicked
+        )
+        self._bounding_boxes_panel.on_open_requested(
+            self._handle_open_bounding_boxes_requested
+        )
+        self._bounding_boxes_panel.on_save_requested(
+            self._handle_save_bounding_boxes_requested
+        )
+        self._bounding_boxes_panel.on_delete_requested(
+            self._handle_bounding_box_delete_requested
+        )
+        self._bounding_boxes_panel.on_label_changed(
+            self._handle_bounding_box_label_changed
+        )
+        self._bounding_boxes_panel.on_median_filter_requested(
             self._handle_median_filter_selected_requested
         )
-        self._erosion_selected_button.clicked.connect(
+        self._bounding_boxes_panel.on_erosion_requested(
             self._handle_erosion_selected_requested
         )
-        self._dilation_selected_button.clicked.connect(
+        self._bounding_boxes_panel.on_dilation_requested(
             self._handle_dilation_selected_requested
         )
-        self._erase_bbox_segmentation_button.clicked.connect(
+        self._bounding_boxes_panel.on_erase_segmentation_requested(
             self._handle_erase_bbox_segmentation_requested
         )
-        self._bbox_table.itemSelectionChanged.connect(self._handle_bounding_box_selection_changed)
-        self._bbox_table.itemDoubleClicked.connect(self._handle_bounding_box_double_clicked)
-        self._delete_bbox_button.clicked.connect(self._handle_bounding_box_delete_requested)
-        self._bbox_label_combo.currentIndexChanged.connect(self._handle_bounding_box_label_changed)
 
-        files_group = QGroupBox("Files")
-        files_layout = QGridLayout()
-        files_layout.addWidget(self._open_button, 0, 0)
-        files_layout.addWidget(self._open_semantic_button, 0, 1)
-        files_layout.addWidget(self._open_instance_button, 1, 0)
-        files_layout.addWidget(self._save_segmentation_button, 1, 1)
-        files_group.setLayout(files_layout)
+        files_group = self._files_panel
 
-        navigation_group = QGroupBox("Navigation")
-        navigation_layout = QFormLayout()
-        cursor_row = QWidget()
-        cursor_row_layout = QHBoxLayout()
-        cursor_row_layout.setContentsMargins(0, 0, 0, 0)
-        cursor_row_layout.addWidget(self._cursor_z)
-        cursor_row_layout.addWidget(self._cursor_y)
-        cursor_row_layout.addWidget(self._cursor_x)
-        cursor_row.setLayout(cursor_row_layout)
-        navigation_layout.addRow(self._cursor_label, cursor_row)
-        navigation_layout.addRow(self._hover_label, self._hover_value)
-        navigation_layout.addRow(self._picked_label, self._picked_value)
-        navigation_layout.addRow(QLabel("Zoom"), self._zoom_spin)
-        navigation_layout.addRow(self._auto_level_checkbox)
-        navigation_layout.addRow(self._manual_level_label, self._manual_level_spin)
-        view_layout_row = QWidget()
-        view_layout_grid = QGridLayout()
-        view_layout_grid.setContentsMargins(0, 0, 0, 0)
-        view_layout_grid.addWidget(self._view_layout_all_radio, 0, 0, 1, 2)
-        view_layout_grid.addWidget(self._view_layout_axial_radio, 1, 0)
-        view_layout_grid.addWidget(self._view_layout_coronal_radio, 1, 1)
-        view_layout_grid.addWidget(self._view_layout_sagittal_radio, 2, 0)
-        view_layout_row.setLayout(view_layout_grid)
-        navigation_layout.addRow(self._view_layout_label, view_layout_row)
-        navigation_layout.addRow(self._pyramid_status)
-        navigation_layout.addRow(self._level_status)
-        navigation_group.setLayout(navigation_layout)
+        navigation_group = self._navigation_panel
 
-        contrast_group = QGroupBox("Contrast")
-        contrast_layout = QFormLayout()
-        contrast_min_row = QWidget()
-        contrast_min_row_layout = QHBoxLayout()
-        contrast_min_row_layout.setContentsMargins(0, 0, 0, 0)
-        contrast_min_row_layout.addWidget(self._contrast_min_slider)
-        contrast_min_row_layout.addWidget(self._contrast_min_value)
-        contrast_min_row.setLayout(contrast_min_row_layout)
-        contrast_max_row = QWidget()
-        contrast_max_row_layout = QHBoxLayout()
-        contrast_max_row_layout.setContentsMargins(0, 0, 0, 0)
-        contrast_max_row_layout.addWidget(self._contrast_max_slider)
-        contrast_max_row_layout.addWidget(self._contrast_max_value)
-        contrast_max_row.setLayout(contrast_max_row_layout)
-        segmentation_alpha_row = QWidget()
-        segmentation_alpha_row_layout = QHBoxLayout()
-        segmentation_alpha_row_layout.setContentsMargins(0, 0, 0, 0)
-        segmentation_alpha_row_layout.addWidget(self._segmentation_opacity_slider)
-        segmentation_alpha_row_layout.addWidget(self._segmentation_opacity_value)
-        segmentation_alpha_row.setLayout(segmentation_alpha_row_layout)
-        contrast_layout.addRow(self._contrast_min_label, contrast_min_row)
-        contrast_layout.addRow(self._contrast_max_label, contrast_max_row)
-        contrast_layout.addRow(self._segmentation_opacity_label, segmentation_alpha_row)
-        contrast_group.setLayout(contrast_layout)
+        contrast_group = self._contrast_panel
 
-        annotation_group = QGroupBox("Annotation")
-        annotation_layout = QFormLayout()
-        annotation_layout.addRow(self._annotation_toggle)
-        annotation_layout.addRow(self._annotation_tool_label, self._annotation_tool_combo)
-        annotation_layout.addRow(self._tool_label_label, self._tool_label_edit)
-        annotation_layout.addRow(self._brush_radius_label, self._brush_radius_spin)
-        annotation_layout.addRow(self._flood_fill_button)
-        annotation_layout.addRow(self._next_available_button)
-        annotation_group.setLayout(annotation_layout)
+        annotation_group = self._annotation_panel
 
-        bounding_boxes_group = QGroupBox("Bounding Boxes")
-        self._bounding_boxes_group = bounding_boxes_group
-        bounding_boxes_layout = QVBoxLayout()
-        bounding_boxes_layout.addWidget(self._bounding_box_mode_toggle)
-        bounding_boxes_layout.addWidget(self._bbox_table)
-        bbox_label_row = QWidget()
-        bbox_label_layout = QFormLayout()
-        bbox_label_layout.setContentsMargins(0, 0, 0, 0)
-        bbox_label_layout.addRow(self._bbox_label_label, self._bbox_label_combo)
-        bbox_label_row.setLayout(bbox_label_layout)
-        bounding_boxes_layout.addWidget(bbox_label_row)
-        bbox_controls_row = QWidget()
-        bbox_controls_layout = QGridLayout()
-        bbox_controls_layout.setContentsMargins(0, 0, 0, 0)
-        bbox_controls_layout.addWidget(self._open_bounding_boxes_button, 0, 0)
-        bbox_controls_layout.addWidget(self._save_bounding_boxes_button, 0, 1)
-        bbox_controls_layout.addWidget(self._delete_bbox_button, 1, 0)
-        bbox_controls_row.setLayout(bbox_controls_layout)
-        bounding_boxes_layout.addWidget(bbox_controls_row)
-        bbox_processing_row = QWidget()
-        bbox_processing_layout = QGridLayout()
-        bbox_processing_layout.setContentsMargins(0, 0, 0, 0)
-        bbox_processing_layout.addWidget(self._median_filter_selected_button, 0, 0)
-        bbox_processing_layout.addWidget(self._erosion_selected_button, 0, 1)
-        bbox_processing_layout.addWidget(self._dilation_selected_button, 1, 0)
-        bbox_processing_layout.addWidget(self._erase_bbox_segmentation_button, 1, 1)
-        bbox_processing_row.setLayout(bbox_processing_layout)
-        bounding_boxes_layout.addWidget(bbox_processing_row)
-        bounding_boxes_group.setLayout(bounding_boxes_layout)
+        bounding_boxes_group = self._bounding_boxes_panel
 
-        learning_group = QGroupBox("Learning")
-        learning_layout = QVBoxLayout()
-        learning_controls_layout = QGridLayout()
-        learning_controls_layout.setContentsMargins(0, 0, 0, 0)
-        learning_controls_layout.addWidget(self._load_model_button, 0, 0)
-        learning_controls_layout.addWidget(self._save_model_button, 0, 1)
-        learning_controls_layout.addWidget(self._segment_inference_button, 1, 0)
-        learning_controls_layout.addWidget(self._stop_inference_button, 1, 1)
-        learning_controls_layout.addWidget(self._train_model_button, 2, 0)
-        learning_controls_layout.addWidget(self._stop_training_button, 2, 1)
-        learning_controls_layout.addWidget(self._learning_training_status, 3, 0, 1, 2)
-        learning_layout.addLayout(learning_controls_layout)
-        learning_group.setLayout(learning_layout)
+        learning_group = self._learning_panel
 
-        history_group = QGroupBox("History")
-        history_layout = QGridLayout()
-        history_layout.addWidget(self._undo_button, 0, 0)
-        history_layout.addWidget(self._redo_button, 0, 1)
-        history_group.setLayout(history_layout)
+        history_group = self._history_panel
 
         root_layout = QVBoxLayout()
         root_layout.setAlignment(Qt.AlignmentFlag.AlignTop | Qt.AlignmentFlag.AlignLeft)
@@ -599,14 +484,7 @@ class BottomPanel(QWidget):
             button.setMaximumWidth(self._COMPACT_BUTTON_MAX_WIDTH)
 
     def _update_bbox_table_width(self) -> None:
-        self._bbox_table.resizeColumnsToContents()
-        frame = int(self._bbox_table.frameWidth()) * 2
-        vertical_header = int(self._bbox_table.verticalHeader().width())
-        column_widths = sum(int(self._bbox_table.columnWidth(i)) for i in range(self._bbox_table.columnCount()))
-        padding = 12
-        content_width = frame + vertical_header + column_widths + padding
-        minimum_width = max(self._COMPACT_BBOX_TABLE_MIN_WIDTH, int(content_width))
-        self._bbox_table.setMinimumWidth(minimum_width)
+        self._bounding_boxes_panel.update_table_width(self._COMPACT_BBOX_TABLE_MIN_WIDTH)
 
     def resizeEvent(self, event) -> None:  # type: ignore[override]
         super().resizeEvent(event)
@@ -621,9 +499,7 @@ class BottomPanel(QWidget):
     def set_zoom(self, zoom: float) -> None:
         normalized_zoom = max(self._ZOOM_MIN, min(self._ZOOM_MAX, float(zoom)))
         self.state.zoom = normalized_zoom
-        self._zoom_spin.blockSignals(True)
-        self._zoom_spin.setValue(normalized_zoom)
-        self._zoom_spin.blockSignals(False)
+        self._navigation_panel.set_zoom(normalized_zoom)
 
     def set_level_mode(
         self,
@@ -644,13 +520,11 @@ class BottomPanel(QWidget):
         self.state.auto_level_enabled = bool(auto_enabled)
         self.state.manual_level = normalized_manual
         self.state.manual_level_max = normalized_max
-        self._auto_level_checkbox.blockSignals(True)
-        self._auto_level_checkbox.setChecked(self.state.auto_level_enabled)
-        self._auto_level_checkbox.blockSignals(False)
-        self._manual_level_spin.blockSignals(True)
-        self._manual_level_spin.setRange(0, normalized_max)
-        self._manual_level_spin.setValue(normalized_manual)
-        self._manual_level_spin.blockSignals(False)
+        self._navigation_panel.set_level_mode(
+            auto_enabled=self.state.auto_level_enabled,
+            manual_level=normalized_manual,
+            max_level=normalized_max,
+        )
         self._update_level_controls_state()
 
     def set_level_controls_enabled(self, enabled: bool) -> None:
@@ -723,12 +597,7 @@ class BottomPanel(QWidget):
             normalized = self._SEGMENTATION_OPACITY_DEFAULT
         normalized = max(0.0, min(1.0, normalized))
         self.state.segmentation_opacity = normalized
-        step = int(round(normalized * float(self._SEGMENTATION_OPACITY_MAX_STEP)))
-        step = max(0, min(self._SEGMENTATION_OPACITY_MAX_STEP, step))
-        self._segmentation_opacity_slider.blockSignals(True)
-        self._segmentation_opacity_slider.setValue(step)
-        self._segmentation_opacity_slider.blockSignals(False)
-        self._segmentation_opacity_value.setText(f"{int(round(normalized * 100.0))}%")
+        self._contrast_panel.set_segmentation_opacity(normalized)
 
     def segmentation_opacity(self) -> float:
         return float(self.state.segmentation_opacity)
@@ -738,51 +607,28 @@ class BottomPanel(QWidget):
         if normalized not in {"all", "axial", "coronal", "sagittal"}:
             normalized = "all"
         self.state.view_layout_mode = normalized
-        target_button = self._view_layout_all_radio
-        if normalized == "axial":
-            target_button = self._view_layout_axial_radio
-        elif normalized == "coronal":
-            target_button = self._view_layout_coronal_radio
-        elif normalized == "sagittal":
-            target_button = self._view_layout_sagittal_radio
-        buttons = (
-            self._view_layout_all_radio,
-            self._view_layout_axial_radio,
-            self._view_layout_coronal_radio,
-            self._view_layout_sagittal_radio,
-        )
-        for button in buttons:
-            button.blockSignals(True)
-        target_button.setChecked(True)
-        for button in buttons:
-            button.blockSignals(False)
+        self._navigation_panel.set_view_layout_mode(normalized)
 
     def view_layout_mode(self) -> str:
         return str(self.state.view_layout_mode)
 
     def set_annotation_mode(self, enabled: bool) -> None:
         self.state.annotation_enabled = bool(enabled)
-        self._annotation_toggle.blockSignals(True)
-        self._annotation_toggle.setChecked(self.state.annotation_enabled)
-        self._annotation_toggle.blockSignals(False)
+        self._annotation_panel.set_annotation_mode(self.state.annotation_enabled)
         self._update_eraser_controls_state()
 
     def set_bounding_box_mode(self, enabled: bool) -> None:
         self.state.bounding_box_mode_enabled = bool(enabled)
-        self._bounding_box_mode_toggle.blockSignals(True)
-        self._bounding_box_mode_toggle.setChecked(self.state.bounding_box_mode_enabled)
-        self._bounding_box_mode_toggle.blockSignals(False)
+        self._bounding_boxes_panel.set_bounding_box_mode(
+            self.state.bounding_box_mode_enabled
+        )
 
     def set_annotation_controls_enabled(self, enabled: bool) -> None:
         self._annotation_controls_enabled = bool(enabled)
         editable_controls_enabled = bool(
             self._annotation_controls_enabled and not self._inference_navigation_only_mode
         )
-        self._tool_label_label.setEnabled(editable_controls_enabled)
-        self._tool_label_edit.setEnabled(editable_controls_enabled)
-        self._brush_radius_label.setEnabled(editable_controls_enabled)
-        self._brush_radius_spin.setEnabled(editable_controls_enabled)
-        self._next_available_button.setEnabled(editable_controls_enabled)
+        self._annotation_panel.set_editing_controls_enabled(editable_controls_enabled)
         self._update_interaction_tool_controls_state()
         self._update_eraser_controls_state()
 
@@ -795,12 +641,7 @@ class BottomPanel(QWidget):
         if normalized not in ("brush", "eraser", "flood_filler"):
             normalized = "brush"
         self.state.annotation_tool = cast(AnnotationTool, normalized)
-        index = self._annotation_tool_combo.findData(normalized)
-        if index < 0:
-            index = 0
-        self._annotation_tool_combo.blockSignals(True)
-        self._annotation_tool_combo.setCurrentIndex(index)
-        self._annotation_tool_combo.blockSignals(False)
+        self._annotation_panel.set_annotation_tool(normalized)
         self._update_eraser_controls_state()
 
     def annotation_tool(self) -> AnnotationTool:
@@ -809,60 +650,40 @@ class BottomPanel(QWidget):
     def set_tool_label(self, value: str) -> None:
         normalized = str(value).strip()
         self.state.tool_label_text = normalized
-        self._tool_label_edit.blockSignals(True)
-        self._tool_label_edit.setText(normalized)
-        self._tool_label_edit.blockSignals(False)
+        self._annotation_panel.set_tool_label(normalized)
 
     def tool_label(self) -> str:
-        return str(self._tool_label_edit.text().strip())
+        return self._annotation_panel.tool_label()
 
     def set_brush_radius(self, brush_radius: BrushRadius) -> None:
         normalized = _normalize_brush_radius(brush_radius)
         self.state.brush_radius = normalized
-        self._brush_radius_spin.blockSignals(True)
-        self._brush_radius_spin.setValue(normalized)
-        self._brush_radius_spin.blockSignals(False)
+        self._annotation_panel.set_brush_radius(normalized)
 
     def brush_radius(self) -> BrushRadius:
         return int(self.state.brush_radius)
 
     def set_tool_label_placeholder(self, value: str) -> None:
-        self._tool_label_edit.setPlaceholderText(str(value))
+        self._annotation_panel.set_tool_label_placeholder(str(value))
 
     def set_undo_state(self, *, depth: int, enabled: bool) -> None:
         normalized_depth = max(0, int(depth))
         self.state.undo_depth = normalized_depth
         self._undo_enabled_requested = bool(enabled)
-        self._undo_button.setText(f"Undo ({normalized_depth})")
         self._update_history_controls_state()
 
     def set_redo_state(self, *, depth: int, enabled: bool) -> None:
         normalized_depth = max(0, int(depth))
         self.state.redo_depth = normalized_depth
         self._redo_enabled_requested = bool(enabled)
-        self._redo_button.setText(f"Redo ({normalized_depth})")
         self._update_history_controls_state()
 
     def set_cursor_range(self, shape: Tuple[int, int, int]) -> None:
-        z_max = max(0, shape[0] - 1)
-        y_max = max(0, shape[1] - 1)
-        x_max = max(0, shape[2] - 1)
-        self._cursor_z.setRange(0, z_max)
-        self._cursor_y.setRange(0, y_max)
-        self._cursor_x.setRange(0, x_max)
+        self._navigation_panel.set_cursor_range(shape)
 
     def set_cursor_position(self, indices: Tuple[int, int, int]) -> None:
         self.state.cursor_position = indices
-        z, y, x = indices
-        self._cursor_z.blockSignals(True)
-        self._cursor_y.blockSignals(True)
-        self._cursor_x.blockSignals(True)
-        self._cursor_z.setValue(z)
-        self._cursor_y.setValue(y)
-        self._cursor_x.setValue(x)
-        self._cursor_z.blockSignals(False)
-        self._cursor_y.blockSignals(False)
-        self._cursor_x.blockSignals(False)
+        self._navigation_panel.set_cursor_position(indices)
 
     def set_hover_info(
         self,
@@ -871,12 +692,7 @@ class BottomPanel(QWidget):
     ) -> None:
         self.state.hover_position = indices
         self.state.hover_label = None if label is None else int(label)
-        if indices is None:
-            self._hover_value.setText("Z:- Y:- X:- | ID:-")
-            return
-        z, y, x = indices
-        label_text = "-" if label is None else str(int(label))
-        self._hover_value.setText(f"Z:{z} Y:{y} X:{x} | ID:{label_text}")
+        self._navigation_panel.set_hover_info(indices, label)
 
     def set_picked_info(
         self,
@@ -885,19 +701,13 @@ class BottomPanel(QWidget):
     ) -> None:
         self.state.picked_position = indices
         self.state.picked_label = None if label is None else int(label)
-        if indices is None:
-            self._picked_value.setText("Z:- Y:- X:- | ID:-")
-            self._update_eraser_controls_state()
-            return
-        z, y, x = indices
-        label_text = "-" if label is None else str(int(label))
-        self._picked_value.setText(f"Z:{z} Y:{y} X:{x} | ID:{label_text}")
+        self._navigation_panel.set_picked_info(indices, label)
         self._update_eraser_controls_state()
 
     def set_pyramid_levels(self, levels: int, kind: str = "Raw") -> None:
         levels = max(1, int(levels))
         self.state.pyramid_levels = levels
-        self._pyramid_status.setText(f"{kind} levels computed: {levels}")
+        self._navigation_panel.set_pyramid_levels(levels, kind)
 
     def set_active_level(self, level: int, scale: int = 1) -> None:
         level = max(0, int(level))
@@ -926,12 +736,12 @@ class BottomPanel(QWidget):
         sa_scale = max(1, int(sagittal[1]))
         self.state.active_level = ax_level
         self.state.level_scale = ax_scale
-        status_text = (
-            f"Levels: Ax L{ax_level} (x{ax_scale}) | Co L{co_level} (x{co_scale}) | Sa L{sa_level} (x{sa_scale})"
+        self._navigation_panel.set_active_levels(
+            axial=(ax_level, ax_scale),
+            coronal=(co_level, co_scale),
+            sagittal=(sa_level, sa_scale),
+            forced=forced,
         )
-        if forced:
-            status_text += " | Manual (forced)"
-        self._level_status.setText(status_text)
 
     def set_bounding_boxes(self, boxes: Iterable[BoundingBox]) -> None:
         rows = []
@@ -953,20 +763,17 @@ class BottomPanel(QWidget):
         )
         self.state.bbox_selected_id = _primary_selected_bbox_id(self.state.bbox_selected_ids)
 
-        self._bbox_table.blockSignals(True)
-        self._bbox_table.setRowCount(len(self.state.bbox_rows))
-        for row_index, row in enumerate(self.state.bbox_rows):
-            id_item = QTableWidgetItem(str(row_index + 1))
-            name_item = QTableWidgetItem(row.box_id)
-            label_item = QTableWidgetItem(row.label)
-            size_item = QTableWidgetItem(row.size_text)
-            center_item = QTableWidgetItem(row.center_text)
-            self._bbox_table.setItem(row_index, 0, id_item)
-            self._bbox_table.setItem(row_index, 1, name_item)
-            self._bbox_table.setItem(row_index, 2, label_item)
-            self._bbox_table.setItem(row_index, 3, size_item)
-            self._bbox_table.setItem(row_index, 4, center_item)
-        self._bbox_table.blockSignals(False)
+        table_rows = tuple(
+            (
+                str(row_index + 1),
+                row.box_id,
+                row.label,
+                row.size_text,
+                row.center_text,
+            )
+            for row_index, row in enumerate(self.state.bbox_rows)
+        )
+        self._bounding_boxes_panel.set_rows(table_rows)
         self._update_bbox_table_width()
 
         self.set_selected_bounding_boxes(self.state.bbox_selected_ids)
@@ -991,20 +798,7 @@ class BottomPanel(QWidget):
         self.state.bbox_selected_ids = tuple(selected_ids)
         self.state.bbox_selected_id = _primary_selected_bbox_id(self.state.bbox_selected_ids)
         self.state.bbox_selected_label = self._shared_bbox_label_for_ids(self.state.bbox_selected_ids)
-        self._bbox_table.blockSignals(True)
-        self._bbox_table.clearSelection()
-        selection_model = self._bbox_table.selectionModel()
-        for row_index in row_indices:
-            if selection_model is None:
-                self._bbox_table.selectRow(row_index)
-                continue
-            index = self._bbox_table.model().index(row_index, 0)
-            selection_model.select(
-                index,
-                QItemSelectionModel.SelectionFlag.Select
-                | QItemSelectionModel.SelectionFlag.Rows,
-            )
-        self._bbox_table.blockSignals(False)
+        self._bounding_boxes_panel.set_selected_rows(tuple(row_indices))
         self._set_selected_bbox_label_value(self.state.bbox_selected_label)
         self._update_bounding_box_controls_state()
 
@@ -1054,8 +848,7 @@ class BottomPanel(QWidget):
 
     def set_learning_training_running(self, running: bool) -> None:
         self.state.learning_training_running = bool(running)
-        status = "Running" if self.state.learning_training_running else "Idle"
-        self._learning_training_status.setText(f"Training: {status}")
+        self._learning_panel.set_training_running(self.state.learning_training_running)
 
     def learning_training_running(self) -> bool:
         return bool(self.state.learning_training_running)
@@ -1219,27 +1012,29 @@ class BottomPanel(QWidget):
         if self._on_auto_level_mode_changed is not None:
             self._on_auto_level_mode_changed(self.state.auto_level_enabled)
 
-    def _handle_manual_level_requested(self) -> None:
+    def _handle_manual_level_requested(self, level: Optional[int] = None) -> None:
         if not self._manual_level_spin.isEnabled():
             return
-        normalized = self._normalize_manual_level(int(self._manual_level_spin.value()))
+        requested = self._navigation_panel.manual_level_value() if level is None else int(level)
+        normalized = self._normalize_manual_level(requested)
         self.state.manual_level = normalized
-        self._manual_level_spin.blockSignals(True)
-        self._manual_level_spin.setValue(normalized)
-        self._manual_level_spin.blockSignals(False)
+        self._navigation_panel.set_level_mode(
+            auto_enabled=self.state.auto_level_enabled,
+            manual_level=normalized,
+            max_level=self.state.manual_level_max,
+        )
         if self._on_manual_level_requested is not None:
             self._on_manual_level_requested(normalized)
 
-    def _handle_view_layout_mode_changed(self, checked: bool) -> None:
-        if not checked:
-            return
-        next_mode = "all"
-        if self._view_layout_axial_radio.isChecked():
-            next_mode = "axial"
-        elif self._view_layout_coronal_radio.isChecked():
-            next_mode = "coronal"
-        elif self._view_layout_sagittal_radio.isChecked():
-            next_mode = "sagittal"
+    def _handle_view_layout_mode_changed(self, mode: object) -> None:
+        if isinstance(mode, bool):
+            if not mode:
+                return
+            next_mode = self._navigation_panel.current_view_layout_mode()
+        else:
+            next_mode = str(mode).strip().lower()
+        if next_mode not in {"all", "axial", "coronal", "sagittal"}:
+            next_mode = "all"
         previous_mode = self.state.view_layout_mode
         self.state.view_layout_mode = next_mode
         if next_mode != previous_mode and self._on_view_layout_mode_changed is not None:
@@ -1250,32 +1045,32 @@ class BottomPanel(QWidget):
         if data_range is None:
             return
         min_step = int(value)
-        max_step = int(self._contrast_max_slider.value())
+        max_step = self._contrast_panel.contrast_max_step()
         if self._can_adjust_contrast() and min_step >= max_step:
             min_step = max(0, max_step - 1)
-            self._contrast_min_slider.blockSignals(True)
-            self._contrast_min_slider.setValue(min_step)
-            self._contrast_min_slider.blockSignals(False)
+            self._contrast_panel.set_slider_steps(
+                min_step=min_step,
+                max_step=max_step,
+            )
         self._set_contrast_window_from_steps(min_step, max_step, emit_change=True)
 
     def _handle_contrast_max_changed(self, value: int) -> None:
         data_range = self.state.contrast_data_range
         if data_range is None:
             return
-        min_step = int(self._contrast_min_slider.value())
+        min_step = self._contrast_panel.contrast_min_step()
         max_step = int(value)
         if self._can_adjust_contrast() and max_step <= min_step:
             max_step = min(self._CONTRAST_MAX_STEP, min_step + 1)
-            self._contrast_max_slider.blockSignals(True)
-            self._contrast_max_slider.setValue(max_step)
-            self._contrast_max_slider.blockSignals(False)
+            self._contrast_panel.set_slider_steps(
+                min_step=min_step,
+                max_step=max_step,
+            )
         self._set_contrast_window_from_steps(min_step, max_step, emit_change=True)
 
     def _handle_segmentation_opacity_changed(self, value: int) -> None:
-        normalized_step = max(0, min(self._SEGMENTATION_OPACITY_MAX_STEP, int(value)))
-        normalized = float(normalized_step) / float(self._SEGMENTATION_OPACITY_MAX_STEP)
+        normalized = self._contrast_panel.set_segmentation_opacity_step(value)
         self.state.segmentation_opacity = normalized
-        self._segmentation_opacity_value.setText(f"{int(round(normalized * 100.0))}%")
         if self._on_segmentation_opacity_changed is not None:
             self._on_segmentation_opacity_changed(normalized)
 
@@ -1285,8 +1080,8 @@ class BottomPanel(QWidget):
         if self._on_annotation_mode_changed:
             self._on_annotation_mode_changed(self.state.annotation_enabled)
 
-    def _handle_annotation_tool_changed(self, _index: int) -> None:
-        value = self._annotation_tool_combo.currentData()
+    def _handle_annotation_tool_changed(self, tool: str) -> None:
+        value = str(tool)
         if value not in ("brush", "eraser", "flood_filler"):
             value = "brush"
         self.state.annotation_tool = cast(AnnotationTool, value)
@@ -1299,8 +1094,8 @@ class BottomPanel(QWidget):
         if self._on_bounding_box_mode_changed:
             self._on_bounding_box_mode_changed(self.state.bounding_box_mode_enabled)
 
-    def _handle_tool_label_changed(self) -> None:
-        value = self._tool_label_edit.text().strip()
+    def _handle_tool_label_changed(self, value: str) -> None:
+        value = str(value).strip()
         self.state.tool_label_text = value
         if self._on_tool_label_changed:
             self._on_tool_label_changed(value)
@@ -1314,14 +1109,9 @@ class BottomPanel(QWidget):
         if self._on_brush_radius_changed:
             self._on_brush_radius_changed(self.state.brush_radius)
 
-    def _handle_flood_fill_requested(self) -> None:
-        text = self._tool_label_edit.text().strip()
-        try:
-            value = int(text)
-        except ValueError:
-            value = 1
+    def _handle_flood_fill_requested(self, value: int) -> None:
         if self._on_flood_fill_requested:
-            self._on_flood_fill_requested(value)
+            self._on_flood_fill_requested(int(value))
 
     def _handle_undo_requested(self) -> None:
         if self._on_undo_requested:
@@ -1332,7 +1122,7 @@ class BottomPanel(QWidget):
             self._on_redo_requested()
 
     def _selected_bbox_ids_from_table_selection(self) -> Tuple[str, ...]:
-        selected_row_indices = sorted({item.row() for item in self._bbox_table.selectedItems()})
+        selected_row_indices = self._bounding_boxes_panel.selected_row_indices()
         selected_ids = []
         for row in selected_row_indices:
             if row < 0 or row >= len(self.state.bbox_rows):
@@ -1433,7 +1223,9 @@ class BottomPanel(QWidget):
         selected_ids = self.state.bbox_selected_ids
         if not selected_ids:
             return
-        selected_label = _normalize_bbox_label(self._bbox_label_combo.currentData())
+        selected_label = _normalize_bbox_label(
+            self._bounding_boxes_panel.selected_label_value()
+        )
         if self.state.bbox_selected_label is not None and self.state.bbox_selected_label == selected_label:
             return
         self.state.bbox_selected_label = selected_label
@@ -1449,95 +1241,80 @@ class BottomPanel(QWidget):
             and not self._inference_navigation_only_mode
             and self.state.annotation_enabled
         )
-        self._tool_label_label.setEnabled(tool_label_active)
-        self._tool_label_edit.setEnabled(tool_label_active)
-        if self.state.annotation_tool == "eraser":
-            self._tool_label_edit.setPlaceholderText("All")
-        else:
-            self._tool_label_edit.setPlaceholderText("1")
+        placeholder = "All" if self.state.annotation_tool == "eraser" else "1"
         flood_fill_active = (
             self._annotation_controls_enabled
             and not self._inference_navigation_only_mode
             and self.state.annotation_enabled
             and self.state.annotation_tool == "flood_filler"
         )
-        self._flood_fill_button.setEnabled(flood_fill_active and self.state.picked_position is not None)
+        self._annotation_panel.set_tool_controls_state(
+            tool_label_active=tool_label_active,
+            flood_fill_active=(
+                flood_fill_active and self.state.picked_position is not None
+            ),
+            placeholder=placeholder,
+        )
         self._update_bounding_box_controls_state()
 
     def _update_interaction_tool_controls_state(self) -> None:
         enabled = bool(self._interaction_tools_enabled)
         tool_controls_enabled = bool(enabled and not self._inference_navigation_only_mode)
-        self._annotation_toggle.setEnabled(tool_controls_enabled)
-        self._annotation_tool_label.setEnabled(tool_controls_enabled)
-        self._annotation_tool_combo.setEnabled(tool_controls_enabled)
-        self._bounding_box_mode_toggle.setEnabled(tool_controls_enabled)
+        self._annotation_panel.set_interaction_controls_enabled(tool_controls_enabled)
+        self._bounding_boxes_panel.set_mode_control_enabled(tool_controls_enabled)
         self._update_level_controls_state()
         self._update_contrast_controls_state()
 
     def _update_level_controls_state(self) -> None:
         enabled = bool(self._interaction_tools_enabled and self._level_controls_enabled)
-        manual_enabled = enabled and (not self.state.auto_level_enabled)
-        self._auto_level_checkbox.setEnabled(enabled)
-        self._manual_level_label.setEnabled(manual_enabled)
-        self._manual_level_spin.setEnabled(manual_enabled)
+        self._navigation_panel.set_level_controls_state(
+            enabled=enabled,
+            auto_enabled=self.state.auto_level_enabled,
+        )
 
     def _update_contrast_controls_state(self) -> None:
         enabled = bool(self._interaction_tools_enabled)
         sliders_enabled = enabled and self._can_adjust_contrast()
-        self._contrast_min_label.setEnabled(enabled)
-        self._contrast_max_label.setEnabled(enabled)
-        self._contrast_min_slider.setEnabled(sliders_enabled)
-        self._contrast_max_slider.setEnabled(sliders_enabled)
-        self._contrast_min_value.setEnabled(enabled)
-        self._contrast_max_value.setEnabled(enabled)
-        self._segmentation_opacity_label.setEnabled(enabled)
-        self._segmentation_opacity_slider.setEnabled(enabled)
-        self._segmentation_opacity_value.setEnabled(enabled)
+        self._contrast_panel.set_controls_state(
+            enabled=enabled,
+            sliders_enabled=sliders_enabled,
+        )
 
     def _update_bounding_box_controls_state(self) -> None:
         editing_locked = bool(self._inference_navigation_only_mode)
         has_boxes = len(self.state.bbox_rows) > 0
-        self._open_bounding_boxes_button.setEnabled(not editing_locked)
-        self._save_bounding_boxes_button.setEnabled(has_boxes and not editing_locked)
         has_selected_box = bool(self.state.bbox_selected_ids)
-        bbox_editing_enabled = bool(has_selected_box and not editing_locked)
-        self._delete_bbox_button.setEnabled(bbox_editing_enabled)
-        self._bbox_label_label.setEnabled(bbox_editing_enabled)
-        self._bbox_label_combo.setEnabled(bbox_editing_enabled)
-        self._median_filter_selected_button.setEnabled(not editing_locked)
-        self._erosion_selected_button.setEnabled(not editing_locked)
-        self._dilation_selected_button.setEnabled(not editing_locked)
-        self._erase_bbox_segmentation_button.setEnabled(not editing_locked)
+        self._bounding_boxes_panel.set_controls_state(
+            editing_locked=editing_locked,
+            has_boxes=has_boxes,
+            has_selected_box=has_selected_box,
+        )
 
     def _update_file_controls_state(self) -> None:
         enabled = bool(not self._inference_navigation_only_mode)
-        self._open_button.setEnabled(enabled)
-        self._open_semantic_button.setEnabled(enabled)
-        self._open_instance_button.setEnabled(enabled)
-        self._save_segmentation_button.setEnabled(enabled)
+        self._files_panel.set_controls_enabled(enabled)
 
     def _update_learning_controls_state(self) -> None:
         editing_locked = bool(self._inference_navigation_only_mode)
-        self._load_model_button.setEnabled(not editing_locked)
-        self._save_model_button.setEnabled(not editing_locked)
-        self._segment_inference_button.setEnabled(
-            bool(self._segment_inference_enabled_requested and not editing_locked)
+        self._learning_panel.set_controls_state(
+            editing_locked=editing_locked,
+            segment_inference_enabled=self._segment_inference_enabled_requested,
+            train_model_enabled=self._train_model_enabled_requested,
+            stop_training_enabled=self._stop_training_enabled_requested,
+            stop_inference_enabled=self._stop_inference_enabled_requested,
         )
-        self._train_model_button.setEnabled(
-            bool(self._train_model_enabled_requested and not editing_locked)
-        )
-        self._stop_training_button.setEnabled(
-            bool(self._stop_training_enabled_requested and not editing_locked)
-        )
-        self._stop_inference_button.setEnabled(self._stop_inference_enabled_requested)
 
     def _update_history_controls_state(self) -> None:
         editing_locked = bool(self._inference_navigation_only_mode)
-        self._undo_button.setEnabled(
-            bool(self._undo_enabled_requested and not editing_locked and self.state.undo_depth > 0)
+        self._history_panel.set_undo_state(
+            depth=self.state.undo_depth,
+            requested_enabled=self._undo_enabled_requested,
+            editing_locked=editing_locked,
         )
-        self._redo_button.setEnabled(
-            bool(self._redo_enabled_requested and not editing_locked and self.state.redo_depth > 0)
+        self._history_panel.set_redo_state(
+            depth=self.state.redo_depth,
+            requested_enabled=self._redo_enabled_requested,
+            editing_locked=editing_locked,
         )
 
     def _bbox_label_for_id(self, box_id: Optional[str]) -> Optional[BoundingBoxLabel]:
@@ -1564,18 +1341,16 @@ class BottomPanel(QWidget):
         return first_label
 
     def _set_selected_bbox_label_value(self, label: Optional[BoundingBoxLabel]) -> None:
-        if label is None:
-            index = -1
-        else:
-            index = self._bbox_label_combo.findData(label)
-            if index < 0:
-                index = -1
-        self._bbox_label_combo.blockSignals(True)
-        self._bbox_label_combo.setCurrentIndex(index)
-        self._bbox_label_combo.blockSignals(False)
+        self._bounding_boxes_panel.set_selected_label_value(label)
 
-    def _handle_cursor(self, _value: int) -> None:
-        indices = (self._cursor_z.value(), self._cursor_y.value(), self._cursor_x.value())
+    def _handle_cursor(self, indices: object) -> None:
+        if not isinstance(indices, tuple) or len(indices) != 3:
+            indices = (
+                self._cursor_z.value(),
+                self._cursor_y.value(),
+                self._cursor_x.value(),
+            )
+        indices = (int(indices[0]), int(indices[1]), int(indices[2]))
         self.state.cursor_position = indices
         if self._on_cursor:
             self._on_cursor(indices)
@@ -1607,12 +1382,7 @@ class BottomPanel(QWidget):
                     min_step = max(0, max_step - 1)
                 else:
                     max_step = min(self._CONTRAST_MAX_STEP, min_step + 1)
-        self._contrast_min_slider.blockSignals(True)
-        self._contrast_max_slider.blockSignals(True)
-        self._contrast_min_slider.setValue(min_step)
-        self._contrast_max_slider.setValue(max_step)
-        self._contrast_min_slider.blockSignals(False)
-        self._contrast_max_slider.blockSignals(False)
+        self._contrast_panel.set_slider_steps(min_step=min_step, max_step=max_step)
 
     def _set_contrast_window_from_steps(
         self,
@@ -1668,10 +1438,4 @@ class BottomPanel(QWidget):
         return int(round(ratio * float(self._CONTRAST_MAX_STEP)))
 
     def _update_contrast_labels(self) -> None:
-        window = self.state.contrast_window
-        if window is None:
-            self._contrast_min_value.setText("Min: -")
-            self._contrast_max_value.setText("Max: -")
-            return
-        self._contrast_min_value.setText(f"Min: {window[0]:.6g}")
-        self._contrast_max_value.setText(f"Max: {window[1]:.6g}")
+        self._contrast_panel.set_contrast_labels(self.state.contrast_window)
