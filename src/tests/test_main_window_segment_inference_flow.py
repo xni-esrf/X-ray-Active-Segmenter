@@ -659,13 +659,19 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
             side_effect=AssertionError(
                 "Selected-bbox halo helper must never be called in inference flow."
             ),
-        ) as selected_helper_mock, patch("src.ui.main_window.show_info") as info_mock, patch(
+        ) as selected_helper_mock, patch(
+            "src.ui.main_window.bbox_ops.compute_selected_bbox_binary_operation_with_halo_context",
+            side_effect=AssertionError(
+                "Extracted selected-bbox halo helper must never be called in inference flow."
+            ),
+        ) as extracted_selected_helper_mock, patch("src.ui.main_window.show_info") as info_mock, patch(
             "src.ui.main_window.show_warning"
         ) as warning_mock:
             result = MainWindow._segment_inference_bboxes_with_dialog(window_like)
 
         self.assertTrue(result)
         selected_helper_mock.assert_not_called()
+        extracted_selected_helper_mock.assert_not_called()
         warning_mock.assert_not_called()
         info_mock.assert_called_once()
         self.assertIn("all inference bboxes succeeded", info_mock.call_args.args[0].lower())
