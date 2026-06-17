@@ -8,11 +8,6 @@ from typing import Dict, Mapping, Optional, Sequence, Tuple
 from ..bbox import BoundingBoxLabel
 
 _ALLOWED_LABELS = ("train", "validation", "inference")
-_CURRENT_BATCH: Optional["LearningBBoxTensorBatch"] = None
-_CURRENT_DATALOADER_RUNTIME: Optional["LearningBBoxDataLoaderRuntime"] = None
-_CURRENT_EVAL_RUNTIMES_BY_BOX_ID: Dict[str, "LearningBBoxEvalRuntime"] = {}
-_CURRENT_MODEL_RUNTIME: Optional["LearningModelRuntime"] = None
-_STORE_LOCK = Lock()
 
 
 def _coerce_box_id(value: object) -> str:
@@ -391,52 +386,242 @@ class LearningModelRuntime:
         object.__setattr__(self, "hyperparameters", _coerce_hyperparameters(self.hyperparameters))
 
 
-def set_current_learning_bbox_batch(batch: LearningBBoxTensorBatch) -> LearningBBoxTensorBatch:
-    if not isinstance(batch, LearningBBoxTensorBatch):
-        raise TypeError(
-            "batch must be a LearningBBoxTensorBatch, "
-            f"got {type(batch).__name__}"
+class LearningSession:
+    """Container for learning runtime state and resource lifecycle."""
+
+    def __init__(self) -> None:
+        self._bbox_batch: Optional[LearningBBoxTensorBatch] = None
+        self._dataloader_runtime: Optional[LearningBBoxDataLoaderRuntime] = None
+        self._eval_runtimes_by_box_id: Dict[str, LearningBBoxEvalRuntime] = {}
+        self._model_runtime: Optional[LearningModelRuntime] = None
+        self._lock = Lock()
+
+    def set_bbox_batch(self, batch: LearningBBoxTensorBatch) -> LearningBBoxTensorBatch:
+        if not isinstance(batch, LearningBBoxTensorBatch):
+            raise TypeError(
+                "batch must be a LearningBBoxTensorBatch, "
+                f"got {type(batch).__name__}"
+            )
+        with self._lock:
+            self._bbox_batch = batch
+        return batch
+
+    def set_bbox_entries(
+        self,
+        entries: Sequence[LearningBBoxTensorEntry],
+    ) -> LearningBBoxTensorBatch:
+        batch = LearningBBoxTensorBatch(entries=tuple(entries))
+        return self.set_bbox_batch(batch)
+
+    def get_bbox_batch(self) -> Optional[LearningBBoxTensorBatch]:
+        with self._lock:
+            return self._bbox_batch
+
+    def clear_bbox_batch(self) -> None:
+        with self._lock:
+            self._bbox_batch = None
+
+    def set_dataloader_runtime(
+        self,
+        runtime: LearningBBoxDataLoaderRuntime,
+    ) -> LearningBBoxDataLoaderRuntime:
+        if not isinstance(runtime, LearningBBoxDataLoaderRuntime):
+            raise TypeError(
+                "runtime must be a LearningBBoxDataLoaderRuntime, "
+                f"got {type(runtime).__name__}"
+            )
+        previous_runtime: Optional[LearningBBoxDataLoaderRuntime] = None
+        with self._lock:
+            previous_runtime = self._dataloader_runtime
+            self._dataloader_runtime = runtime
+        if previous_runtime is not runtime:
+            _best_effort_dispose_runtime(previous_runtime)
+        return runtime
+
+    def set_dataloader_components(
+        self,
+        *,
+        dataset: object,
+        sampler: object,
+        dataloader: object,
+        train_box_ids: Sequence[str],
+        minivol_size: Optional[int] = None,
+        minivol_per_epoch: Optional[int] = None,
+        batch_size: Optional[int] = None,
+        num_workers: Optional[int] = None,
+        pin_memory: Optional[bool] = None,
+        drop_last: Optional[bool] = None,
+        class_weights: Optional[object] = None,
+    ) -> LearningBBoxDataLoaderRuntime:
+        runtime = LearningBBoxDataLoaderRuntime(
+            dataset=dataset,
+            sampler=sampler,
+            dataloader=dataloader,
+            train_box_ids=tuple(train_box_ids),
+            minivol_size=minivol_size,
+            minivol_per_epoch=minivol_per_epoch,
+            batch_size=batch_size,
+            num_workers=num_workers,
+            pin_memory=pin_memory,
+            drop_last=drop_last,
+            class_weights=class_weights,
         )
-    global _CURRENT_BATCH
-    with _STORE_LOCK:
-        _CURRENT_BATCH = batch
-    return batch
+        return self.set_dataloader_runtime(runtime)
+
+    def get_dataloader_runtime(self) -> Optional[LearningBBoxDataLoaderRuntime]:
+        with self._lock:
+            return self._dataloader_runtime
+
+    def set_dataloader_class_weights(
+        self,
+        class_weights: object,
+    ) -> LearningBBoxDataLoaderRuntime:
+        with self._lock:
+            current_runtime = self._dataloader_runtime
+            if current_runtime is None:
+                raise ValueError("No learning dataloader runtime is available in session storage.")
+            updated_runtime = replace(
+                current_runtime,
+                class_weights=class_weights,
+            )
+            self._dataloader_runtime = updated_runtime
+        return updated_runtime
+
+    def clear_dataloader_runtime(self) -> None:
+        previous_runtime: Optional[LearningBBoxDataLoaderRuntime] = None
+        with self._lock:
+            previous_runtime = self._dataloader_runtime
+            self._dataloader_runtime = None
+        _best_effort_dispose_runtime(previous_runtime)
+
+    def set_eval_runtimes_by_box_id(
+        self,
+        runtimes_by_box_id: Mapping[str, LearningBBoxEvalRuntime],
+    ) -> Dict[str, LearningBBoxEvalRuntime]:
+        normalized = _normalize_eval_runtimes_by_box_id(runtimes_by_box_id)
+        previous: Dict[str, LearningBBoxEvalRuntime] = {}
+        with self._lock:
+            previous = self._eval_runtimes_by_box_id
+            self._eval_runtimes_by_box_id = dict(normalized)
+        _best_effort_dispose_eval_runtime_map(previous)
+        return dict(normalized)
+
+    def set_eval_runtime_components_by_box_id(
+        self,
+        components_by_box_id: Mapping[str, Tuple[object, object]],
+    ) -> Dict[str, LearningBBoxEvalRuntime]:
+        if not isinstance(components_by_box_id, Mapping):
+            raise TypeError(
+                "components_by_box_id must be a mapping of box_id -> (dataloader, buffer), "
+                f"got {type(components_by_box_id).__name__}"
+            )
+
+        runtimes: Dict[str, LearningBBoxEvalRuntime] = {}
+        for raw_box_id, component_pair in tuple(components_by_box_id.items()):
+            normalized_box_id = _coerce_box_id(raw_box_id)
+            if not isinstance(component_pair, tuple) or len(component_pair) != 2:
+                raise TypeError(
+                    "components_by_box_id values must be tuple(dataloader, buffer), "
+                    f"got {type(component_pair).__name__} for id={normalized_box_id}"
+                )
+            dataloader, buffer = component_pair
+            runtimes[normalized_box_id] = LearningBBoxEvalRuntime(
+                box_id=normalized_box_id,
+                dataloader=dataloader,
+                buffer=buffer,
+            )
+        return self.set_eval_runtimes_by_box_id(runtimes)
+
+    def get_eval_runtimes_by_box_id(self) -> Dict[str, LearningBBoxEvalRuntime]:
+        with self._lock:
+            return dict(self._eval_runtimes_by_box_id)
+
+    def clear_eval_runtimes_by_box_id(self) -> None:
+        previous: Dict[str, LearningBBoxEvalRuntime] = {}
+        with self._lock:
+            previous = self._eval_runtimes_by_box_id
+            self._eval_runtimes_by_box_id = {}
+        _best_effort_dispose_eval_runtime_map(previous)
+
+    def set_model_runtime(
+        self,
+        runtime: LearningModelRuntime,
+    ) -> LearningModelRuntime:
+        if not isinstance(runtime, LearningModelRuntime):
+            raise TypeError(
+                "runtime must be a LearningModelRuntime, "
+                f"got {type(runtime).__name__}"
+            )
+
+        previous_runtime: Optional[LearningModelRuntime] = None
+        with self._lock:
+            previous_runtime = self._model_runtime
+            self._model_runtime = runtime
+        if previous_runtime is not runtime:
+            _best_effort_dispose_model_runtime(previous_runtime)
+        return runtime
+
+    def set_model_components(
+        self,
+        *,
+        model: object,
+        optimizer: object,
+        checkpoint_path: str,
+        device_ids: Sequence[object],
+        num_classes: int,
+        hyperparameters: Optional[Mapping[str, object]] = None,
+    ) -> LearningModelRuntime:
+        runtime = LearningModelRuntime(
+            model=model,
+            optimizer=optimizer,
+            checkpoint_path=checkpoint_path,
+            device_ids=tuple(device_ids),
+            num_classes=num_classes,
+            hyperparameters=dict(hyperparameters or {}),
+        )
+        return self.set_model_runtime(runtime)
+
+    def get_model_runtime(self) -> Optional[LearningModelRuntime]:
+        with self._lock:
+            return self._model_runtime
+
+    def clear_model_runtime(self) -> None:
+        previous_runtime: Optional[LearningModelRuntime] = None
+        with self._lock:
+            previous_runtime = self._model_runtime
+            self._model_runtime = None
+        _best_effort_dispose_model_runtime(previous_runtime)
+
+
+_DEFAULT_LEARNING_SESSION = LearningSession()
+
+
+def get_default_learning_session() -> LearningSession:
+    return _DEFAULT_LEARNING_SESSION
+
+
+def set_current_learning_bbox_batch(batch: LearningBBoxTensorBatch) -> LearningBBoxTensorBatch:
+    return get_default_learning_session().set_bbox_batch(batch)
 
 
 def set_current_learning_bbox_entries(
     entries: Sequence[LearningBBoxTensorEntry],
 ) -> LearningBBoxTensorBatch:
-    batch = LearningBBoxTensorBatch(entries=tuple(entries))
-    return set_current_learning_bbox_batch(batch)
+    return get_default_learning_session().set_bbox_entries(entries)
 
 
 def get_current_learning_bbox_batch() -> Optional[LearningBBoxTensorBatch]:
-    with _STORE_LOCK:
-        return _CURRENT_BATCH
+    return get_default_learning_session().get_bbox_batch()
 
 
 def clear_current_learning_bbox_batch() -> None:
-    global _CURRENT_BATCH
-    with _STORE_LOCK:
-        _CURRENT_BATCH = None
+    get_default_learning_session().clear_bbox_batch()
 
 
 def set_current_learning_dataloader_runtime(
     runtime: LearningBBoxDataLoaderRuntime,
 ) -> LearningBBoxDataLoaderRuntime:
-    if not isinstance(runtime, LearningBBoxDataLoaderRuntime):
-        raise TypeError(
-            "runtime must be a LearningBBoxDataLoaderRuntime, "
-            f"got {type(runtime).__name__}"
-        )
-    global _CURRENT_DATALOADER_RUNTIME
-    previous_runtime: Optional[LearningBBoxDataLoaderRuntime] = None
-    with _STORE_LOCK:
-        previous_runtime = _CURRENT_DATALOADER_RUNTIME
-        _CURRENT_DATALOADER_RUNTIME = runtime
-    if previous_runtime is not runtime:
-        _best_effort_dispose_runtime(previous_runtime)
-    return runtime
+    return get_default_learning_session().set_dataloader_runtime(runtime)
 
 
 def set_current_learning_dataloader_components(
@@ -453,11 +638,11 @@ def set_current_learning_dataloader_components(
     drop_last: Optional[bool] = None,
     class_weights: Optional[object] = None,
 ) -> LearningBBoxDataLoaderRuntime:
-    runtime = LearningBBoxDataLoaderRuntime(
+    return get_default_learning_session().set_dataloader_components(
         dataset=dataset,
         sampler=sampler,
         dataloader=dataloader,
-        train_box_ids=tuple(train_box_ids),
+        train_box_ids=train_box_ids,
         minivol_size=minivol_size,
         minivol_per_epoch=minivol_per_epoch,
         batch_size=batch_size,
@@ -466,37 +651,20 @@ def set_current_learning_dataloader_components(
         drop_last=drop_last,
         class_weights=class_weights,
     )
-    return set_current_learning_dataloader_runtime(runtime)
 
 
 def get_current_learning_dataloader_runtime() -> Optional[LearningBBoxDataLoaderRuntime]:
-    with _STORE_LOCK:
-        return _CURRENT_DATALOADER_RUNTIME
+    return get_default_learning_session().get_dataloader_runtime()
 
 
 def set_current_learning_dataloader_class_weights(
     class_weights: object,
 ) -> LearningBBoxDataLoaderRuntime:
-    global _CURRENT_DATALOADER_RUNTIME
-    with _STORE_LOCK:
-        current_runtime = _CURRENT_DATALOADER_RUNTIME
-        if current_runtime is None:
-            raise ValueError("No learning dataloader runtime is available in session storage.")
-        updated_runtime = replace(
-            current_runtime,
-            class_weights=class_weights,
-        )
-        _CURRENT_DATALOADER_RUNTIME = updated_runtime
-    return updated_runtime
+    return get_default_learning_session().set_dataloader_class_weights(class_weights)
 
 
 def clear_current_learning_dataloader_runtime() -> None:
-    global _CURRENT_DATALOADER_RUNTIME
-    previous_runtime: Optional[LearningBBoxDataLoaderRuntime] = None
-    with _STORE_LOCK:
-        previous_runtime = _CURRENT_DATALOADER_RUNTIME
-        _CURRENT_DATALOADER_RUNTIME = None
-    _best_effort_dispose_runtime(previous_runtime)
+    get_default_learning_session().clear_dataloader_runtime()
 
 
 def _normalize_eval_runtimes_by_box_id(
@@ -530,73 +698,31 @@ def _normalize_eval_runtimes_by_box_id(
 def set_current_learning_eval_runtimes_by_box_id(
     runtimes_by_box_id: Mapping[str, LearningBBoxEvalRuntime],
 ) -> Dict[str, LearningBBoxEvalRuntime]:
-    normalized = _normalize_eval_runtimes_by_box_id(runtimes_by_box_id)
-    global _CURRENT_EVAL_RUNTIMES_BY_BOX_ID
-    previous: Dict[str, LearningBBoxEvalRuntime] = {}
-    with _STORE_LOCK:
-        previous = _CURRENT_EVAL_RUNTIMES_BY_BOX_ID
-        _CURRENT_EVAL_RUNTIMES_BY_BOX_ID = dict(normalized)
-    _best_effort_dispose_eval_runtime_map(previous)
-    return dict(normalized)
+    return get_default_learning_session().set_eval_runtimes_by_box_id(
+        runtimes_by_box_id
+    )
 
 
 def set_current_learning_eval_runtime_components_by_box_id(
     components_by_box_id: Mapping[str, Tuple[object, object]],
 ) -> Dict[str, LearningBBoxEvalRuntime]:
-    if not isinstance(components_by_box_id, Mapping):
-        raise TypeError(
-            "components_by_box_id must be a mapping of box_id -> (dataloader, buffer), "
-            f"got {type(components_by_box_id).__name__}"
-        )
-
-    runtimes: Dict[str, LearningBBoxEvalRuntime] = {}
-    for raw_box_id, component_pair in tuple(components_by_box_id.items()):
-        normalized_box_id = _coerce_box_id(raw_box_id)
-        if not isinstance(component_pair, tuple) or len(component_pair) != 2:
-            raise TypeError(
-                "components_by_box_id values must be tuple(dataloader, buffer), "
-                f"got {type(component_pair).__name__} for id={normalized_box_id}"
-            )
-        dataloader, buffer = component_pair
-        runtimes[normalized_box_id] = LearningBBoxEvalRuntime(
-            box_id=normalized_box_id,
-            dataloader=dataloader,
-            buffer=buffer,
-        )
-    return set_current_learning_eval_runtimes_by_box_id(runtimes)
+    return get_default_learning_session().set_eval_runtime_components_by_box_id(
+        components_by_box_id
+    )
 
 
 def get_current_learning_eval_runtimes_by_box_id() -> Dict[str, LearningBBoxEvalRuntime]:
-    with _STORE_LOCK:
-        return dict(_CURRENT_EVAL_RUNTIMES_BY_BOX_ID)
+    return get_default_learning_session().get_eval_runtimes_by_box_id()
 
 
 def clear_current_learning_eval_runtimes_by_box_id() -> None:
-    global _CURRENT_EVAL_RUNTIMES_BY_BOX_ID
-    previous: Dict[str, LearningBBoxEvalRuntime] = {}
-    with _STORE_LOCK:
-        previous = _CURRENT_EVAL_RUNTIMES_BY_BOX_ID
-        _CURRENT_EVAL_RUNTIMES_BY_BOX_ID = {}
-    _best_effort_dispose_eval_runtime_map(previous)
+    get_default_learning_session().clear_eval_runtimes_by_box_id()
 
 
 def set_current_learning_model_runtime(
     runtime: LearningModelRuntime,
 ) -> LearningModelRuntime:
-    if not isinstance(runtime, LearningModelRuntime):
-        raise TypeError(
-            "runtime must be a LearningModelRuntime, "
-            f"got {type(runtime).__name__}"
-        )
-
-    global _CURRENT_MODEL_RUNTIME
-    previous_runtime: Optional[LearningModelRuntime] = None
-    with _STORE_LOCK:
-        previous_runtime = _CURRENT_MODEL_RUNTIME
-        _CURRENT_MODEL_RUNTIME = runtime
-    if previous_runtime is not runtime:
-        _best_effort_dispose_model_runtime(previous_runtime)
-    return runtime
+    return get_default_learning_session().set_model_runtime(runtime)
 
 
 def set_current_learning_model_components(
@@ -608,26 +734,19 @@ def set_current_learning_model_components(
     num_classes: int,
     hyperparameters: Optional[Mapping[str, object]] = None,
 ) -> LearningModelRuntime:
-    runtime = LearningModelRuntime(
+    return get_default_learning_session().set_model_components(
         model=model,
         optimizer=optimizer,
         checkpoint_path=checkpoint_path,
-        device_ids=tuple(device_ids),
+        device_ids=device_ids,
         num_classes=num_classes,
-        hyperparameters=dict(hyperparameters or {}),
+        hyperparameters=hyperparameters,
     )
-    return set_current_learning_model_runtime(runtime)
 
 
 def get_current_learning_model_runtime() -> Optional[LearningModelRuntime]:
-    with _STORE_LOCK:
-        return _CURRENT_MODEL_RUNTIME
+    return get_default_learning_session().get_model_runtime()
 
 
 def clear_current_learning_model_runtime() -> None:
-    global _CURRENT_MODEL_RUNTIME
-    previous_runtime: Optional[LearningModelRuntime] = None
-    with _STORE_LOCK:
-        previous_runtime = _CURRENT_MODEL_RUNTIME
-        _CURRENT_MODEL_RUNTIME = None
-    _best_effort_dispose_model_runtime(previous_runtime)
+    get_default_learning_session().clear_model_runtime()

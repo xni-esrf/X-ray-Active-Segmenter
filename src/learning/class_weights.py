@@ -6,6 +6,7 @@ from typing import Dict, Mapping, Optional, Sequence, Tuple
 from .session_store import (
     LearningBBoxDataLoaderRuntime,
     LearningBBoxEvalRuntime,
+    LearningSession,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
     set_current_learning_dataloader_class_weights,
@@ -224,11 +225,20 @@ def compute_and_store_current_learning_class_weights(
     max_weight: float = 100.0,
     device: str = "cuda:0",
     torch_module: Optional[object] = None,
+    learning_session: Optional[LearningSession] = None,
 ):
-    train_runtime = get_current_learning_dataloader_runtime()
+    train_runtime = (
+        learning_session.get_dataloader_runtime()
+        if learning_session is not None
+        else get_current_learning_dataloader_runtime()
+    )
     if train_runtime is None:
         raise ValueError("No training dataloader runtime is available in session storage.")
-    eval_runtimes_by_box_id = get_current_learning_eval_runtimes_by_box_id()
+    eval_runtimes_by_box_id = (
+        learning_session.get_eval_runtimes_by_box_id()
+        if learning_session is not None
+        else get_current_learning_eval_runtimes_by_box_id()
+    )
     label_values = _resolve_shared_eval_label_values(eval_runtimes_by_box_id)
     train_segmentation_tensors = _extract_train_segmentation_tensors(train_runtime)
     class_weights = compute_class_weights_from_segmentation_tensors(
@@ -238,5 +248,9 @@ def compute_and_store_current_learning_class_weights(
         device=device,
         torch_module=torch_module,
     )
-    updated_runtime = set_current_learning_dataloader_class_weights(class_weights)
+    updated_runtime = (
+        learning_session.set_dataloader_class_weights(class_weights)
+        if learning_session is not None
+        else set_current_learning_dataloader_class_weights(class_weights)
+    )
     return updated_runtime.class_weights

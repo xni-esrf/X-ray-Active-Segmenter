@@ -27,6 +27,7 @@ except Exception:  # pragma: no cover - import availability is environment depen
 from .session_store import (
     LearningBBoxDataLoaderRuntime,
     LearningBBoxEvalRuntime,
+    LearningSession,
     LearningModelRuntime,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
@@ -730,6 +731,7 @@ def validate_foundation_model_instantiation_preconditions(
     *,
     train_runtime: Optional[LearningBBoxDataLoaderRuntime] = None,
     eval_runtimes_by_box_id: Optional[Mapping[str, LearningBBoxEvalRuntime]] = None,
+    learning_session: Optional[LearningSession] = None,
     require_min_gpu_count: int = 2,
     torch_module: Optional[object] = None,
 ) -> FoundationInstantiationPreconditions:
@@ -740,7 +742,11 @@ def validate_foundation_model_instantiation_preconditions(
     )
 
     resolved_train_runtime = (
-        get_current_learning_dataloader_runtime()
+        (
+            learning_session.get_dataloader_runtime()
+            if learning_session is not None
+            else get_current_learning_dataloader_runtime()
+        )
         if train_runtime is None
         else train_runtime
     )
@@ -756,7 +762,11 @@ def validate_foundation_model_instantiation_preconditions(
         )
 
     resolved_eval_runtimes = (
-        get_current_learning_eval_runtimes_by_box_id()
+        (
+            learning_session.get_eval_runtimes_by_box_id()
+            if learning_session is not None
+            else get_current_learning_eval_runtimes_by_box_id()
+        )
         if eval_runtimes_by_box_id is None
         else dict(eval_runtimes_by_box_id)
     )
@@ -1187,6 +1197,7 @@ def instantiate_foundation_model_runtime(
     data_parallel_factory: Optional[Callable[..., object]] = None,
     optimizer_factory: Optional[Callable[..., object]] = None,
     torch_module: Optional[object] = None,
+    learning_session: Optional[LearningSession] = None,
 ) -> LearningModelRuntime:
     torch_mod = _require_torch() if torch_module is None else torch_module
     if not isinstance(store_in_session, bool):
@@ -1355,6 +1366,15 @@ def instantiate_foundation_model_runtime(
         )
 
     if bool(store_in_session):
+        if learning_session is not None:
+            return learning_session.set_model_components(
+                model=parallel_model,
+                optimizer=optimizer,
+                checkpoint_path=resolved_checkpoint_path,
+                device_ids=resolved_device_ids,
+                num_classes=normalized_num_classes,
+                hyperparameters=hyperparameters,
+            )
         return set_current_learning_model_components(
             model=parallel_model,
             optimizer=optimizer,

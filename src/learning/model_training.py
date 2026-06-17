@@ -12,6 +12,7 @@ from .eval_bbox_dataset import compute_volume_weighted_mean_score
 from .session_store import (
     LearningBBoxDataLoaderRuntime,
     LearningBBoxEvalRuntime,
+    LearningSession,
     LearningModelRuntime,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
@@ -191,8 +192,18 @@ def _format_missing_preconditions_message(missing_items) -> str:
 
 def _resolve_model_runtime(
     model_runtime: Optional[LearningModelRuntime],
+    *,
+    learning_session: Optional[LearningSession] = None,
 ) -> LearningModelRuntime:
-    resolved = get_current_learning_model_runtime() if model_runtime is None else model_runtime
+    resolved = (
+        (
+            learning_session.get_model_runtime()
+            if learning_session is not None
+            else get_current_learning_model_runtime()
+        )
+        if model_runtime is None
+        else model_runtime
+    )
     if resolved is None:
         raise ValueError("No learning model runtime is available in session storage.")
     if not isinstance(resolved, LearningModelRuntime):
@@ -205,8 +216,18 @@ def _resolve_model_runtime(
 
 def _resolve_train_runtime(
     train_runtime: Optional[LearningBBoxDataLoaderRuntime],
+    *,
+    learning_session: Optional[LearningSession] = None,
 ) -> LearningBBoxDataLoaderRuntime:
-    resolved = get_current_learning_dataloader_runtime() if train_runtime is None else train_runtime
+    resolved = (
+        (
+            learning_session.get_dataloader_runtime()
+            if learning_session is not None
+            else get_current_learning_dataloader_runtime()
+        )
+        if train_runtime is None
+        else train_runtime
+    )
     if resolved is None:
         raise ValueError("No training dataloader runtime is available in session storage.")
     if not isinstance(resolved, LearningBBoxDataLoaderRuntime):
@@ -459,6 +480,7 @@ def validate_learning_model_training_preconditions(
     model_runtime: Optional[LearningModelRuntime] = None,
     train_runtime: Optional[LearningBBoxDataLoaderRuntime] = None,
     eval_runtimes_by_box_id: Optional[Mapping[str, LearningBBoxEvalRuntime]] = None,
+    learning_session: Optional[LearningSession] = None,
     require_class_weights: bool = True,
     mask_label: int = _MASK_LABEL,
     torch_module: Optional[object] = None,
@@ -470,13 +492,29 @@ def validate_learning_model_training_preconditions(
     normalized_mask_label = _require_int(mask_label, name="mask_label")
 
     resolved_model_runtime = (
-        get_current_learning_model_runtime() if model_runtime is None else model_runtime
+        (
+            learning_session.get_model_runtime()
+            if learning_session is not None
+            else get_current_learning_model_runtime()
+        )
+        if model_runtime is None
+        else model_runtime
     )
     resolved_train_runtime = (
-        get_current_learning_dataloader_runtime() if train_runtime is None else train_runtime
+        (
+            learning_session.get_dataloader_runtime()
+            if learning_session is not None
+            else get_current_learning_dataloader_runtime()
+        )
+        if train_runtime is None
+        else train_runtime
     )
     resolved_eval_runtimes = (
-        get_current_learning_eval_runtimes_by_box_id()
+        (
+            learning_session.get_eval_runtimes_by_box_id()
+            if learning_session is not None
+            else get_current_learning_eval_runtimes_by_box_id()
+        )
         if eval_runtimes_by_box_id is None
         else dict(eval_runtimes_by_box_id)
     )
@@ -557,6 +595,7 @@ def train_learning_model_for_one_epoch(
     device: Optional[str] = None,
     stop_event: Optional[object] = None,
     torch_module: Optional[object] = None,
+    learning_session: Optional[LearningSession] = None,
 ) -> Tuple[LearningTrainEpochResult, object]:
     torch_mod = _resolve_torch(torch_module)
     if torch_mod is None:  # pragma: no cover - environment dependent
@@ -581,8 +620,14 @@ def train_learning_model_for_one_epoch(
         )
     normalized_ignore_index = _require_int(ignore_index, name="ignore_index")
 
-    resolved_model_runtime = _resolve_model_runtime(model_runtime)
-    resolved_train_runtime = _resolve_train_runtime(train_runtime)
+    resolved_model_runtime = _resolve_model_runtime(
+        model_runtime,
+        learning_session=learning_session,
+    )
+    resolved_train_runtime = _resolve_train_runtime(
+        train_runtime,
+        learning_session=learning_session,
+    )
     class_weights = getattr(resolved_train_runtime, "class_weights", None)
     if class_weights is None:
         raise ValueError(
@@ -650,12 +695,12 @@ def train_learning_model_for_one_epoch(
 
     num_batches = 0
     cumulative_loss = 0.0
-    for minivols, annotations in dataloader:
+    for minivols, target_annotations in dataloader:
         if _is_stop_requested(stop_event):
             raise _LearningTrainingStopRequested("Training stop requested by user.")
 
         minivols = minivols.to(resolved_device)
-        annotations = annotations.to(
+        target_annotations = target_annotations.to(
             device=resolved_device,
             dtype=getattr(torch_mod, "long"),
         )
@@ -671,7 +716,7 @@ def train_learning_model_for_one_epoch(
             dtype=getattr(torch_mod, "bfloat16"),
         ):
             dec_output = model(minivols)
-            cur_loss = loss_func(input=dec_output, target=annotations)
+            cur_loss = loss_func(input=dec_output, target=target_annotations)
 
         scale_method = getattr(scaler, "scale", None)
         if not callable(scale_method):
@@ -721,6 +766,7 @@ def evaluate_learning_model_on_validation_dataloaders(
     device: Optional[str] = None,
     stop_event: Optional[object] = None,
     torch_module: Optional[object] = None,
+    learning_session: Optional[LearningSession] = None,
 ) -> LearningValidationEvalResult:
     torch_mod = _resolve_torch(torch_module)
     if torch_mod is None:  # pragma: no cover - environment dependent
@@ -737,9 +783,16 @@ def evaluate_learning_model_on_validation_dataloaders(
         resolved_eval_runtimes = dict(preconditions.eval_runtimes_by_box_id)
         resolved_valid_counts = dict(preconditions.validation_valid_voxel_counts_by_box_id)
     else:
-        resolved_model_runtime = _resolve_model_runtime(model_runtime)
+        resolved_model_runtime = _resolve_model_runtime(
+            model_runtime,
+            learning_session=learning_session,
+        )
         resolved_eval_runtimes = (
-            get_current_learning_eval_runtimes_by_box_id()
+            (
+                learning_session.get_eval_runtimes_by_box_id()
+                if learning_session is not None
+                else get_current_learning_eval_runtimes_by_box_id()
+            )
             if eval_runtimes_by_box_id is None
             else dict(eval_runtimes_by_box_id)
         )
@@ -860,6 +913,7 @@ def train_learning_model_with_validation_loop(
     device: Optional[str] = None,
     stop_event: Optional[object] = None,
     torch_module: Optional[object] = None,
+    learning_session: Optional[LearningSession] = None,
 ) -> LearningTrainingLoopResult:
     torch_mod = _resolve_torch(torch_module)
     if torch_mod is None:  # pragma: no cover - environment dependent
@@ -875,6 +929,7 @@ def train_learning_model_with_validation_loop(
             model_runtime=model_runtime,
             train_runtime=train_runtime,
             eval_runtimes_by_box_id=eval_runtimes_by_box_id,
+            learning_session=learning_session,
             require_class_weights=True,
             mask_label=_MASK_LABEL,
             torch_module=torch_mod,

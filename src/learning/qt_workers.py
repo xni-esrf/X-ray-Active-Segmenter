@@ -161,6 +161,12 @@ class LearningTrainingWorker(QObject):
         with self._completion_checkpoint_path_lock:
             return self._completion_checkpoint_path
 
+    def _completion_checkpoint_model_runtime(self) -> Optional[object]:
+        runtime = getattr(self._preconditions, "model_runtime", None)
+        if runtime is not None:
+            return runtime
+        return get_current_learning_model_runtime()
+
     def _maybe_save_completion_checkpoint(self, *, result: object) -> None:
         checkpoint_path = self._completion_checkpoint_save_path()
         if checkpoint_path is None:
@@ -172,7 +178,7 @@ class LearningTrainingWorker(QObject):
         if normalized_reason not in {"early_stop", "max_epoch"}:
             return
 
-        runtime = get_current_learning_model_runtime()
+        runtime = self._completion_checkpoint_model_runtime()
         if runtime is None:
             raise RuntimeError(
                 "No learning model runtime is available to save the completion checkpoint."

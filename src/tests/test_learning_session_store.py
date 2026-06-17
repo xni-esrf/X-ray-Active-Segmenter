@@ -10,6 +10,7 @@ except Exception:  # pragma: no cover - environment dependent
 from src.learning import (
     LearningBBoxDataLoaderRuntime,
     LearningBBoxEvalRuntime,
+    LearningSession,
     LearningModelRuntime,
     LearningBBoxTensorBatch,
     LearningBBoxTensorEntry,
@@ -30,6 +31,7 @@ from src.learning import (
     set_current_learning_bbox_entries,
     set_current_learning_model_components,
     set_current_learning_model_runtime,
+    get_default_learning_session,
 )
 
 
@@ -253,6 +255,33 @@ class LearningDataLoaderRuntimeStoreTests(unittest.TestCase):
         self.assertEqual(first_dataset.close_calls, 1)
         self.assertEqual(first_sampler.close_calls, 1)
 
+    def test_replacing_runtime_with_same_object_does_not_dispose_it(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        dataset = _FakeClosable()
+        sampler = _FakeClosable()
+        dataloader = _FakeClosable()
+        runtime = LearningBBoxDataLoaderRuntime(
+            dataset=dataset,
+            sampler=sampler,
+            dataloader=dataloader,
+            train_box_ids=("bbox_0001",),
+        )
+
+        set_current_learning_dataloader_runtime(runtime)
+        returned = set_current_learning_dataloader_runtime(runtime)
+
+        self.assertIs(returned, runtime)
+        self.assertIs(get_current_learning_dataloader_runtime(), runtime)
+        self.assertEqual(dataset.close_calls, 0)
+        self.assertEqual(sampler.close_calls, 0)
+        self.assertEqual(dataloader.close_calls, 0)
+
     def test_clear_runtime_disposes_current_components(self) -> None:
         class _FakeIterator:
             def __init__(self) -> None:
@@ -432,6 +461,24 @@ class LearningEvalRuntimeStoreTests(unittest.TestCase):
         self.assertEqual(tuple(sorted(current.keys())), ("bbox_0007", "bbox_0011"))
         self.assertIs(current["bbox_0007"], first)
         self.assertIs(current["bbox_0011"], second)
+
+    def test_eval_runtime_store_returns_map_copies(self) -> None:
+        first = LearningBBoxEvalRuntime(
+            box_id="bbox_0007",
+            dataloader=object(),
+            buffer=object(),
+        )
+
+        stored = set_current_learning_eval_runtimes_by_box_id({"bbox_0007": first})
+        stored.clear()
+        current = get_current_learning_eval_runtimes_by_box_id()
+        current.clear()
+
+        self.assertEqual(
+            tuple(get_current_learning_eval_runtimes_by_box_id().keys()),
+            ("bbox_0007",),
+        )
+        self.assertIs(get_current_learning_eval_runtimes_by_box_id()["bbox_0007"], first)
 
     def test_set_eval_runtime_components_by_box_id(self) -> None:
         first_loader = object()
@@ -635,6 +682,89 @@ class LearningModelRuntimeStoreTests(unittest.TestCase):
 
         self.assertIsNone(get_current_learning_model_runtime())
 
+    def test_replacing_model_runtime_disposes_previous_components(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        first_model = _FakeClosable()
+        first_optimizer = _FakeClosable()
+        first_runtime = LearningModelRuntime(
+            model=first_model,
+            optimizer=first_optimizer,
+            checkpoint_path="foundation_model/weights_epoch_180.cp",
+            device_ids=(0, 1),
+            num_classes=4,
+        )
+        set_current_learning_model_runtime(first_runtime)
+
+        second_runtime = LearningModelRuntime(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=6,
+        )
+        set_current_learning_model_runtime(second_runtime)
+
+        self.assertIs(get_current_learning_model_runtime(), second_runtime)
+        self.assertEqual(first_model.close_calls, 1)
+        self.assertEqual(first_optimizer.close_calls, 1)
+
+    def test_replacing_model_runtime_with_same_object_does_not_dispose_it(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        model = _FakeClosable()
+        optimizer = _FakeClosable()
+        runtime = LearningModelRuntime(
+            model=model,
+            optimizer=optimizer,
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=6,
+        )
+
+        set_current_learning_model_runtime(runtime)
+        returned = set_current_learning_model_runtime(runtime)
+
+        self.assertIs(returned, runtime)
+        self.assertIs(get_current_learning_model_runtime(), runtime)
+        self.assertEqual(model.close_calls, 0)
+        self.assertEqual(optimizer.close_calls, 0)
+
+    def test_clear_model_runtime_disposes_current_components(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        model = _FakeClosable()
+        optimizer = _FakeClosable()
+        runtime = LearningModelRuntime(
+            model=model,
+            optimizer=optimizer,
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=6,
+        )
+        set_current_learning_model_runtime(runtime)
+
+        clear_current_learning_model_runtime()
+
+        self.assertIsNone(get_current_learning_model_runtime())
+        self.assertEqual(model.close_calls, 1)
+        self.assertEqual(optimizer.close_calls, 1)
+
     def test_model_runtime_rejects_invalid_values(self) -> None:
         with self.assertRaises(ValueError):
             LearningModelRuntime(
@@ -718,6 +848,399 @@ class LearningModelRuntimeStoreTests(unittest.TestCase):
                 num_classes=6,
                 hyperparameters={1: "bad key"},  # type: ignore[dict-item]
             )
+
+
+class LearningSessionShellTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_current_learning_model_runtime()
+
+    def tearDown(self) -> None:
+        clear_current_learning_model_runtime()
+
+    def test_new_learning_session_starts_empty_and_has_isolated_storage(self) -> None:
+        first = LearningSession()
+        second = LearningSession()
+
+        self.assertIsNone(first._bbox_batch)
+        self.assertIsNone(first._dataloader_runtime)
+        self.assertEqual(first._eval_runtimes_by_box_id, {})
+        self.assertIsNone(first._model_runtime)
+        self.assertIsNot(first._lock, second._lock)
+        self.assertIsNot(first._eval_runtimes_by_box_id, second._eval_runtimes_by_box_id)
+
+    def test_constructing_learning_session_does_not_change_global_wrappers(self) -> None:
+        runtime = LearningModelRuntime(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=6,
+        )
+        set_current_learning_model_runtime(runtime)
+
+        LearningSession()
+
+        self.assertIs(get_current_learning_model_runtime(), runtime)
+
+
+@unittest.skipUnless(torch is not None, "PyTorch is not available")
+class LearningSessionMethodTests(unittest.TestCase):
+    def _entry(self, *, box_id: str, index: int, label: str) -> LearningBBoxTensorEntry:
+        raw_tensor = torch.zeros((2, 3, 4), dtype=torch.float16, device="cpu")
+        seg_tensor = torch.full((2, 3, 4), -100, dtype=torch.int16, device="cpu")
+        return LearningBBoxTensorEntry(
+            box_id=box_id,
+            index=index,
+            label=label,
+            raw_tensor=raw_tensor,
+            segmentation_tensor=seg_tensor,
+        )
+
+    def test_bbox_batch_methods_are_session_local(self) -> None:
+        first_session = LearningSession()
+        second_session = LearningSession()
+        first = self._entry(box_id="bbox_0001", index=1, label="train")
+        second = self._entry(box_id="bbox_0002", index=2, label="validation")
+
+        returned = first_session.set_bbox_entries((first, second))
+
+        self.assertIs(first_session.get_bbox_batch(), returned)
+        self.assertEqual(returned.box_ids, ("bbox_0001", "bbox_0002"))
+        self.assertIsNone(second_session.get_bbox_batch())
+
+        first_session.clear_bbox_batch()
+
+        self.assertIsNone(first_session.get_bbox_batch())
+
+    def test_dataloader_runtime_methods_preserve_wrapper_disposal_semantics(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        session = LearningSession()
+        first_dataset = _FakeClosable()
+        first_sampler = _FakeClosable()
+        first_dataloader = _FakeClosable()
+        first = LearningBBoxDataLoaderRuntime(
+            dataset=first_dataset,
+            sampler=first_sampler,
+            dataloader=first_dataloader,
+            train_box_ids=("bbox_0001",),
+        )
+        second = LearningBBoxDataLoaderRuntime(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0002",),
+        )
+
+        self.assertIs(session.set_dataloader_runtime(first), first)
+        self.assertIs(session.set_dataloader_runtime(first), first)
+        self.assertEqual(first_dataset.close_calls, 0)
+        session.set_dataloader_runtime(second)
+
+        self.assertIs(session.get_dataloader_runtime(), second)
+        self.assertEqual(first_dataset.close_calls, 1)
+        self.assertEqual(first_sampler.close_calls, 1)
+        self.assertEqual(first_dataloader.close_calls, 1)
+
+    def test_dataloader_runtime_clear_is_session_local(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        first_session = LearningSession()
+        second_session = LearningSession()
+        first_dataset = _FakeClosable()
+        first_runtime = LearningBBoxDataLoaderRuntime(
+            dataset=first_dataset,
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+        )
+        second_runtime = LearningBBoxDataLoaderRuntime(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0002",),
+        )
+        first_session.set_dataloader_runtime(first_runtime)
+        second_session.set_dataloader_runtime(second_runtime)
+
+        first_session.clear_dataloader_runtime()
+
+        self.assertIsNone(first_session.get_dataloader_runtime())
+        self.assertIs(second_session.get_dataloader_runtime(), second_runtime)
+        self.assertEqual(first_dataset.close_calls, 1)
+
+    def test_dataloader_class_weight_update_does_not_dispose_runtime_components(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        session = LearningSession()
+        dataset = _FakeClosable()
+        sampler = _FakeClosable()
+        dataloader = _FakeClosable()
+        runtime = LearningBBoxDataLoaderRuntime(
+            dataset=dataset,
+            sampler=sampler,
+            dataloader=dataloader,
+            train_box_ids=("bbox_0001",),
+        )
+        session.set_dataloader_runtime(runtime)
+
+        weights = torch.tensor([1.0, 2.0], dtype=torch.float32)
+        updated = session.set_dataloader_class_weights(weights)
+
+        self.assertIs(session.get_dataloader_runtime(), updated)
+        self.assertIs(updated.class_weights, weights)
+        self.assertEqual(dataset.close_calls, 0)
+        self.assertEqual(sampler.close_calls, 0)
+        self.assertEqual(dataloader.close_calls, 0)
+
+    def test_eval_runtime_methods_return_copies_and_dispose_previous(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        session = LearningSession()
+        first_loader = _FakeClosable()
+        first_buffer = _FakeClosable()
+        first = LearningBBoxEvalRuntime(
+            box_id="bbox_0001",
+            dataloader=first_loader,
+            buffer=first_buffer,
+        )
+        stored = session.set_eval_runtimes_by_box_id({"bbox_0001": first})
+        stored.clear()
+        current = session.get_eval_runtimes_by_box_id()
+        current.clear()
+
+        self.assertEqual(tuple(session.get_eval_runtimes_by_box_id().keys()), ("bbox_0001",))
+        session.set_eval_runtime_components_by_box_id(
+            {"bbox_0002": (object(), object())}
+        )
+
+        self.assertEqual(tuple(session.get_eval_runtimes_by_box_id().keys()), ("bbox_0002",))
+        self.assertEqual(first_loader.close_calls, 1)
+        self.assertEqual(first_buffer.close_calls, 1)
+
+    def test_eval_runtime_clear_is_session_local(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        first_session = LearningSession()
+        second_session = LearningSession()
+        first_loader = _FakeClosable()
+        first_buffer = _FakeClosable()
+        first_runtime = LearningBBoxEvalRuntime(
+            box_id="bbox_0001",
+            dataloader=first_loader,
+            buffer=first_buffer,
+        )
+        second_runtime = LearningBBoxEvalRuntime(
+            box_id="bbox_0002",
+            dataloader=object(),
+            buffer=object(),
+        )
+        first_session.set_eval_runtimes_by_box_id({"bbox_0001": first_runtime})
+        second_session.set_eval_runtimes_by_box_id({"bbox_0002": second_runtime})
+
+        first_session.clear_eval_runtimes_by_box_id()
+
+        self.assertEqual(first_session.get_eval_runtimes_by_box_id(), {})
+        self.assertIs(
+            second_session.get_eval_runtimes_by_box_id()["bbox_0002"],
+            second_runtime,
+        )
+        self.assertEqual(first_loader.close_calls, 1)
+        self.assertEqual(first_buffer.close_calls, 1)
+
+    def test_model_runtime_methods_preserve_wrapper_disposal_semantics(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        session = LearningSession()
+        first_model = _FakeClosable()
+        first_optimizer = _FakeClosable()
+        first = LearningModelRuntime(
+            model=first_model,
+            optimizer=first_optimizer,
+            checkpoint_path="foundation_model/weights_epoch_180.cp",
+            device_ids=(0, 1),
+            num_classes=4,
+        )
+        session.set_model_runtime(first)
+        self.assertIs(session.set_model_runtime(first), first)
+        self.assertEqual(first_model.close_calls, 0)
+        second = session.set_model_components(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=6,
+            hyperparameters={"lr": 0.0001},
+        )
+
+        self.assertIs(session.get_model_runtime(), second)
+        self.assertEqual(first_model.close_calls, 1)
+        self.assertEqual(first_optimizer.close_calls, 1)
+
+        session.clear_model_runtime()
+        self.assertIsNone(session.get_model_runtime())
+
+    def test_model_runtime_clear_is_session_local(self) -> None:
+        class _FakeClosable:
+            def __init__(self) -> None:
+                self.close_calls = 0
+
+            def close(self) -> None:
+                self.close_calls += 1
+
+        first_session = LearningSession()
+        second_session = LearningSession()
+        first_model = _FakeClosable()
+        first_optimizer = _FakeClosable()
+        first_runtime = LearningModelRuntime(
+            model=first_model,
+            optimizer=first_optimizer,
+            checkpoint_path="foundation_model/weights_epoch_180.cp",
+            device_ids=(0, 1),
+            num_classes=4,
+        )
+        second_runtime = LearningModelRuntime(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=6,
+        )
+        first_session.set_model_runtime(first_runtime)
+        second_session.set_model_runtime(second_runtime)
+
+        first_session.clear_model_runtime()
+
+        self.assertIsNone(first_session.get_model_runtime())
+        self.assertIs(second_session.get_model_runtime(), second_runtime)
+        self.assertEqual(first_model.close_calls, 1)
+        self.assertEqual(first_optimizer.close_calls, 1)
+
+
+class DefaultLearningSessionTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_current_learning_bbox_batch()
+        clear_current_learning_dataloader_runtime()
+        clear_current_learning_eval_runtimes_by_box_id()
+        clear_current_learning_model_runtime()
+
+    def tearDown(self) -> None:
+        clear_current_learning_bbox_batch()
+        clear_current_learning_dataloader_runtime()
+        clear_current_learning_eval_runtimes_by_box_id()
+        clear_current_learning_model_runtime()
+
+    def test_default_learning_session_accessor_returns_stable_session(self) -> None:
+        first = get_default_learning_session()
+        second = get_default_learning_session()
+
+        self.assertIs(first, second)
+        self.assertIsInstance(first, LearningSession)
+
+    def test_global_bbox_wrappers_delegate_to_default_session(self) -> None:
+        if torch is None:
+            self.skipTest("PyTorch is not available")
+        session = get_default_learning_session()
+        raw_tensor = torch.zeros((2, 3, 4), dtype=torch.float16, device="cpu")
+        seg_tensor = torch.full((2, 3, 4), -100, dtype=torch.int16, device="cpu")
+        entry = LearningBBoxTensorEntry(
+            box_id="bbox_0001",
+            index=1,
+            label="train",
+            raw_tensor=raw_tensor,
+            segmentation_tensor=seg_tensor,
+        )
+
+        batch = set_current_learning_bbox_entries((entry,))
+
+        self.assertIs(session.get_bbox_batch(), batch)
+        self.assertIs(get_current_learning_bbox_batch(), batch)
+
+        session.clear_bbox_batch()
+
+        self.assertIsNone(get_current_learning_bbox_batch())
+
+    def test_global_model_wrappers_delegate_to_default_session(self) -> None:
+        session = get_default_learning_session()
+        runtime = LearningModelRuntime(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=6,
+        )
+
+        set_current_learning_model_runtime(runtime)
+
+        self.assertIs(session.get_model_runtime(), runtime)
+        self.assertIs(get_current_learning_model_runtime(), runtime)
+
+        session.clear_model_runtime()
+
+        self.assertIsNone(get_current_learning_model_runtime())
+
+    def test_global_dataloader_wrappers_delegate_to_default_session(self) -> None:
+        session = get_default_learning_session()
+        runtime = LearningBBoxDataLoaderRuntime(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+        )
+
+        session.set_dataloader_runtime(runtime)
+
+        self.assertIs(get_current_learning_dataloader_runtime(), runtime)
+
+        clear_current_learning_dataloader_runtime()
+
+        self.assertIsNone(session.get_dataloader_runtime())
+
+    def test_global_eval_wrappers_delegate_to_default_session(self) -> None:
+        session = get_default_learning_session()
+        runtime = LearningBBoxEvalRuntime(
+            box_id="bbox_0001",
+            dataloader=object(),
+            buffer=object(),
+        )
+
+        set_current_learning_eval_runtimes_by_box_id({"bbox_0001": runtime})
+
+        self.assertIs(session.get_eval_runtimes_by_box_id()["bbox_0001"], runtime)
+
+        session.clear_eval_runtimes_by_box_id()
+
+        self.assertEqual(get_current_learning_eval_runtimes_by_box_id(), {})
 
 if __name__ == "__main__":
     unittest.main()

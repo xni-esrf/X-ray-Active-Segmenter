@@ -10,6 +10,7 @@ except Exception:  # pragma: no cover - environment dependent
 
 from src.learning import (
     LearningBBoxEvalRuntime,
+    LearningSession,
     clear_current_learning_dataloader_runtime,
     clear_current_learning_eval_runtimes_by_box_id,
     compute_and_store_current_learning_class_weights,
@@ -194,6 +195,46 @@ class LearningClassWeightsTests(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "label_values ordering"):
             compute_and_store_current_learning_class_weights(device="cpu")
+
+    def test_compute_and_store_current_learning_class_weights_can_use_explicit_session(
+        self,
+    ) -> None:
+        session = LearningSession()
+        dataset = SimpleNamespace(
+            annot_tensors=(
+                torch.tensor(
+                    [
+                        [[0, 0], [0, 0]],
+                        [[1, 1], [1, 1]],
+                    ],
+                    dtype=torch.int16,
+                ),
+            )
+        )
+        session.set_dataloader_components(
+            dataset=dataset,
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0007",),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0008": LearningBBoxEvalRuntime(
+                    box_id="bbox_0008",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(label_values=(1, 0)),
+                ),
+            }
+        )
+
+        weights = compute_and_store_current_learning_class_weights(
+            device="cpu",
+            learning_session=session,
+        )
+
+        self.assertEqual(weights.tolist(), [1.0, 1.0])
+        self.assertEqual(session.get_dataloader_runtime().class_weights.tolist(), [1.0, 1.0])
+        self.assertIsNone(get_current_learning_dataloader_runtime())
 
 
 if __name__ == "__main__":

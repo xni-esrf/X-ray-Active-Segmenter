@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from collections.abc import Sequence as SequenceABC
-from dataclasses import dataclass
 from numbers import Integral
-from typing import Callable, Optional, Sequence, Tuple
+from typing import Callable, Optional, Tuple
 
 from .train_bbox_dataset import TrainBBoxDataset
 from .session_store import (
     LearningBBoxDataLoaderRuntime,
+    LearningSession,
     LearningBBoxTensorBatch,
     LearningBBoxTensorEntry,
     get_current_learning_bbox_batch,
@@ -89,6 +89,7 @@ def build_learning_dataloader_from_batch(
     sampler_factory: Optional[Callable[..., object]] = None,
     dataloader_factory: Optional[Callable[..., object]] = None,
     store_in_session: bool = True,
+    learning_session: Optional[LearningSession] = None,
 ) -> LearningBBoxDataLoaderRuntime:
     normalized_minivol_size = _coerce_positive_int(minivol_size, name="minivol_size")
     normalized_minivol_per_epoch = _coerce_positive_int(
@@ -144,6 +145,19 @@ def build_learning_dataloader_from_batch(
 
     train_box_ids = tuple(entry.box_id for entry in train_entries)
     if normalized_store_in_session:
+        if learning_session is not None:
+            return learning_session.set_dataloader_components(
+                dataset=dataset,
+                sampler=sampler,
+                dataloader=dataloader,
+                train_box_ids=train_box_ids,
+                minivol_size=normalized_minivol_size,
+                minivol_per_epoch=normalized_minivol_per_epoch,
+                batch_size=normalized_batch_size,
+                num_workers=normalized_num_workers,
+                pin_memory=normalized_pin_memory,
+                drop_last=normalized_drop_last,
+            )
         return set_current_learning_dataloader_components(
             dataset=dataset,
             sampler=sampler,
@@ -183,8 +197,13 @@ def build_learning_dataloader_from_current_batch(
     sampler_factory: Optional[Callable[..., object]] = None,
     dataloader_factory: Optional[Callable[..., object]] = None,
     store_in_session: bool = True,
+    learning_session: Optional[LearningSession] = None,
 ) -> LearningBBoxDataLoaderRuntime:
-    batch = get_current_learning_bbox_batch()
+    batch = (
+        learning_session.get_bbox_batch()
+        if learning_session is not None
+        else get_current_learning_bbox_batch()
+    )
     if batch is None:
         raise ValueError("No learning tensor batch is available in session storage.")
     return build_learning_dataloader_from_batch(
@@ -199,4 +218,5 @@ def build_learning_dataloader_from_current_batch(
         sampler_factory=sampler_factory,
         dataloader_factory=dataloader_factory,
         store_in_session=store_in_session,
+        learning_session=learning_session,
     )

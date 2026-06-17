@@ -6,6 +6,7 @@ import sys
 import textwrap
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import numpy as np
@@ -229,6 +230,40 @@ class LearningTrainingWorkerTests(unittest.TestCase):
         self.assertEqual(completed_payloads, [result])
         self.assertEqual(failed_messages, [])
         self.assertEqual(finished_calls, ["finished"])
+
+    def test_run_saves_completion_checkpoint_from_precondition_runtime(self) -> None:
+        worker = LearningTrainingWorker()
+        runtime = object()
+        preconditions = SimpleNamespace(model_runtime=runtime)
+        worker.configure(
+            preconditions=preconditions,
+            completion_checkpoint_path="/tmp/background_best.cp",
+        )
+        result = LearningTrainingLoopResult(
+            completed_epoch_count=4,
+            total_epoch_count=8,
+            stop_reason="max_epoch",
+            best_epoch=4,
+            best_weighted_mean_dice=0.87,
+            early_stop_patience=2,
+            mixed_precision_enabled=True,
+        )
+
+        with patch(
+            "src.learning.qt_workers._train_learning_model_with_validation_loop",
+            return_value=result,
+        ), patch(
+            "src.learning.qt_workers.get_current_learning_model_runtime"
+        ) as runtime_mock, patch(
+            "src.learning.qt_workers._save_foundation_model_checkpoint"
+        ) as save_mock:
+            worker.run()
+
+        runtime_mock.assert_not_called()
+        save_mock.assert_called_once_with(
+            runtime=runtime,
+            checkpoint_path="/tmp/background_best.cp",
+        )
 
     def test_run_skips_completion_checkpoint_save_on_user_stop(self) -> None:
         worker = LearningTrainingWorker()

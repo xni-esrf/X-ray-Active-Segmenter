@@ -12,6 +12,7 @@ from ..bbox.model import BoundingBox
 from ..learning import (
     LearningBBoxTensorBatch,
     LearningBBoxTensorEntry,
+    LearningSession,
     build_eval_dataloader_runtimes_from_batch,
     build_learning_dataloader_from_batch,
     clear_current_learning_dataloader_runtime,
@@ -852,6 +853,7 @@ def extract_learning_bbox_tensors(
     store_in_session: bool = True,
     raw_context_extractor: Optional[Callable[..., np.ndarray]] = None,
     segmentation_context_builder: Optional[Callable[..., np.ndarray]] = None,
+    learning_session: Optional[LearningSession] = None,
 ) -> LearningBBoxTensorBatch:
     normalized_raw = _coerce_3d_array(raw_array)
     normalized_segmentation = _coerce_3d_array(segmentation_array)
@@ -965,6 +967,8 @@ def extract_learning_bbox_tensors(
         entries.append(entry)
 
     if store_in_session:
+        if learning_session is not None:
+            return learning_session.set_bbox_entries(tuple(entries))
         return set_current_learning_bbox_entries(tuple(entries))
     return LearningBBoxTensorBatch(entries=tuple(entries))
 
@@ -998,11 +1002,18 @@ def extract_learning_bboxes_in_memory(
     eval_buffer_factory: Optional[Callable[..., object]] = None,
     raw_context_extractor: Optional[Callable[..., np.ndarray]] = None,
     segmentation_context_builder: Optional[Callable[..., np.ndarray]] = None,
+    learning_session: Optional[LearningSession] = None,
 ) -> LearningBBoxExtractionOutcome:
     if bool(store_in_session) and bool(build_learning_dataloader):
-        clear_current_learning_dataloader_runtime()
+        if learning_session is not None:
+            learning_session.clear_dataloader_runtime()
+        else:
+            clear_current_learning_dataloader_runtime()
     if bool(store_in_session) and bool(build_eval_dataloaders):
-        clear_current_learning_eval_runtimes_by_box_id()
+        if learning_session is not None:
+            learning_session.clear_eval_runtimes_by_box_id()
+        else:
+            clear_current_learning_eval_runtimes_by_box_id()
 
     batch = extract_learning_bbox_tensors(
         raw_array,
@@ -1013,6 +1024,7 @@ def extract_learning_bboxes_in_memory(
         store_in_session=store_in_session,
         raw_context_extractor=raw_context_extractor,
         segmentation_context_builder=segmentation_context_builder,
+        learning_session=learning_session,
     )
 
     learning_runtime = None
@@ -1045,6 +1057,7 @@ def extract_learning_bboxes_in_memory(
             sampler_factory=learning_sampler_factory,
             dataloader_factory=learning_dataloader_factory,
             store_in_session=store_in_session,
+            learning_session=learning_session,
         )
 
     if build_eval_dataloaders:
@@ -1064,14 +1077,20 @@ def extract_learning_bboxes_in_memory(
                 dataloader_factory=eval_dataloader_factory,
                 buffer_factory=eval_buffer_factory,
                 store_in_session=store_in_session,
+                learning_session=learning_session,
             )
         except Exception:
             # Eval runtime build is part of one atomic extraction action:
             # if it fails, rollback any newly built training runtime.
             if bool(store_in_session):
-                if bool(build_learning_dataloader):
-                    clear_current_learning_dataloader_runtime()
-                clear_current_learning_eval_runtimes_by_box_id()
+                if learning_session is not None:
+                    if bool(build_learning_dataloader):
+                        learning_session.clear_dataloader_runtime()
+                    learning_session.clear_eval_runtimes_by_box_id()
+                else:
+                    if bool(build_learning_dataloader):
+                        clear_current_learning_dataloader_runtime()
+                    clear_current_learning_eval_runtimes_by_box_id()
             raise
 
     return LearningBBoxExtractionOutcome(

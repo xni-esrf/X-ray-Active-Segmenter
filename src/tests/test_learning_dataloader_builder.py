@@ -8,6 +8,7 @@ except Exception:  # pragma: no cover - environment dependent
     torch = None  # type: ignore[assignment]
 
 from src.learning import (
+    LearningSession,
     LearningBBoxTensorBatch,
     LearningBBoxTensorEntry,
     build_learning_dataloader_from_batch,
@@ -212,6 +213,40 @@ class LearningDataLoaderBuilderTests(unittest.TestCase):
 
         self.assertEqual(runtime.train_box_ids, ("bbox_0008",))
         self.assertEqual(runtime.train_count, 1)
+
+    def test_build_from_current_batch_can_use_explicit_learning_session(self) -> None:
+        train_entry = self._entry(
+            box_id="bbox_0015",
+            index=15,
+            label="train",
+            fill_raw=7,
+            fill_seg=9,
+        )
+        session = LearningSession()
+        session.set_bbox_entries((train_entry,))
+
+        class _Dataset:
+            def __init__(self, tensor_pairs, *, minivol_size, minivol_per_epoch):
+                del minivol_size, minivol_per_epoch
+                self.pairs = tuple(tensor_pairs)
+                self.weights = [1]
+
+            def __len__(self):
+                return 10
+
+        runtime = build_learning_dataloader_from_current_batch(
+            minivol_size=200,
+            minivol_per_epoch=64,
+            dataset_factory=_Dataset,
+            sampler_factory=lambda weights, size: ("sampler", tuple(weights), int(size)),
+            dataloader_factory=lambda dataset, **kwargs: ("loader", dataset, kwargs),
+            store_in_session=True,
+            learning_session=session,
+        )
+
+        self.assertIs(session.get_dataloader_runtime(), runtime)
+        self.assertIsNone(get_current_learning_dataloader_runtime())
+        self.assertEqual(runtime.train_box_ids, ("bbox_0015",))
 
 
 if __name__ == "__main__":

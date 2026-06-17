@@ -51,6 +51,7 @@ from ..io.saver import save_segmentation_volume
 from ..loading import load_prepared_volume
 from ..learning import (
     DEFAULT_FOUNDATION_CHECKPOINT_PATH,
+    LearningSession,
     LearningTrainingLoopResult,
     clear_current_learning_bbox_batch,
     compute_and_store_current_learning_class_weights,
@@ -439,6 +440,7 @@ class MainWindow(QMainWindow):
         self._inference_stop_requested = False
         self._inference_worker: Optional[object] = None
         self._inference_thread: Optional[object] = None
+        self._learning_session = LearningSession()
         self._learning_state_signature: Optional[Tuple[object, ...]] = None
         self._learning_state_stale = True
         self._deferred_close_after_training = False
@@ -664,6 +666,56 @@ class MainWindow(QMainWindow):
         self._refresh_annotation_ui_state()
         self._apply_main_splitter_width_constraints()
         QTimer.singleShot(0, self._initialize_main_splitter_sizes)
+
+    @staticmethod
+    def _learning_session_for(owner: object) -> Optional[LearningSession]:
+        session = getattr(owner, "_learning_session", None)
+        if isinstance(session, LearningSession):
+            return session
+        return None
+
+    @staticmethod
+    def _learning_session_kwargs_for(owner: object) -> Dict[str, LearningSession]:
+        session = MainWindow._learning_session_for(owner)
+        if session is None:
+            return {}
+        return {"learning_session": session}
+
+    @staticmethod
+    def _get_learning_dataloader_runtime_for(owner: object) -> object:
+        session = MainWindow._learning_session_for(owner)
+        if session is not None:
+            return session.get_dataloader_runtime()
+        return get_current_learning_dataloader_runtime()
+
+    @staticmethod
+    def _get_learning_eval_runtimes_by_box_id_for(owner: object) -> Dict[str, object]:
+        session = MainWindow._learning_session_for(owner)
+        if session is not None:
+            return session.get_eval_runtimes_by_box_id()
+        return get_current_learning_eval_runtimes_by_box_id()
+
+    @staticmethod
+    def _get_learning_model_runtime_for(owner: object) -> object:
+        session = MainWindow._learning_session_for(owner)
+        if session is not None:
+            return session.get_model_runtime()
+        return get_current_learning_model_runtime()
+
+    @staticmethod
+    def _clear_learning_bbox_batch_for(owner: object) -> None:
+        session = MainWindow._learning_session_for(owner)
+        if session is not None:
+            session.clear_bbox_batch()
+            return
+        clear_current_learning_bbox_batch()
+
+    @staticmethod
+    def _get_learning_bbox_batch_for(owner: object) -> object:
+        session = MainWindow._learning_session_for(owner)
+        if session is not None:
+            return session.get_bbox_batch()
+        return get_current_learning_bbox_batch()
 
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
         if not self._maybe_resolve_unsaved_data_before_close():
@@ -1608,8 +1660,8 @@ class MainWindow(QMainWindow):
             # trigger train/validation learning-state rebuilds.
             return True
         require_class_weights = normalized_action == "train"
-        train_runtime = get_current_learning_dataloader_runtime()
-        eval_runtimes_by_box_id = get_current_learning_eval_runtimes_by_box_id()
+        train_runtime = MainWindow._get_learning_dataloader_runtime_for(self)
+        eval_runtimes_by_box_id = MainWindow._get_learning_eval_runtimes_by_box_id_for(self)
         missing_learning_state = bool(train_runtime is None or not eval_runtimes_by_box_id)
         if (
             not missing_learning_state
@@ -1650,7 +1702,7 @@ class MainWindow(QMainWindow):
         self._save_model_with_dialog()
 
     def _save_model_with_dialog(self) -> bool:
-        runtime = get_current_learning_model_runtime()
+        runtime = MainWindow._get_learning_model_runtime_for(self)
         if runtime is None:
             show_warning(
                 "Load a model before saving.",
@@ -2189,7 +2241,7 @@ class MainWindow(QMainWindow):
         return bbox_ops.count_true_neighbors_3x3x3(mask)
 
     def _segment_inference_bboxes_with_dialog(self) -> bool:
-        model_runtime = get_current_learning_model_runtime()
+        model_runtime = MainWindow._get_learning_model_runtime_for(self)
         if model_runtime is None:
             show_warning(
                 "Load a model before running Segment Inference BBox.",
@@ -2945,11 +2997,13 @@ class MainWindow(QMainWindow):
         try:
             preconditions = validate_foundation_model_instantiation_preconditions(
                 require_min_gpu_count=2,
+                **MainWindow._learning_session_kwargs_for(self),
             )
             runtime = instantiate_foundation_model_runtime(
                 num_classes=preconditions.num_classes,
                 device_ids=preconditions.device_ids,
                 checkpoint_path=checkpoint_path,
+                **MainWindow._learning_session_kwargs_for(self),
             )
             eval_runtimes_by_box_id = getattr(preconditions, "eval_runtimes_by_box_id", None)
             if isinstance(eval_runtimes_by_box_id, Mapping):
@@ -2983,7 +3037,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _ensure_training_runtime_for_new_training(self) -> bool:
-        runtime = get_current_learning_model_runtime()
+        runtime = MainWindow._get_learning_model_runtime_for(self)
         if runtime is None:
             return self._reinitialize_training_runtime_from_default_checkpoint()
         if not self._runtime_requires_training_reinitialization(runtime):
@@ -2998,7 +3052,7 @@ class MainWindow(QMainWindow):
     def _mark_current_model_runtime_as_trained(self, *, completed_epoch_count: int) -> None:
         if int(completed_epoch_count) <= 0:
             return
-        runtime = get_current_learning_model_runtime()
+        runtime = MainWindow._get_learning_model_runtime_for(self)
         if runtime is None:
             return
         hyperparameters_obj = getattr(runtime, "hyperparameters", None)
@@ -3030,6 +3084,7 @@ class MainWindow(QMainWindow):
         try:
             preconditions = validate_learning_model_training_preconditions(
                 require_class_weights=True,
+                **MainWindow._learning_session_kwargs_for(self),
             )
         except Exception as exc:
             show_warning(str(exc), parent=self)
@@ -3341,18 +3396,20 @@ class MainWindow(QMainWindow):
                 eval_num_workers=8,
                 eval_pin_memory=True,
                 eval_drop_last=False,
+                **MainWindow._learning_session_kwargs_for(self),
             )
             class_weights = None
             if bool(require_class_weights):
                 class_weights = compute_and_store_current_learning_class_weights(
                     max_weight=100.0,
                     device="cuda:0",
+                    **MainWindow._learning_session_kwargs_for(self),
                 )
-            clear_current_learning_bbox_batch()
-            residual_batch = get_current_learning_bbox_batch()
+            MainWindow._clear_learning_bbox_batch_for(self)
+            residual_batch = MainWindow._get_learning_bbox_batch_for(self)
             residual_entry_count = int(residual_batch.size) if residual_batch is not None else 0
         except Exception as exc:
-            clear_current_learning_bbox_batch()
+            MainWindow._clear_learning_bbox_batch_for(self)
             show_warning(str(exc), parent=self)
             return False
 
@@ -3504,7 +3561,7 @@ class MainWindow(QMainWindow):
                 require_min_gpu_count=2,
             )
             checkpoint_path = str(preconditions.checkpoint_path)
-            existing_runtime = get_current_learning_model_runtime()
+            existing_runtime = MainWindow._get_learning_model_runtime_for(self)
             if existing_runtime is not None:
                 if not confirm_reinitialize_model(parent=self):
                     return False
@@ -3513,6 +3570,7 @@ class MainWindow(QMainWindow):
                 num_classes=preconditions.num_classes,
                 device_ids=preconditions.device_ids,
                 checkpoint_path=checkpoint_path,
+                **MainWindow._learning_session_kwargs_for(self),
             )
             hyperparameters_obj = getattr(runtime, "hyperparameters", None)
             if not isinstance(hyperparameters_obj, dict):

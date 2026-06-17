@@ -5,6 +5,7 @@ import unittest
 
 from src.learning import (
     LearningBBoxEvalRuntime,
+    LearningSession,
     LearningModelRuntime,
     set_current_learning_dataloader_components,
     set_current_learning_eval_runtimes_by_box_id,
@@ -338,6 +339,31 @@ class FoundationModelInstantiationFlowTests(unittest.TestCase):
         current = get_current_learning_model_runtime()
         self.assertIs(current, runtime)
         self.assertEqual(current.num_classes, 3)
+
+    def test_instantiate_foundation_model_runtime_can_store_in_explicit_session(self) -> None:
+        session = LearningSession()
+
+        runtime = instantiate_foundation_model_runtime(
+            num_classes=3,
+            config=FoundationModelConfig(checkpoint_path="foundation_model/weights_epoch_190.cp"),
+            device_ids=(0, 1),
+            store_in_session=True,
+            model_factory=self._FakeModel,
+            checkpoint_loader=lambda _path, *, map_location: {
+                "encoder_weights": {
+                    "module.patch_embed.weight": object(),
+                    "module.blocks.1.weight": object(),
+                    "module.blocks.0.weight": object(),
+                }
+            },
+            data_parallel_factory=self._FakeDataParallel,
+            optimizer_factory=self._FakeOptimizer,
+            torch_module=self._FakeTorchModule(),
+            learning_session=session,
+        )
+
+        self.assertIs(session.get_model_runtime(), runtime)
+        self.assertIsNone(get_current_learning_model_runtime())
 
     def test_instantiate_foundation_model_runtime_rejects_encoder_key_mismatch(self) -> None:
         with self.assertRaisesRegex(
@@ -711,6 +737,32 @@ class FoundationModelInstantiationPreconditionsTests(unittest.TestCase):
         self.assertEqual(preconditions.available_gpu_count, 3)
         self.assertEqual(preconditions.device_ids, (0, 1, 2))
         self.assertEqual(tuple(sorted(preconditions.eval_runtimes_by_box_id.keys())), ("bbox_0007", "bbox_0011"))
+
+    def test_validate_preconditions_can_read_explicit_learning_session(self) -> None:
+        session = LearningSession()
+        session.set_dataloader_components(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0007": LearningBBoxEvalRuntime(
+                    box_id="bbox_0007",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(num_classes=6),
+                )
+            }
+        )
+
+        preconditions = validate_foundation_model_instantiation_preconditions(
+            learning_session=session,
+            torch_module=self._FakeTorchModule(gpu_count=2),
+        )
+
+        self.assertEqual(preconditions.num_classes, 6)
+        self.assertEqual(tuple(preconditions.eval_runtimes_by_box_id.keys()), ("bbox_0007",))
 
     def test_validate_preconditions_rejects_when_training_runtime_missing(self) -> None:
         self._set_eval_runtimes({"bbox_0007": 6})

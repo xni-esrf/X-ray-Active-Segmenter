@@ -11,6 +11,7 @@ except Exception:  # pragma: no cover - environment dependent
 from .eval_bbox_dataset import DestVolBuffer, EvalBBoxDataset, InferenceDestVolBuffer
 from .session_store import (
     LearningBBoxEvalRuntime,
+    LearningSession,
     LearningBBoxTensorBatch,
     LearningBBoxTensorEntry,
     get_current_learning_bbox_batch,
@@ -300,6 +301,7 @@ def build_eval_dataloader_runtimes_from_batch(
     dataloader_factory: Optional[Callable[..., object]] = None,
     buffer_factory: Optional[Callable[..., object]] = None,
     store_in_session: bool = True,
+    learning_session: Optional[LearningSession] = None,
 ) -> Dict[str, LearningBBoxEvalRuntime]:
     normalized_minivol_size = _coerce_positive_int(minivol_size, name="minivol_size")
     normalized_batch_size = _coerce_positive_int(batch_size, name="batch_size")
@@ -353,6 +355,8 @@ def build_eval_dataloader_runtimes_from_batch(
         _resolve_shared_num_classes_from_eval_runtimes(runtimes)
 
         if normalized_store_in_session:
+            if learning_session is not None:
+                return learning_session.set_eval_runtimes_by_box_id(runtimes)
             return set_current_learning_eval_runtimes_by_box_id(runtimes)
         return dict(runtimes)
     except Exception:
@@ -371,8 +375,13 @@ def build_eval_dataloader_runtimes_from_current_batch(
     dataloader_factory: Optional[Callable[..., object]] = None,
     buffer_factory: Optional[Callable[..., object]] = None,
     store_in_session: bool = True,
+    learning_session: Optional[LearningSession] = None,
 ) -> Dict[str, LearningBBoxEvalRuntime]:
-    batch = get_current_learning_bbox_batch()
+    batch = (
+        learning_session.get_bbox_batch()
+        if learning_session is not None
+        else get_current_learning_bbox_batch()
+    )
     if batch is None:
         raise ValueError("No learning tensor batch is available in session storage.")
     return build_eval_dataloader_runtimes_from_batch(
@@ -386,6 +395,7 @@ def build_eval_dataloader_runtimes_from_current_batch(
         dataloader_factory=dataloader_factory,
         buffer_factory=buffer_factory,
         store_in_session=store_in_session,
+        learning_session=learning_session,
     )
 
 

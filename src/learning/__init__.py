@@ -43,6 +43,7 @@ _EXPORT_MODULE_BY_NAME: Dict[str, str] = {
     "TrainBBoxDataset": ".train_bbox_dataset",
     "LearningBBoxDataLoaderRuntime": ".session_store",
     "LearningBBoxEvalRuntime": ".session_store",
+    "LearningSession": ".session_store",
     "LearningModelRuntime": ".session_store",
     "LearningBBoxTensorBatch": ".session_store",
     "LearningBBoxTensorEntry": ".session_store",
@@ -63,6 +64,7 @@ _EXPORT_MODULE_BY_NAME: Dict[str, str] = {
     "set_current_learning_model_components": ".session_store",
     "get_current_learning_model_runtime": ".session_store",
     "clear_current_learning_model_runtime": ".session_store",
+    "get_default_learning_session": ".session_store",
 }
 
 __all__ = list(_EXPORT_MODULE_BY_NAME)

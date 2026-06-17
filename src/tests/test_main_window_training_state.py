@@ -12,6 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from src.bbox import BoundingBox
 
 try:
+    from src.learning import LearningBBoxEvalRuntime, LearningSession
     from src.learning.qt_workers import (
         LearningInferenceBackgroundResult,
         LearningInferenceStopRequested,
@@ -19,6 +20,8 @@ try:
     from src.ui.main_window import MainWindow, QThread
 except Exception:  # pragma: no cover - environment dependent
     MainWindow = None  # type: ignore[assignment]
+    LearningBBoxEvalRuntime = None  # type: ignore[assignment]
+    LearningSession = None  # type: ignore[assignment]
     LearningInferenceBackgroundResult = None  # type: ignore[assignment]
     QThread = None  # type: ignore[assignment]
     LearningInferenceStopRequested = None  # type: ignore[assignment]
@@ -542,6 +545,45 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
                 }
             ],
         )
+
+    @unittest.skipUnless(LearningSession is not None, "LearningSession is not available")
+    def test_ensure_learning_state_reads_window_learning_session(self) -> None:
+        session = LearningSession()
+        session.set_dataloader_components(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0002": LearningBBoxEvalRuntime(
+                    box_id="bbox_0002",
+                    dataloader=object(),
+                    buffer=object(),
+                )
+            }
+        )
+        prepare_calls = []
+        window_like = SimpleNamespace(
+            _learning_session=session,
+            _learning_state_signature=("sig",),
+            _learning_state_stale=False,
+            _current_learning_state_signature=lambda: ("sig",),
+            _prepare_learning_state=lambda **kwargs: prepare_calls.append(dict(kwargs)) or False,
+        )
+
+        with patch(
+            "src.ui.main_window.get_current_learning_dataloader_runtime",
+            side_effect=AssertionError("global dataloader getter should not be used"),
+        ), patch(
+            "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
+            side_effect=AssertionError("global eval getter should not be used"),
+        ):
+            result = MainWindow._ensure_learning_state_for_action(window_like, "load_model")
+
+        self.assertTrue(result)
+        self.assertEqual(prepare_calls, [])
 
     def test_handle_open_request_is_silent_when_inference_running(self) -> None:
         calls = []

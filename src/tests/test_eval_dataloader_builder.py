@@ -9,6 +9,7 @@ except Exception:  # pragma: no cover - environment dependent
 
 from src.learning import (
     LearningBBoxEvalRuntime,
+    LearningSession,
     LearningBBoxTensorBatch,
     LearningBBoxTensorEntry,
     build_eval_dataloader_runtimes_from_batch,
@@ -158,6 +159,49 @@ class EvalDataLoaderBuilderTests(unittest.TestCase):
 
         stored = get_current_learning_eval_runtimes_by_box_id()
         self.assertEqual(tuple(stored.keys()), ("bbox_0009", "bbox_0002"))
+
+    def test_build_eval_runtimes_from_current_batch_can_use_explicit_learning_session(
+        self,
+    ) -> None:
+        train_entry = self._entry(
+            box_id="bbox_0001",
+            index=1,
+            label="train",
+            raw_value=0,
+            seg_values=(0, 5),
+        )
+        validation_entry = self._entry(
+            box_id="bbox_0009",
+            index=9,
+            label="validation",
+            raw_value=1,
+            seg_values=(1,),
+        )
+        session = LearningSession()
+        session.set_bbox_entries((train_entry, validation_entry))
+
+        class _FakeDataset:
+            def __init__(self, raw_tensor, *, minivol_size):
+                self.vol = raw_tensor
+                self.minivol_size = int(minivol_size)
+
+        class _FakeBuffer:
+            def __init__(self, ground_truth, volume_shape, label_values, *, minivol_size):
+                del ground_truth, volume_shape, minivol_size
+                self.label_values = tuple(int(v) for v in label_values)
+                self.num_classes = len(self.label_values)
+
+        runtimes = build_eval_dataloader_runtimes_from_current_batch(
+            dataset_factory=_FakeDataset,
+            dataloader_factory=lambda dataset, **kwargs: ("loader", dataset, kwargs),
+            buffer_factory=_FakeBuffer,
+            store_in_session=True,
+            learning_session=session,
+        )
+
+        self.assertEqual(tuple(runtimes.keys()), ("bbox_0009",))
+        self.assertEqual(tuple(session.get_eval_runtimes_by_box_id().keys()), ("bbox_0009",))
+        self.assertEqual(get_current_learning_eval_runtimes_by_box_id(), {})
 
     def test_build_eval_runtimes_from_batch_rejects_missing_validation_entries(self) -> None:
         train_entry = self._entry(

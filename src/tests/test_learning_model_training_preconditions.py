@@ -12,6 +12,7 @@ except Exception:  # pragma: no cover - environment dependent
 
 from src.learning import (
     LearningBBoxEvalRuntime,
+    LearningSession,
     clear_current_learning_dataloader_runtime,
     clear_current_learning_eval_runtimes_by_box_id,
     clear_current_learning_model_runtime,
@@ -115,6 +116,42 @@ class LearningModelTrainingPreconditionsTests(unittest.TestCase):
         self.assertEqual(preconditions.total_validation_valid_voxel_count, 6)
         self.assertEqual(tuple(sorted(preconditions.eval_runtimes_by_box_id.keys())), ("bbox_0008", "bbox_0011"))
 
+    @unittest.skipUnless(torch is not None, "PyTorch is not available")
+    def test_validate_preconditions_can_read_explicit_learning_session(self) -> None:
+        session = LearningSession()
+        session.set_model_components(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=2,
+        )
+        session.set_dataloader_components(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+            class_weights=torch.tensor([1.0, 2.0], dtype=torch.float32),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0008": LearningBBoxEvalRuntime(
+                    box_id="bbox_0008",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(
+                        ground_truth=np.array([[[0, 1], [2, -100]]], dtype=np.int16)
+                    ),
+                )
+            }
+        )
+
+        preconditions = validate_learning_model_training_preconditions(
+            learning_session=session,
+        )
+
+        self.assertEqual(preconditions.validation_valid_voxel_counts_by_box_id["bbox_0008"], 3)
+        self.assertEqual(preconditions.total_validation_valid_voxel_count, 3)
+
     def test_validate_preconditions_rejects_validation_buffer_with_zero_valid_voxels(self) -> None:
         self._set_model_runtime()
         self._set_train_runtime()
@@ -144,4 +181,3 @@ class LearningModelTrainingPreconditionsTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-
