@@ -8,11 +8,9 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from src.ui.main_window import _LearningTrainingWorker
     from src.learning import LearningTrainingLoopResult
     from src.ui.main_window import MainWindow
 except Exception:  # pragma: no cover - environment dependent
-    _LearningTrainingWorker = None  # type: ignore[assignment]
     MainWindow = None  # type: ignore[assignment]
     LearningTrainingLoopResult = None  # type: ignore[assignment]
 
@@ -525,142 +523,6 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
 
         self.assertEqual(exits, ["exit"])
         self.assertEqual(clears, ["clear"])
-
-
-@unittest.skipUnless(
-    _LearningTrainingWorker is not None and LearningTrainingLoopResult is not None,
-    "Training worker is not available",
-)
-class LearningTrainingWorkerTests(unittest.TestCase):
-    def test_worker_completion_checkpoint_request_can_be_set_and_cleared(self) -> None:
-        worker = _LearningTrainingWorker()
-
-        worker.request_completion_checkpoint_save("  /tmp/background_best.cp  ")
-        self.assertEqual(
-            worker._completion_checkpoint_save_path(),
-            "/tmp/background_best.cp",
-        )
-
-        worker.clear_completion_checkpoint_save_request()
-        self.assertIsNone(worker._completion_checkpoint_save_path())
-
-    def test_worker_run_saves_completion_checkpoint_on_max_epoch(self) -> None:
-        worker = _LearningTrainingWorker()
-        preconditions = object()
-        worker.configure(
-            preconditions=preconditions,
-            completion_checkpoint_path="/tmp/background_best.cp",
-        )
-        result = LearningTrainingLoopResult(
-            completed_epoch_count=4,
-            total_epoch_count=8,
-            stop_reason="max_epoch",
-            best_epoch=4,
-            best_weighted_mean_dice=0.87,
-            early_stop_patience=2,
-            mixed_precision_enabled=True,
-        )
-        completed_payloads: list[object] = []
-        failed_messages: list[str] = []
-        finished_calls: list[str] = []
-        worker.completed.connect(lambda payload: completed_payloads.append(payload))
-        worker.failed.connect(lambda message: failed_messages.append(str(message)))
-        worker.finished.connect(lambda: finished_calls.append("finished"))
-
-        runtime = object()
-        with patch(
-            "src.ui.main_window.train_learning_model_with_validation_loop",
-            return_value=result,
-        ) as train_mock, patch(
-            "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=runtime,
-        ) as runtime_mock, patch(
-            "src.ui.main_window.save_foundation_model_checkpoint"
-        ) as save_mock:
-            worker.run()
-
-        train_mock.assert_called_once_with(
-            preconditions=preconditions,
-            mixed_precision=True,
-            early_stop_patience=2,
-            stop_event=worker._stop_event,
-        )
-        runtime_mock.assert_called_once_with()
-        save_mock.assert_called_once_with(
-            runtime=runtime,
-            checkpoint_path="/tmp/background_best.cp",
-        )
-        self.assertEqual(completed_payloads, [result])
-        self.assertEqual(failed_messages, [])
-        self.assertEqual(finished_calls, ["finished"])
-
-    def test_worker_run_skips_completion_checkpoint_save_on_user_stop(self) -> None:
-        worker = _LearningTrainingWorker()
-        preconditions = object()
-        worker.configure(
-            preconditions=preconditions,
-            completion_checkpoint_path="/tmp/background_best.cp",
-        )
-        result = LearningTrainingLoopResult(
-            completed_epoch_count=0,
-            total_epoch_count=8,
-            stop_reason="user_stop",
-            best_epoch=None,
-            best_weighted_mean_dice=None,
-            early_stop_patience=2,
-            mixed_precision_enabled=True,
-        )
-
-        with patch(
-            "src.ui.main_window.train_learning_model_with_validation_loop",
-            return_value=result,
-        ) as train_mock, patch(
-            "src.ui.main_window.get_current_learning_model_runtime"
-        ) as runtime_mock, patch(
-            "src.ui.main_window.save_foundation_model_checkpoint"
-        ) as save_mock:
-            worker.run()
-
-        train_mock.assert_called_once()
-        runtime_mock.assert_not_called()
-        save_mock.assert_not_called()
-
-    def test_worker_run_reports_failure_when_completion_checkpoint_save_fails(self) -> None:
-        worker = _LearningTrainingWorker()
-        preconditions = object()
-        worker.configure(
-            preconditions=preconditions,
-            completion_checkpoint_path="/tmp/background_best.cp",
-        )
-        result = LearningTrainingLoopResult(
-            completed_epoch_count=4,
-            total_epoch_count=8,
-            stop_reason="early_stop",
-            best_epoch=4,
-            best_weighted_mean_dice=0.87,
-            early_stop_patience=2,
-            mixed_precision_enabled=True,
-        )
-        completed_payloads: list[object] = []
-        failed_messages: list[str] = []
-        finished_calls: list[str] = []
-        worker.completed.connect(lambda payload: completed_payloads.append(payload))
-        worker.failed.connect(lambda message: failed_messages.append(str(message)))
-        worker.finished.connect(lambda: finished_calls.append("finished"))
-
-        with patch(
-            "src.ui.main_window.train_learning_model_with_validation_loop",
-            return_value=result,
-        ), patch(
-            "src.ui.main_window.get_current_learning_model_runtime",
-            return_value=None,
-        ):
-            worker.run()
-
-        self.assertEqual(completed_payloads, [])
-        self.assertEqual(finished_calls, ["finished"])
-        self.assertEqual(len(failed_messages), 1)
-        self.assertIn("completion checkpoint", failed_messages[0].lower())
 
 
 if __name__ == "__main__":

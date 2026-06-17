@@ -12,17 +12,16 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from src.bbox import BoundingBox
 
 try:
-    from src.ui.main_window import (
-        MainWindow,
-        _LearningInferenceBackgroundResult,
-        QThread,
-        _LearningInferenceStopRequested,
+    from src.learning.qt_workers import (
+        LearningInferenceBackgroundResult,
+        LearningInferenceStopRequested,
     )
+    from src.ui.main_window import MainWindow, QThread
 except Exception:  # pragma: no cover - environment dependent
     MainWindow = None  # type: ignore[assignment]
-    _LearningInferenceBackgroundResult = None  # type: ignore[assignment]
+    LearningInferenceBackgroundResult = None  # type: ignore[assignment]
     QThread = None  # type: ignore[assignment]
-    _LearningInferenceStopRequested = None  # type: ignore[assignment]
+    LearningInferenceStopRequested = None  # type: ignore[assignment]
 
 
 @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
@@ -746,10 +745,10 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         self.assertIsNone(info_mock.call_args.kwargs.get("parent"))
 
     def test_on_learning_inference_completed_skips_apply_when_stop_already_requested(self) -> None:
-        self.assertIsNotNone(_LearningInferenceBackgroundResult)
+        self.assertIsNotNone(LearningInferenceBackgroundResult)
         canceled_messages: list[str] = []
         calls: list[str] = []
-        result = _LearningInferenceBackgroundResult(
+        result = LearningInferenceBackgroundResult(
             total_count=1,
             predictions=tuple(),
             failure_by_box_id={},
@@ -774,13 +773,13 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         warning_mock.assert_not_called()
 
     def test_on_learning_inference_completed_handles_stop_during_apply_as_canceled(self) -> None:
-        self.assertIsNotNone(_LearningInferenceBackgroundResult)
-        self.assertIsNotNone(_LearningInferenceStopRequested)
+        self.assertIsNotNone(LearningInferenceBackgroundResult)
+        self.assertIsNotNone(LearningInferenceStopRequested)
         canceled_messages: list[str] = []
-        stop_error = _LearningInferenceStopRequested(
+        stop_error = LearningInferenceStopRequested(
             "Inference canceled by user before commit."
         )
-        result = _LearningInferenceBackgroundResult(
+        result = LearningInferenceBackgroundResult(
             total_count=1,
             predictions=tuple(),
             failure_by_box_id={},
@@ -896,7 +895,7 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         self.assertFalse(window_like._inference_stop_requested)
 
     def test_on_learning_inference_completed_background_mode_saves_and_skips_popups(self) -> None:
-        self.assertIsNotNone(_LearningInferenceBackgroundResult)
+        self.assertIsNotNone(LearningInferenceBackgroundResult)
         save_calls: list[tuple[object, str, str, bool]] = []
         sync_calls: list[str] = []
         hover_calls: list[str] = []
@@ -905,7 +904,7 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         refresh_calls: list[str] = []
         fake_volume = object()
 
-        result = _LearningInferenceBackgroundResult(
+        result = LearningInferenceBackgroundResult(
             total_count=1,
             predictions=tuple(),
             failure_by_box_id={},
@@ -974,7 +973,7 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
     def test_apply_inference_predictions_single_commit_aborts_before_begin_when_stop_requested(
         self,
     ) -> None:
-        self.assertIsNotNone(_LearningInferenceStopRequested)
+        self.assertIsNotNone(LearningInferenceStopRequested)
         self.assertIsNotNone(QThread)
         box = self._box(box_id="bbox_0001", label="inference")
         editor = self._make_operation_editor(
@@ -999,7 +998,7 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         )
 
         with patch("src.ui.main_window._apply_predicted_bbox_to_editor") as apply_mock:
-            with self.assertRaises(_LearningInferenceStopRequested):
+            with self.assertRaises(LearningInferenceStopRequested):
                 MainWindow._apply_inference_predictions_in_single_commit(
                     window_like,
                     editor=editor,
@@ -1016,7 +1015,7 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
     def test_apply_inference_predictions_single_commit_cancels_when_stop_requested_mid_loop(
         self,
     ) -> None:
-        self.assertIsNotNone(_LearningInferenceStopRequested)
+        self.assertIsNotNone(LearningInferenceStopRequested)
         self.assertIsNotNone(QThread)
         box1 = self._box(box_id="bbox_0001", label="inference")
         box2 = self._box(
@@ -1064,7 +1063,7 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
             "src.ui.main_window._apply_predicted_bbox_to_editor",
             side_effect=_apply_side_effect,
         ) as apply_mock:
-            with self.assertRaises(_LearningInferenceStopRequested):
+            with self.assertRaises(LearningInferenceStopRequested):
                 MainWindow._apply_inference_predictions_in_single_commit(
                     window_like,
                     editor=editor,

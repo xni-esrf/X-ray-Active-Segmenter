@@ -35,6 +35,14 @@ class _FakeVolume:
         return np.asarray(self._array[zyx_slices])
 
 
+class _FakeSignal:
+    def __init__(self) -> None:
+        self.connected: list[object] = []
+
+    def connect(self, callback: object) -> None:
+        self.connected.append(callback)
+
+
 class _FakeEditor:
     def __init__(self, shape: tuple[int, int, int]) -> None:
         self.kind = "semantic"
@@ -581,16 +589,16 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
         ), patch(
-            "src.ui.main_window.extract_bbox_context_from_array",
+            "src.learning.qt_workers._extract_bbox_context_from_array",
             return_value=np.zeros((3, 3, 3), dtype=np.float32),
         ), patch(
-            "src.ui.main_window.build_inference_dataloader_runtime_from_entry",
+            "src.learning.qt_workers._build_inference_dataloader_runtime_from_entry",
             return_value=fake_runtime,
         ), patch(
-            "src.ui.main_window.dispose_inference_runtime",
+            "src.learning.qt_workers._dispose_inference_runtime",
             return_value=tuple(),
         ), patch(
-            "src.ui.main_window.plan_bbox_context",
+            "src.learning.qt_workers._plan_bbox_context",
             return_value=fake_plan,
         ), patch("src.ui.main_window.show_info") as info_mock, patch(
             "src.ui.main_window.show_warning"
@@ -642,16 +650,16 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
         ), patch(
-            "src.ui.main_window.extract_bbox_context_from_array",
+            "src.learning.qt_workers._extract_bbox_context_from_array",
             return_value=np.zeros((3, 3, 3), dtype=np.float32),
         ), patch(
-            "src.ui.main_window.build_inference_dataloader_runtime_from_entry",
+            "src.learning.qt_workers._build_inference_dataloader_runtime_from_entry",
             return_value=fake_runtime,
         ), patch(
-            "src.ui.main_window.dispose_inference_runtime",
+            "src.learning.qt_workers._dispose_inference_runtime",
             return_value=tuple(),
         ), patch(
-            "src.ui.main_window.plan_bbox_context",
+            "src.learning.qt_workers._plan_bbox_context",
             return_value=fake_plan,
         ), patch.object(
             MainWindow,
@@ -734,16 +742,16 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
         ), patch(
-            "src.ui.main_window.extract_bbox_context_from_array",
+            "src.learning.qt_workers._extract_bbox_context_from_array",
             return_value=np.zeros((3, 3, 3), dtype=np.float32),
         ), patch(
-            "src.ui.main_window.build_inference_dataloader_runtime_from_entry",
+            "src.learning.qt_workers._build_inference_dataloader_runtime_from_entry",
             side_effect=runtime_side_effect,
         ), patch(
-            "src.ui.main_window.dispose_inference_runtime",
+            "src.learning.qt_workers._dispose_inference_runtime",
             return_value=tuple(),
         ), patch(
-            "src.ui.main_window.plan_bbox_context",
+            "src.learning.qt_workers._plan_bbox_context",
             return_value=fake_plan,
         ), patch("src.ui.main_window.show_info") as info_mock, patch(
             "src.ui.main_window.show_warning"
@@ -797,16 +805,16 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
             "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
             return_value=eval_runtimes,
         ), patch(
-            "src.ui.main_window.extract_bbox_context_from_array",
+            "src.learning.qt_workers._extract_bbox_context_from_array",
             return_value=np.zeros((3, 3, 3), dtype=np.float32),
         ), patch(
-            "src.ui.main_window.build_inference_dataloader_runtime_from_entry",
+            "src.learning.qt_workers._build_inference_dataloader_runtime_from_entry",
             return_value=fake_runtime,
         ), patch(
-            "src.ui.main_window.dispose_inference_runtime",
+            "src.learning.qt_workers._dispose_inference_runtime",
             return_value=("buffer.close(): RuntimeError: cleanup boom",),
         ), patch(
-            "src.ui.main_window.plan_bbox_context",
+            "src.learning.qt_workers._plan_bbox_context",
             return_value=fake_plan,
         ), patch("src.ui.main_window.show_info") as info_mock, patch(
             "src.ui.main_window.show_warning"
@@ -876,6 +884,105 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         self.assertEqual(len(tuple(started_kwargs["inference_boxes"])), 1)
         self.assertIn("label_values", started_kwargs)
         self.assertEqual(tuple(started_kwargs["label_values"]), (0, 1))
+
+    def test_start_learning_inference_background_passes_raw_array_reference_to_worker(
+        self,
+    ) -> None:
+        inference_box = self._make_box(
+            box_id="bbox_0001",
+            label="inference",
+            z0=1,
+            z1=4,
+            y0=1,
+            y1=4,
+            x0=1,
+            x1=4,
+        )
+        raw_array = np.zeros((32, 32, 32), dtype=np.float32)
+        configure_calls: list[dict[str, object]] = []
+        entered_calls: list[tuple[object, object]] = []
+
+        class _FakeThread:
+            def __init__(self, parent: object) -> None:
+                self.parent = parent
+                self.started = _FakeSignal()
+                self.finished = _FakeSignal()
+                self.start_calls = 0
+
+            def start(self) -> None:
+                self.start_calls += 1
+
+            def quit(self) -> None:
+                return None
+
+            def deleteLater(self) -> None:
+                return None
+
+        class _FakeWorker:
+            def __init__(self) -> None:
+                self.completed = _FakeSignal()
+                self.canceled = _FakeSignal()
+                self.failed = _FakeSignal()
+                self.finished = _FakeSignal()
+                self.thread = None
+
+            def configure(self, **kwargs: object) -> None:
+                configure_calls.append(dict(kwargs))
+
+            def moveToThread(self, thread: object) -> None:
+                self.thread = thread
+
+            def run(self) -> None:
+                return None
+
+            def deleteLater(self) -> None:
+                return None
+
+        thread_instances: list[_FakeThread] = []
+        worker_instances: list[_FakeWorker] = []
+
+        def _build_thread(parent: object) -> _FakeThread:
+            thread = _FakeThread(parent)
+            thread_instances.append(thread)
+            return thread
+
+        def _build_worker() -> _FakeWorker:
+            worker = _FakeWorker()
+            worker_instances.append(worker)
+            return worker
+
+        def _enter_running_state(*, worker: object, thread: object) -> None:
+            entered_calls.append((worker, thread))
+
+        window_like = SimpleNamespace(
+            _enter_learning_inference_running_state=_enter_running_state,
+            _on_learning_inference_completed=lambda _result: None,
+            _on_learning_inference_canceled=lambda _message: None,
+            _on_learning_inference_failed=lambda _message: None,
+            _on_learning_inference_thread_finished=lambda: None,
+        )
+
+        with patch("src.ui.main_window.QThread", side_effect=_build_thread), patch(
+            "src.ui.main_window.LearningInferenceWorker",
+            side_effect=_build_worker,
+        ):
+            MainWindow._start_learning_inference_background(
+                window_like,
+                model_runtime=object(),
+                inference_boxes=(inference_box,),
+                raw_array=raw_array,
+                label_values=(0, 1),
+                volume_shape=raw_array.shape,
+            )
+
+        self.assertEqual(len(configure_calls), 1)
+        self.assertIs(configure_calls[0]["raw_array"], raw_array)
+        self.assertEqual(tuple(configure_calls[0]["inference_boxes"]), (inference_box,))
+        self.assertEqual(tuple(configure_calls[0]["label_values"]), (0, 1))
+        self.assertEqual(tuple(configure_calls[0]["volume_shape"]), raw_array.shape)
+        self.assertEqual(entered_calls, [(worker_instances[0], thread_instances[0])])
+        self.assertIs(worker_instances[0].thread, thread_instances[0])
+        self.assertEqual(thread_instances[0].start_calls, 1)
 
     def test_segment_inference_rejects_eval_runtime_label_values_fallback_when_metadata_missing(self) -> None:
         inference_box = self._make_box(

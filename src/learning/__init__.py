@@ -1,135 +1,84 @@
-from .dataloader_builder import (
-    build_learning_dataloader_from_batch,
-    build_learning_dataloader_from_current_batch,
-    extract_train_tensor_pairs,
-)
-from .class_weights import (
-    compute_and_store_current_learning_class_weights,
-    compute_class_weights_from_segmentation_tensors,
-)
-from .eval_dataloader_builder import (
-    build_eval_dataloader_runtimes_from_batch,
-    build_eval_dataloader_runtimes_from_current_batch,
-    build_inference_dataloader_runtime_from_entry,
-    build_inference_dataloader_runtimes_from_batch,
-    compute_eval_label_values_from_batch,
-    dispose_inference_runtime,
-    dispose_inference_runtimes,
-)
-from .model_instantiation import (
-    DEFAULT_FOUNDATION_CHECKPOINT_PATH,
-    DEFAULT_FOUNDATION_MODEL_CONFIG,
-    FoundationCheckpointLoadPreconditions,
-    FoundationCheckpointMetadata,
-    FoundationModelConfig,
-    FoundationInstantiationPreconditions,
-    UnetrPs8MulticlassesSmall,
-    Unetr_ps8_multiclasses_small,
-    inspect_foundation_checkpoint_metadata,
-    instantiate_foundation_model_runtime,
-    save_foundation_model_checkpoint,
-    validate_foundation_checkpoint_load_preconditions,
-    validate_foundation_model_instantiation_preconditions,
-)
-from .model_training import (
-    LearningTrainEpochResult,
-    LearningTrainingLoopResult,
-    LearningTrainingPreconditions,
-    LearningValidationEvalResult,
-    evaluate_learning_model_on_validation_dataloaders,
-    train_learning_model_with_validation_loop,
-    train_learning_model_for_one_epoch,
-    validate_learning_model_training_preconditions,
-)
-from .eval_bbox_dataset import (
-    DestVolBuffer,
-    EvalBBoxDataset,
-    InferenceDestVolBuffer,
-)
-from .train_bbox_dataset import TrainBBoxDataset
-from .session_store import (
-    LearningBBoxDataLoaderRuntime,
-    LearningBBoxEvalRuntime,
-    LearningModelRuntime,
-    LearningBBoxTensorBatch,
-    LearningBBoxTensorEntry,
-    clear_current_learning_bbox_batch,
-    clear_current_learning_dataloader_runtime,
-    clear_current_learning_eval_runtimes_by_box_id,
-    clear_current_learning_model_runtime,
-    get_current_learning_bbox_batch,
-    get_current_learning_dataloader_runtime,
-    get_current_learning_eval_runtimes_by_box_id,
-    get_current_learning_model_runtime,
-    set_current_learning_bbox_batch,
-    set_current_learning_dataloader_components,
-    set_current_learning_dataloader_class_weights,
-    set_current_learning_dataloader_runtime,
-    set_current_learning_eval_runtime_components_by_box_id,
-    set_current_learning_eval_runtimes_by_box_id,
-    set_current_learning_bbox_entries,
-    set_current_learning_model_components,
-    set_current_learning_model_runtime,
-)
+from __future__ import annotations
 
-__all__ = [
-    "build_learning_dataloader_from_batch",
-    "build_learning_dataloader_from_current_batch",
-    "extract_train_tensor_pairs",
-    "compute_class_weights_from_segmentation_tensors",
-    "compute_and_store_current_learning_class_weights",
-    "build_eval_dataloader_runtimes_from_batch",
-    "build_eval_dataloader_runtimes_from_current_batch",
-    "build_inference_dataloader_runtime_from_entry",
-    "build_inference_dataloader_runtimes_from_batch",
-    "compute_eval_label_values_from_batch",
-    "dispose_inference_runtime",
-    "dispose_inference_runtimes",
-    "DEFAULT_FOUNDATION_CHECKPOINT_PATH",
-    "DEFAULT_FOUNDATION_MODEL_CONFIG",
-    "FoundationCheckpointLoadPreconditions",
-    "FoundationCheckpointMetadata",
-    "FoundationModelConfig",
-    "FoundationInstantiationPreconditions",
-    "UnetrPs8MulticlassesSmall",
-    "Unetr_ps8_multiclasses_small",
-    "inspect_foundation_checkpoint_metadata",
-    "instantiate_foundation_model_runtime",
-    "save_foundation_model_checkpoint",
-    "validate_foundation_checkpoint_load_preconditions",
-    "validate_foundation_model_instantiation_preconditions",
-    "LearningTrainEpochResult",
-    "LearningTrainingLoopResult",
-    "LearningTrainingPreconditions",
-    "LearningValidationEvalResult",
-    "evaluate_learning_model_on_validation_dataloaders",
-    "train_learning_model_with_validation_loop",
-    "train_learning_model_for_one_epoch",
-    "validate_learning_model_training_preconditions",
-    "EvalBBoxDataset",
-    "DestVolBuffer",
-    "InferenceDestVolBuffer",
-    "TrainBBoxDataset",
-    "LearningBBoxDataLoaderRuntime",
-    "LearningBBoxEvalRuntime",
-    "LearningModelRuntime",
-    "LearningBBoxTensorBatch",
-    "LearningBBoxTensorEntry",
-    "set_current_learning_bbox_batch",
-    "set_current_learning_bbox_entries",
-    "get_current_learning_bbox_batch",
-    "clear_current_learning_bbox_batch",
-    "set_current_learning_dataloader_runtime",
-    "set_current_learning_dataloader_components",
-    "set_current_learning_dataloader_class_weights",
-    "get_current_learning_dataloader_runtime",
-    "clear_current_learning_dataloader_runtime",
-    "set_current_learning_eval_runtimes_by_box_id",
-    "set_current_learning_eval_runtime_components_by_box_id",
-    "get_current_learning_eval_runtimes_by_box_id",
-    "clear_current_learning_eval_runtimes_by_box_id",
-    "set_current_learning_model_runtime",
-    "set_current_learning_model_components",
-    "get_current_learning_model_runtime",
-    "clear_current_learning_model_runtime",
-]
+from importlib import import_module
+from typing import Dict
+
+_EXPORT_MODULE_BY_NAME: Dict[str, str] = {
+    "build_learning_dataloader_from_batch": ".dataloader_builder",
+    "build_learning_dataloader_from_current_batch": ".dataloader_builder",
+    "extract_train_tensor_pairs": ".dataloader_builder",
+    "compute_class_weights_from_segmentation_tensors": ".class_weights",
+    "compute_and_store_current_learning_class_weights": ".class_weights",
+    "build_eval_dataloader_runtimes_from_batch": ".eval_dataloader_builder",
+    "build_eval_dataloader_runtimes_from_current_batch": ".eval_dataloader_builder",
+    "build_inference_dataloader_runtime_from_entry": ".eval_dataloader_builder",
+    "build_inference_dataloader_runtimes_from_batch": ".eval_dataloader_builder",
+    "compute_eval_label_values_from_batch": ".eval_dataloader_builder",
+    "dispose_inference_runtime": ".eval_dataloader_builder",
+    "dispose_inference_runtimes": ".eval_dataloader_builder",
+    "DEFAULT_FOUNDATION_CHECKPOINT_PATH": ".model_instantiation",
+    "DEFAULT_FOUNDATION_MODEL_CONFIG": ".model_instantiation",
+    "FoundationCheckpointLoadPreconditions": ".model_instantiation",
+    "FoundationCheckpointMetadata": ".model_instantiation",
+    "FoundationModelConfig": ".model_instantiation",
+    "FoundationInstantiationPreconditions": ".model_instantiation",
+    "UnetrPs8MulticlassesSmall": ".model_instantiation",
+    "Unetr_ps8_multiclasses_small": ".model_instantiation",
+    "inspect_foundation_checkpoint_metadata": ".model_instantiation",
+    "instantiate_foundation_model_runtime": ".model_instantiation",
+    "save_foundation_model_checkpoint": ".model_instantiation",
+    "validate_foundation_checkpoint_load_preconditions": ".model_instantiation",
+    "validate_foundation_model_instantiation_preconditions": ".model_instantiation",
+    "LearningTrainEpochResult": ".model_training",
+    "LearningTrainingLoopResult": ".model_training",
+    "LearningTrainingPreconditions": ".model_training",
+    "LearningValidationEvalResult": ".model_training",
+    "evaluate_learning_model_on_validation_dataloaders": ".model_training",
+    "train_learning_model_with_validation_loop": ".model_training",
+    "train_learning_model_for_one_epoch": ".model_training",
+    "validate_learning_model_training_preconditions": ".model_training",
+    "EvalBBoxDataset": ".eval_bbox_dataset",
+    "DestVolBuffer": ".eval_bbox_dataset",
+    "InferenceDestVolBuffer": ".eval_bbox_dataset",
+    "TrainBBoxDataset": ".train_bbox_dataset",
+    "LearningBBoxDataLoaderRuntime": ".session_store",
+    "LearningBBoxEvalRuntime": ".session_store",
+    "LearningModelRuntime": ".session_store",
+    "LearningBBoxTensorBatch": ".session_store",
+    "LearningBBoxTensorEntry": ".session_store",
+    "set_current_learning_bbox_batch": ".session_store",
+    "set_current_learning_bbox_entries": ".session_store",
+    "get_current_learning_bbox_batch": ".session_store",
+    "clear_current_learning_bbox_batch": ".session_store",
+    "set_current_learning_dataloader_runtime": ".session_store",
+    "set_current_learning_dataloader_components": ".session_store",
+    "set_current_learning_dataloader_class_weights": ".session_store",
+    "get_current_learning_dataloader_runtime": ".session_store",
+    "clear_current_learning_dataloader_runtime": ".session_store",
+    "set_current_learning_eval_runtimes_by_box_id": ".session_store",
+    "set_current_learning_eval_runtime_components_by_box_id": ".session_store",
+    "get_current_learning_eval_runtimes_by_box_id": ".session_store",
+    "clear_current_learning_eval_runtimes_by_box_id": ".session_store",
+    "set_current_learning_model_runtime": ".session_store",
+    "set_current_learning_model_components": ".session_store",
+    "get_current_learning_model_runtime": ".session_store",
+    "clear_current_learning_model_runtime": ".session_store",
+}
+
+__all__ = list(_EXPORT_MODULE_BY_NAME)
+
+
+def __getattr__(name: str) -> object:
+    try:
+        module_name = _EXPORT_MODULE_BY_NAME[name]
+    except KeyError as exc:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}") from exc
+
+    module = import_module(module_name, __name__)
+    value = getattr(module, name)
+    globals()[name] = value
+    return value
+
+
+def __dir__() -> list[str]:
+    return sorted(tuple(globals()) + tuple(__all__))
