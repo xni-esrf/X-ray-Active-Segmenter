@@ -1172,7 +1172,7 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         self.assertEqual(calls, ["stop"])
         warning_mock.assert_not_called()
 
-    def test_handle_load_model_request_calls_dialog_when_not_training(self) -> None:
+    def test_handle_load_model_request_calls_dialog_without_preparing_learning_state(self) -> None:
         called = []
         window_like = SimpleNamespace(
             _training_is_running=lambda: False,
@@ -1189,10 +1189,10 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         with patch("src.ui.main_window.show_warning") as warning_mock:
             MainWindow._handle_load_model_request(window_like)
 
-        self.assertEqual(called, [("ensure", "load_model"), "instantiate"])
+        self.assertEqual(called, ["instantiate"])
         warning_mock.assert_not_called()
 
-    def test_handle_load_model_request_aborts_when_learning_state_prepare_fails(self) -> None:
+    def test_handle_load_model_request_ignores_learning_state_prepare_result(self) -> None:
         called = []
         window_like = SimpleNamespace(
             _training_is_running=lambda: False,
@@ -1209,7 +1209,7 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         with patch("src.ui.main_window.show_warning") as warning_mock:
             MainWindow._handle_load_model_request(window_like)
 
-        self.assertEqual(called, [("ensure", "load_model")])
+        self.assertEqual(called, ["instantiate"])
         warning_mock.assert_not_called()
 
     def test_handle_save_model_request_calls_dialog_when_not_training(self) -> None:

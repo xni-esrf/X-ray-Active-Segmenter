@@ -52,7 +52,6 @@ from ..loading import load_prepared_volume
 from ..learning import (
     DEFAULT_FOUNDATION_CHECKPOINT_PATH,
     LearningSession,
-    LearningTrainingLoopResult,
     clear_current_learning_bbox_batch,
     compute_and_store_current_learning_class_weights,
     get_current_learning_dataloader_runtime,
@@ -66,15 +65,23 @@ from ..learning import (
     validate_learning_model_training_preconditions,
 )
 from ..learning.qt_workers import (
-    LearningInferenceBackgroundResult,
     LearningInferencePrediction,
-    LearningInferenceStopRequested,
     LearningInferenceWorker,
     LearningTrainingWorker,
 )
 from ..render import Renderer, ViewId
 from ..utils import exception_message, get_logger
 from .bottom_panel import BottomPanel
+from .controllers import (
+    InferenceController,
+    InferenceControllerOperations,
+    LearningStateController,
+    LearningStateControllerOperations,
+    ModelController,
+    ModelControllerOperations,
+    TrainingController,
+    TrainingControllerOperations,
+)
 from .dialogs import (
     InferenceCloseDecision,
     TrainingCloseDecision,
@@ -716,6 +723,128 @@ class MainWindow(QMainWindow):
         if session is not None:
             return session.get_bbox_batch()
         return get_current_learning_bbox_batch()
+
+    @staticmethod
+    def _learning_state_controller_for(owner: object) -> LearningStateController:
+        return LearningStateController(
+            context=owner,
+            operations=LearningStateControllerOperations(
+                show_warning=show_warning,
+                show_info=show_info,
+                extract_learning_bboxes_in_memory=extract_learning_bboxes_in_memory,
+                compute_and_store_current_learning_class_weights=(
+                    compute_and_store_current_learning_class_weights
+                ),
+                get_learning_dataloader_runtime=(
+                    MainWindow._get_learning_dataloader_runtime_for
+                ),
+                get_learning_eval_runtimes_by_box_id=(
+                    MainWindow._get_learning_eval_runtimes_by_box_id_for
+                ),
+                clear_learning_bbox_batch=MainWindow._clear_learning_bbox_batch_for,
+                get_learning_bbox_batch=MainWindow._get_learning_bbox_batch_for,
+                learning_session_kwargs=MainWindow._learning_session_kwargs_for,
+                format_class_weights_for_summary=_format_class_weights_for_summary,
+            ),
+        )
+
+    @staticmethod
+    def _model_controller_for(owner: object) -> ModelController:
+        return ModelController(
+            context=owner,
+            operations=ModelControllerOperations(
+                show_warning=show_warning,
+                show_info=show_info,
+                open_model_checkpoint_dialog=open_model_checkpoint_dialog,
+                open_save_model_checkpoint_dialog=open_save_model_checkpoint_dialog,
+                confirm_reinitialize_model=confirm_reinitialize_model,
+                confirm_replace_training_model_with_default_checkpoint=(
+                    confirm_replace_training_model_with_default_checkpoint
+                ),
+                validate_foundation_checkpoint_load_preconditions=(
+                    validate_foundation_checkpoint_load_preconditions
+                ),
+                validate_foundation_model_instantiation_preconditions=(
+                    validate_foundation_model_instantiation_preconditions
+                ),
+                instantiate_foundation_model_runtime=instantiate_foundation_model_runtime,
+                save_foundation_model_checkpoint=save_foundation_model_checkpoint,
+                get_learning_model_runtime=MainWindow._get_learning_model_runtime_for,
+                learning_session_kwargs=MainWindow._learning_session_kwargs_for,
+                exception_message=_exception_message,
+                normalize_checkpoint_identity=_normalize_checkpoint_identity,
+                resolve_shared_eval_label_values=_resolve_shared_eval_label_values,
+                resolve_inference_label_values_for_runtime=(
+                    _resolve_inference_label_values_for_runtime
+                ),
+                default_training_checkpoint_path=(
+                    _DEFAULT_TRAINING_FOUNDATION_CHECKPOINT_PATH
+                ),
+            ),
+        )
+
+    @staticmethod
+    def _training_controller_for(owner: object) -> TrainingController:
+        return TrainingController(
+            context=owner,
+            operations=TrainingControllerOperations(
+                show_warning=show_warning,
+                show_info=show_info,
+                validate_learning_model_training_preconditions=(
+                    validate_learning_model_training_preconditions
+                ),
+                qthread_factory=QThread,
+                training_worker_factory=LearningTrainingWorker,
+                qapplication_instance=QApplication.instance,
+                learning_session_kwargs=MainWindow._learning_session_kwargs_for,
+                inference_navigation_lock_active=(
+                    MainWindow._inference_navigation_lock_active
+                ),
+                mark_current_model_runtime_as_trained=(
+                    lambda owner, *, completed_epoch_count: (
+                        MainWindow._mark_current_model_runtime_as_trained(
+                            owner,
+                            completed_epoch_count=completed_epoch_count,
+                        )
+                    )
+                ),
+                refresh_learning_inference_ui_state=(
+                    MainWindow._refresh_learning_inference_ui_state
+                ),
+                logger=_LOGGER,
+            ),
+        )
+
+    @staticmethod
+    def _inference_controller_for(owner: object) -> InferenceController:
+        return InferenceController(
+            context=owner,
+            operations=InferenceControllerOperations(
+                show_warning=show_warning,
+                show_info=show_info,
+                confirm_replace_inference_bboxes=confirm_replace_inference_bboxes,
+                get_learning_model_runtime=MainWindow._get_learning_model_runtime_for,
+                resolve_inference_label_values_for_runtime=(
+                    _resolve_inference_label_values_for_runtime
+                ),
+                ordered_inference_boxes=_ordered_inference_boxes,
+                find_overlapping_box_id_pairs=_find_overlapping_box_id_pairs,
+                apply_predicted_bbox_to_editor=_apply_predicted_bbox_to_editor,
+                exception_message=_exception_message,
+                qthread_factory=QThread,
+                qthread_current_thread=QThread.currentThread,
+                inference_worker_factory=LearningInferenceWorker,
+                qapplication_instance=QApplication.instance,
+                save_segmentation_volume=save_segmentation_volume,
+                inference_navigation_lock_active=(
+                    MainWindow._inference_navigation_lock_active
+                ),
+                inference_stop_already_requested=(
+                    MainWindow._inference_stop_already_requested
+                ),
+                logger=_LOGGER,
+            ),
+        )
 
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
         if not self._maybe_resolve_unsaved_data_before_close():
@@ -1645,47 +1774,7 @@ class MainWindow(QMainWindow):
         return True
 
     def _ensure_learning_state_for_action(self, action: LearningStateAction) -> bool:
-        """Ensure learning datasets/runtimes are available for a learning action.
-
-        This is the centralized entrypoint for learning-state preparation policy.
-        """
-        normalized_action = str(action).strip().lower()
-        if normalized_action not in {"load_model", "train", "inference"}:
-            raise ValueError(
-                "action must be one of: 'load_model', 'train', or 'inference', "
-                f"got {action!r}"
-            )
-        if normalized_action == "inference":
-            # Inference builds per-inference-box runtimes directly and should not
-            # trigger train/validation learning-state rebuilds.
-            return True
-        require_class_weights = normalized_action == "train"
-        train_runtime = MainWindow._get_learning_dataloader_runtime_for(self)
-        eval_runtimes_by_box_id = MainWindow._get_learning_eval_runtimes_by_box_id_for(self)
-        missing_learning_state = bool(train_runtime is None or not eval_runtimes_by_box_id)
-        if (
-            not missing_learning_state
-            and require_class_weights
-            and getattr(train_runtime, "class_weights", None) is None
-        ):
-            missing_learning_state = True
-
-        current_signature = self._current_learning_state_signature()
-        signature_changed = bool(
-            self._learning_state_signature is None
-            or self._learning_state_signature != current_signature
-        )
-        should_rebuild = bool(
-            missing_learning_state
-            or self._learning_state_stale
-            or signature_changed
-        )
-        if not should_rebuild:
-            return True
-        return self._prepare_learning_state(
-            require_class_weights=require_class_weights,
-            show_success_dialog=False,
-        )
+        return MainWindow._learning_state_controller_for(self).ensure_for_action(action)
 
     def _handle_load_model_request(self) -> None:
         if MainWindow._inference_navigation_lock_active(self):
@@ -1702,42 +1791,7 @@ class MainWindow(QMainWindow):
         self._save_model_with_dialog()
 
     def _save_model_with_dialog(self) -> bool:
-        runtime = MainWindow._get_learning_model_runtime_for(self)
-        if runtime is None:
-            show_warning(
-                "Load a model before saving.",
-                parent=self,
-            )
-            return False
-
-        dialog_result = open_save_model_checkpoint_dialog(self)
-        if not dialog_result.accepted or not dialog_result.path:
-            return False
-
-        checkpoint_path = str(Path(dialog_result.path).expanduser())
-        if Path(checkpoint_path).suffix.lower() != ".cp":
-            show_warning(
-                "Model checkpoints must use the .cp extension.",
-                parent=self,
-            )
-            return False
-
-        try:
-            self._save_model_runtime_checkpoint(runtime, checkpoint_path=checkpoint_path)
-        except Exception as exc:
-            show_warning(_exception_message(exc), parent=self)
-            return False
-
-        show_info(
-            (
-                "Model checkpoint saved.\n"
-                f"- checkpoint: {checkpoint_path}\n"
-                f"- num_classes: {runtime.num_classes}\n"
-                f"- device_ids: {runtime.device_ids}"
-            ),
-            parent=self,
-        )
-        return True
+        return MainWindow._model_controller_for(self).save_model_with_dialog()
 
     def _save_model_runtime_checkpoint(
         self,
@@ -1745,38 +1799,22 @@ class MainWindow(QMainWindow):
         *,
         checkpoint_path: str,
     ) -> None:
-        save_foundation_model_checkpoint(
-            runtime=runtime,
+        MainWindow._model_controller_for(self).save_model_runtime_checkpoint(
+            runtime,
             checkpoint_path=checkpoint_path,
         )
 
     def _handle_train_model_request(self) -> None:
-        if MainWindow._inference_navigation_lock_active(self):
-            return
-        if self._abort_if_learning_training_running():
-            return
-        ensure_learning_state = getattr(self, "_ensure_learning_state_for_action", None)
-        if callable(ensure_learning_state):
-            if not bool(ensure_learning_state("train")):
-                return
-        self._train_model_on_dataset_with_dialog()
+        MainWindow._training_controller_for(self).handle_train_model_request()
 
     def _handle_segment_inference_request(self) -> None:
-        if MainWindow._inference_navigation_lock_active(self):
-            return
-        if self._abort_if_learning_training_running():
-            return
-        ensure_learning_state = getattr(self, "_ensure_learning_state_for_action", None)
-        if callable(ensure_learning_state):
-            if not bool(ensure_learning_state("inference")):
-                return
-        self._segment_inference_bboxes_with_dialog()
+        MainWindow._inference_controller_for(self).handle_segment_inference_request()
 
     def _handle_stop_inference_request(self) -> None:
-        self._request_learning_inference_stop()
+        MainWindow._inference_controller_for(self).handle_stop_inference_request()
 
     def _handle_stop_training_request(self) -> None:
-        self._request_learning_training_stop()
+        MainWindow._training_controller_for(self).handle_stop_training_request()
 
     def _handle_median_filter_selected_request(self) -> None:
         self._handle_selected_bbox_segmentation_processing_request("median_filter")
@@ -2241,179 +2279,9 @@ class MainWindow(QMainWindow):
         return bbox_ops.count_true_neighbors_3x3x3(mask)
 
     def _segment_inference_bboxes_with_dialog(self) -> bool:
-        model_runtime = MainWindow._get_learning_model_runtime_for(self)
-        if model_runtime is None:
-            show_warning(
-                "Load a model before running Segment Inference BBox.",
-                parent=self,
-            )
-            return False
-
-        ordered_box_ids = tuple(row.box_id for row in self.bottom_panel.state.bbox_rows)
-        boxes_by_id = {box.id: box for box in self._bbox_manager.boxes()}
-        inference_boxes = _ordered_inference_boxes(
-            ordered_box_ids=ordered_box_ids,
-            boxes_by_id=boxes_by_id,
-        )
-        if not inference_boxes:
-            show_warning(
-                (
-                    "At least one bounding box labeled 'inference' is required to run "
-                    "Segment Inference BBox."
-                ),
-                parent=self,
-            )
-            return False
-
-        overlapping_pairs = _find_overlapping_box_id_pairs(inference_boxes)
-        if overlapping_pairs:
-            pair_text = ", ".join(
-                f"{first_box_id} <-> {second_box_id}"
-                for first_box_id, second_box_id in overlapping_pairs
-            )
-            show_warning(
-                (
-                    "Inference bounding boxes overlap. Overlap is not supported for "
-                    "Segment Inference BBox.\n\n"
-                    f"Overlapping pairs: {pair_text}"
-                ),
-                parent=self,
-            )
-            return False
-
-        try:
-            label_values = _resolve_inference_label_values_for_runtime(model_runtime)
-        except Exception as exc:
-            show_warning(str(exc), parent=self)
-            return False
-
-        active_segmentation = self._active_segmentation_volume()
-        if active_segmentation is not None:
-            active_kind, _active_volume = active_segmentation
-            if active_kind == "instance" and self._semantic_volume is None:
-                show_warning(
-                    (
-                        "Segment Inference BBox requires a semantic map, but the active "
-                        "map is instance and no semantic map is loaded."
-                    ),
-                    parent=self,
-                )
-                return False
-        elif self._semantic_volume is None:
-            if self._raw_volume is None:
-                show_warning(
-                    "Load a raw volume before running Segment Inference BBox.",
-                    parent=self,
-                )
-                return False
-            self._annotation_kind = "semantic"
-            if not self._ensure_editable_segmentation_for_annotation():
-                show_warning(
-                    "Could not auto-create an empty semantic map for Segment Inference BBox.",
-                    parent=self,
-                )
-                return False
-
-        semantic_volume = self._semantic_volume
-        if semantic_volume is None:
-            show_warning(
-                "A semantic map is required to run Segment Inference BBox.",
-                parent=self,
-            )
-            return False
-
-        has_non_empty_inference_bbox = False
-        try:
-            for box in inference_boxes:
-                bbox_values = np.asarray(
-                    semantic_volume.get_chunk(
-                        (
-                            slice(int(box.z0), int(box.z1)),
-                            slice(int(box.y0), int(box.y1)),
-                            slice(int(box.x0), int(box.x1)),
-                        )
-                    )
-                )
-                if np.any((bbox_values != 0) & (bbox_values != -100)):
-                    has_non_empty_inference_bbox = True
-                    break
-        except Exception as exc:
-            show_warning(str(exc), parent=self)
-            return False
-
-        if has_non_empty_inference_bbox:
-            if not confirm_replace_inference_bboxes(parent=self):
-                return False
-
-        if not label_values:
-            show_warning(
-                "Validation buffers did not provide any class label values.",
-                parent=self,
-            )
-            return False
-
-        raw_volume = self._raw_volume
-        if raw_volume is None:
-            show_warning(
-                "Load a raw volume before running Segment Inference BBox.",
-                parent=self,
-            )
-            return False
-
-        editor = self._segmentation_editor
-        if editor is None or editor.kind != "semantic":
-            show_warning(
-                "A semantic map is required to run Segment Inference BBox.",
-                parent=self,
-            )
-            return False
-
-        try:
-            raw_array = np.asarray(
-                raw_volume.get_chunk((slice(None), slice(None), slice(None)))
-            )
-        except Exception as exc:
-            show_warning(_exception_message(exc), parent=self)
-            return False
-
-        start_background = getattr(self, "_start_learning_inference_background", None)
-        if callable(start_background):
-            show_navigation_only_notice = getattr(
-                self,
-                "_show_inference_navigation_only_notice",
-                None,
-            )
-            if callable(show_navigation_only_notice):
-                show_navigation_only_notice()
-            else:
-                MainWindow._show_inference_navigation_only_notice(self)
-            try:
-                start_background(
-                    model_runtime=model_runtime,
-                    inference_boxes=inference_boxes,
-                    raw_array=raw_array,
-                    label_values=label_values,
-                    volume_shape=self._bbox_manager.volume_shape,
-                )
-            except Exception as exc:
-                exit_running_state = getattr(
-                    self,
-                    "_exit_learning_inference_running_state",
-                    None,
-                )
-                if callable(exit_running_state):
-                    exit_running_state()
-                show_warning(_exception_message(exc), parent=self)
-                return False
-            return True
-        return MainWindow._run_learning_inference_inline_compat(
-            self,
-            model_runtime=model_runtime,
-            inference_boxes=inference_boxes,
-            raw_array=raw_array,
-            label_values=label_values,
-            volume_shape=self._bbox_manager.volume_shape,
-        )
+        return MainWindow._inference_controller_for(
+            self
+        ).segment_inference_bboxes_with_dialog()
 
     @staticmethod
     def _run_learning_inference_inline_compat(
@@ -2425,148 +2293,18 @@ class MainWindow(QMainWindow):
         label_values: Sequence[int],
         volume_shape: Sequence[int],
     ) -> bool:
-        worker = LearningInferenceWorker()
-        worker.configure(
+        return MainWindow._inference_controller_for(
+            target
+        ).run_learning_inference_inline_compat(
             model_runtime=model_runtime,
             inference_boxes=inference_boxes,
             raw_array=raw_array,
             label_values=label_values,
             volume_shape=volume_shape,
         )
-        try:
-            result = worker._run_inference()
-        except LearningInferenceStopRequested as exc:
-            show_info(
-                f"Segment Inference BBox canceled: {_exception_message(exc)}",
-                parent=target,
-            )
-            return False
-        except Exception as exc:
-            show_warning(_exception_message(exc), parent=target)
-            return False
-
-        editor = getattr(target, "_segmentation_editor", None)
-        if editor is None or getattr(editor, "kind", None) != "semantic":
-            show_warning(
-                "A semantic map is required to run Segment Inference BBox.",
-                parent=target,
-            )
-            return False
-
-        failure_by_box_id: Dict[str, str] = dict(result.failure_by_box_id)
-        cleanup_errors_by_box_id: Dict[str, Tuple[str, ...]] = {
-            str(box_id): tuple(errors)
-            for box_id, errors in tuple(result.cleanup_errors_by_box_id.items())
-        }
-        succeeded_box_ids: list[str] = []
-        changed_voxel_count_total = 0
-
-        begin_modification = getattr(editor, "begin_modification", None)
-        commit_modification = getattr(editor, "commit_modification", None)
-        cancel_modification = getattr(editor, "cancel_modification", None)
-        record_history = getattr(target, "_record_global_history_for_segmentation_operation", None)
-        in_modification = False
-        try:
-            if callable(begin_modification):
-                begin_modification("segment_inference_bboxes")
-                in_modification = True
-            for prediction in tuple(result.predictions):
-                box = prediction.box
-                try:
-                    changed_count = _apply_predicted_bbox_to_editor(
-                        editor=editor,
-                        box=box,
-                        predicted_bbox=prediction.predicted_bbox,
-                    )
-                    changed_voxel_count_total += int(changed_count)
-                    succeeded_box_ids.append(str(box.id))
-                except Exception as exc:
-                    failure_by_box_id[str(box.id)] = _exception_message(exc)
-            if callable(commit_modification):
-                committed = commit_modification()
-                in_modification = False
-                if callable(record_history):
-                    record_history(committed)
-        except Exception as exc:
-            if in_modification and callable(cancel_modification):
-                try:
-                    cancel_modification()
-                except Exception:
-                    pass
-            show_warning(_exception_message(exc), parent=target)
-            return False
-
-        if changed_voxel_count_total > 0:
-            setattr(target, "_annotation_labels_dirty", True)
-            for method_name in (
-                "_sync_renderer_segmentation_labels",
-                "_request_hover_readout",
-                "_request_picked_readout",
-                "render_all",
-            ):
-                method = getattr(target, method_name, None)
-                if callable(method):
-                    method()
-        refresh_annotation_ui_state = getattr(target, "_refresh_annotation_ui_state", None)
-        if callable(refresh_annotation_ui_state):
-            refresh_annotation_ui_state()
-
-        success_count = int(len(succeeded_box_ids))
-        failure_count = int(len(failure_by_box_id))
-        total_count = int(result.total_count)
-        cleanup_warning_count = int(
-            sum(len(errors) for errors in cleanup_errors_by_box_id.values())
-        )
-
-        if failure_count <= 0 and cleanup_warning_count <= 0:
-            title_line = "Segment Inference BBox completed: all inference bboxes succeeded."
-        elif failure_count > 0 and success_count <= 0:
-            title_line = "Segment Inference BBox failed: no inference bbox was successfully processed."
-        elif failure_count > 0:
-            title_line = "Segment Inference BBox completed with partial success."
-        else:
-            title_line = "Segment Inference BBox completed with cleanup warnings."
-
-        summary_lines = [
-            title_line,
-            f"- processed inference bboxes: {total_count}",
-            f"- succeeded: {success_count}",
-            f"- failed: {failure_count}",
-            f"- changed voxels: {int(changed_voxel_count_total)}",
-        ]
-        if succeeded_box_ids:
-            summary_lines.append("- succeeded bbox ids: " + ", ".join(succeeded_box_ids))
-        if failure_by_box_id:
-            summary_lines.append("- failed bbox reasons:")
-            for box_id, reason in tuple(failure_by_box_id.items()):
-                summary_lines.append(f"  - {box_id}: {reason}")
-        if cleanup_errors_by_box_id:
-            summary_lines.append("- cleanup warnings:")
-            for box_id, errors in tuple(cleanup_errors_by_box_id.items()):
-                for error in tuple(errors):
-                    summary_lines.append(f"  - {box_id}: {error}")
-
-        summary = "\n".join(summary_lines)
-        if failure_by_box_id or cleanup_errors_by_box_id:
-            show_warning(summary, parent=target)
-        else:
-            show_info(summary, parent=target)
-        return bool(failure_count <= 0)
 
     def _show_inference_navigation_only_notice(self) -> None:
-        parent = self if isinstance(self, QWidget) else None
-        show_info(
-            (
-                "Segment Inference BBox is starting.\n\n"
-                "During inference, only navigation remains enabled:\n"
-                "- Slice navigation, zoom/pan, contrast, and level controls\n"
-                "- Bounding-box selection and double-click cursor jump\n\n"
-                "Annotation/edit actions, undo/redo, and file/model operations are "
-                "temporarily disabled.\n"
-                "Use 'Stop Inference' to cancel the running inference."
-            ),
-            parent=parent,
-        )
+        MainWindow._inference_controller_for(self).show_inference_navigation_only_notice()
 
     def _start_learning_inference_background(
         self,
@@ -2577,43 +2315,13 @@ class MainWindow(QMainWindow):
         label_values: Sequence[int],
         volume_shape: Sequence[int],
     ) -> None:
-        thread = QThread(self)
-        worker = LearningInferenceWorker()
-        worker.configure(
+        MainWindow._inference_controller_for(self).start_learning_inference_background(
             model_runtime=model_runtime,
             inference_boxes=inference_boxes,
             raw_array=raw_array,
             label_values=label_values,
             volume_shape=volume_shape,
         )
-        worker.moveToThread(thread)
-
-        thread.started.connect(worker.run)
-        worker.completed.connect(self._on_learning_inference_completed)
-        worker.canceled.connect(self._on_learning_inference_canceled)
-        worker.failed.connect(self._on_learning_inference_failed)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._on_learning_inference_thread_finished)
-        thread.finished.connect(thread.deleteLater)
-
-        try:
-            self._enter_learning_inference_running_state(worker=worker, thread=thread)
-            thread.start()
-        except Exception:
-            try:
-                thread.quit()
-            except Exception:
-                pass
-            try:
-                worker.deleteLater()
-            except Exception:
-                pass
-            try:
-                thread.deleteLater()
-            except Exception:
-                pass
-            raise
 
     def _apply_inference_predictions_in_single_commit(
         self,
@@ -2622,637 +2330,76 @@ class MainWindow(QMainWindow):
         predictions: Sequence[LearningInferencePrediction],
         initial_failure_by_box_id: Optional[Mapping[str, str]] = None,
     ) -> Tuple[int, Tuple[str, ...], Dict[str, str]]:
-        if QThread.currentThread() is not self.thread():
-            raise RuntimeError("Inference predictions must be applied on the main UI thread.")
-
-        failure_by_box_id: Dict[str, str] = {}
-        if isinstance(initial_failure_by_box_id, Mapping):
-            for box_id, reason in tuple(initial_failure_by_box_id.items()):
-                failure_by_box_id[str(box_id)] = str(reason)
-
-        succeeded_box_ids: list[str] = []
-        changed_voxel_count_total = 0
-
-        self._end_annotation_modification()
-        if self._annotation_labels_dirty:
-            self._sync_renderer_segmentation_labels()
-        if MainWindow._inference_stop_already_requested(self):
-            raise LearningInferenceStopRequested(
-                "Inference canceled by user before applying predictions."
-            )
-        # Enforce one atomic history commit for the whole inference application phase.
-        editor.begin_modification("segment_inference_bboxes")
-        try:
-            for prediction in tuple(predictions):
-                if MainWindow._inference_stop_already_requested(self):
-                    raise LearningInferenceStopRequested(
-                        "Inference canceled by user before commit."
-                    )
-                box = prediction.box
-                try:
-                    changed_count = _apply_predicted_bbox_to_editor(
-                        editor=editor,
-                        box=box,
-                        predicted_bbox=prediction.predicted_bbox,
-                    )
-                    changed_voxel_count_total += int(changed_count)
-                    succeeded_box_ids.append(str(box.id))
-                except Exception as exc:
-                    failure_by_box_id[str(box.id)] = _exception_message(exc)
-        except LearningInferenceStopRequested:
-            cancel_modification = getattr(editor, "cancel_modification", None)
-            if callable(cancel_modification):
-                cancel_modification()
-            raise
-        else:
-            committed_operation = editor.commit_modification()
-            self._record_global_history_for_segmentation_operation(committed_operation)
-
-        return (
-            int(changed_voxel_count_total),
-            tuple(succeeded_box_ids),
-            dict(failure_by_box_id),
+        return MainWindow._inference_controller_for(
+            self
+        ).apply_inference_predictions_in_single_commit(
+            editor=editor,
+            predictions=predictions,
+            initial_failure_by_box_id=initial_failure_by_box_id,
         )
 
     def _on_learning_inference_completed(self, result: object) -> None:
-        background_close_mode = bool(
-            getattr(self, "_deferred_close_after_inference", False)
-            and getattr(self, "_deferred_close_inference_mode", "none")
-            == "continue_in_background"
-        )
-        try:
-            if not isinstance(result, LearningInferenceBackgroundResult):
-                if background_close_mode:
-                    _LOGGER.error(
-                        "Background inference completed with an invalid result payload: %r",
-                        result,
-                    )
-                else:
-                    show_warning(
-                        "Segment Inference BBox completed with an invalid result payload.",
-                        parent=self,
-                    )
-                return
-            if MainWindow._inference_stop_already_requested(self):
-                self._on_learning_inference_canceled(
-                    "Inference canceled by user before applying predictions."
-                )
-                return
-
-            editor = self._segmentation_editor
-            if editor is None or editor.kind != "semantic":
-                if background_close_mode:
-                    _LOGGER.error(
-                        "Background inference completed, but semantic map is unavailable; predictions discarded."
-                    )
-                else:
-                    show_warning(
-                        (
-                            "Segment Inference BBox completed, but the semantic map is no longer "
-                            "available. Predictions were discarded."
-                        ),
-                        parent=self,
-                    )
-                return
-
-            failure_by_box_id = dict(result.failure_by_box_id)
-            cleanup_errors_by_box_id = {
-                str(box_id): tuple(errors)
-                for box_id, errors in tuple(result.cleanup_errors_by_box_id.items())
-            }
-            (
-                changed_voxel_count_total,
-                succeeded_box_ids,
-                failure_by_box_id,
-            ) = (0, tuple(), failure_by_box_id)
-            (
-                changed_voxel_count_total,
-                succeeded_box_ids,
-                failure_by_box_id,
-            ) = self._apply_inference_predictions_in_single_commit(
-                editor=editor,
-                predictions=result.predictions,
-                initial_failure_by_box_id=failure_by_box_id,
-            )
-        except LearningInferenceStopRequested as exc:
-            self._on_learning_inference_canceled(str(exc))
-            return
-        finally:
-            clear_stop_requested_state = getattr(
-                self,
-                "_clear_learning_inference_stop_request_state",
-                None,
-            )
-            if callable(clear_stop_requested_state):
-                clear_stop_requested_state()
-            else:
-                MainWindow._clear_learning_inference_stop_request_state(self)
-
-        if changed_voxel_count_total > 0:
-            self._annotation_labels_dirty = True
-            self._sync_renderer_segmentation_labels()
-            self._request_hover_readout()
-            self._request_picked_readout()
-            self.render_all()
-        self._refresh_annotation_ui_state()
-
-        if background_close_mode:
-            save_path = str(getattr(self, "_deferred_close_inference_save_path", "")).strip()
-            save_format = str(getattr(self, "_deferred_close_inference_save_format", "")).strip().lower()
-            try:
-                active_segmentation_getter = getattr(self, "_active_segmentation_volume", None)
-                if not callable(active_segmentation_getter):
-                    raise RuntimeError("No active segmentation provider is available.")
-                active = active_segmentation_getter()
-                if active is None:
-                    raise RuntimeError("No semantic or instance segmentation map is loaded.")
-                _kind, volume = active
-                if not save_path:
-                    raise RuntimeError("Background inference save path is empty.")
-                if not save_format:
-                    raise RuntimeError("Background inference save format is empty.")
-                save_segmentation_volume(
-                    volume,
-                    save_path,
-                    save_format=save_format,
-                    overwrite=True,
-                )
-                _LOGGER.info("Background inference saved segmentation to %s", save_path)
-            except Exception as exc:
-                _LOGGER.error("Background inference save failed: %s", _exception_message(exc))
-            return
-
-        success_count = int(len(succeeded_box_ids))
-        failure_count = int(len(failure_by_box_id))
-        total_count = int(result.total_count)
-        cleanup_warning_count = int(sum(len(errors) for errors in cleanup_errors_by_box_id.values()))
-
-        if failure_count <= 0 and cleanup_warning_count <= 0:
-            title_line = "Segment Inference BBox completed: all inference bboxes succeeded."
-        elif failure_count > 0 and success_count <= 0:
-            title_line = "Segment Inference BBox failed: no inference bbox was successfully processed."
-        elif failure_count > 0:
-            title_line = "Segment Inference BBox completed with partial success."
-        else:
-            title_line = "Segment Inference BBox completed with cleanup warnings."
-
-        summary_lines = [
-            title_line,
-            f"- processed inference bboxes: {total_count}",
-            f"- succeeded: {success_count}",
-            f"- failed: {failure_count}",
-            f"- changed voxels: {int(changed_voxel_count_total)}",
-        ]
-        if succeeded_box_ids:
-            summary_lines.append("- succeeded bbox ids: " + ", ".join(succeeded_box_ids))
-        if failure_by_box_id:
-            summary_lines.append("- failed bbox reasons:")
-            for box_id, reason in tuple(failure_by_box_id.items()):
-                summary_lines.append(f"  - {box_id}: {reason}")
-        if cleanup_errors_by_box_id:
-            summary_lines.append("- cleanup warnings:")
-            for box_id, errors in tuple(cleanup_errors_by_box_id.items()):
-                for error in tuple(errors):
-                    summary_lines.append(f"  - {box_id}: {error}")
-
-        if failure_by_box_id or cleanup_errors_by_box_id:
-            show_warning("\n".join(summary_lines), parent=self)
-        else:
-            show_info("\n".join(summary_lines), parent=self)
+        MainWindow._inference_controller_for(self).on_learning_inference_completed(result)
 
     def _on_learning_inference_canceled(self, message: str) -> None:
-        background_close_mode = bool(
-            getattr(self, "_deferred_close_after_inference", False)
-            and getattr(self, "_deferred_close_inference_mode", "none")
-            == "continue_in_background"
-        )
-        try:
-            normalized_message = str(message).strip()
-            if not normalized_message:
-                normalized_message = "Inference canceled by user."
-            if background_close_mode:
-                _LOGGER.info(
-                    "Background inference canceled: %s",
-                    normalized_message,
-                )
-                finalize_close = getattr(
-                    self,
-                    "_finalize_deferred_close_inference_and_quit",
-                    None,
-                )
-                if callable(finalize_close):
-                    finalize_close()
-                else:
-                    MainWindow._finalize_deferred_close_inference_and_quit(self)
-                return
-            show_info(
-                f"Segment Inference BBox canceled: {normalized_message}",
-                parent=self,
-            )
-        finally:
-            clear_stop_requested_state = getattr(
-                self,
-                "_clear_learning_inference_stop_request_state",
-                None,
-            )
-            if callable(clear_stop_requested_state):
-                clear_stop_requested_state()
-            else:
-                MainWindow._clear_learning_inference_stop_request_state(self)
+        MainWindow._inference_controller_for(self).on_learning_inference_canceled(message)
 
     def _on_learning_inference_failed(self, message: str) -> None:
-        background_close_mode = bool(
-            getattr(self, "_deferred_close_after_inference", False)
-            and getattr(self, "_deferred_close_inference_mode", "none")
-            == "continue_in_background"
-        )
-        try:
-            normalized_message = str(message).strip()
-            if not normalized_message:
-                normalized_message = "Unknown inference error."
-            if background_close_mode:
-                _LOGGER.error(
-                    "Background inference aborted: %s",
-                    normalized_message,
-                )
-                finalize_close = getattr(
-                    self,
-                    "_finalize_deferred_close_inference_and_quit",
-                    None,
-                )
-                if callable(finalize_close):
-                    finalize_close()
-                else:
-                    MainWindow._finalize_deferred_close_inference_and_quit(self)
-                return
-            show_warning(
-                f"Segment Inference BBox aborted: {normalized_message}",
-                parent=self,
-            )
-        finally:
-            clear_stop_requested_state = getattr(
-                self,
-                "_clear_learning_inference_stop_request_state",
-                None,
-            )
-            if callable(clear_stop_requested_state):
-                clear_stop_requested_state()
-            else:
-                MainWindow._clear_learning_inference_stop_request_state(self)
+        MainWindow._inference_controller_for(self).on_learning_inference_failed(message)
 
     def _on_learning_inference_thread_finished(self) -> None:
-        self._exit_learning_inference_running_state()
-        if not bool(getattr(self, "_deferred_close_after_inference", False)):
-            return
-        clear_state = getattr(self, "_clear_deferred_close_inference_state", None)
-        if callable(clear_state):
-            clear_state()
-        else:
-            MainWindow._clear_deferred_close_inference_state(self)
-
-        app_instance = QApplication.instance()
-        if app_instance is None:
-            return
-        set_quit_on_last = getattr(app_instance, "setQuitOnLastWindowClosed", None)
-        if callable(set_quit_on_last):
-            try:
-                set_quit_on_last(True)
-            except Exception:
-                pass
-        quit_method = getattr(app_instance, "quit", None)
-        if callable(quit_method):
-            quit_method()
+        MainWindow._inference_controller_for(self).on_learning_inference_thread_finished()
 
     def _request_learning_inference_stop(self) -> None:
-        if not self._inference_is_running():
-            return
-        if MainWindow._inference_stop_already_requested(self):
-            return
-        worker = self._inference_worker
-        request_stop = getattr(worker, "request_stop", None)
-        if callable(request_stop):
-            self._inference_stop_requested = True
-            self._refresh_learning_inference_ui_state()
-            request_stop()
+        MainWindow._inference_controller_for(self).request_learning_inference_stop()
 
     def _request_learning_training_stop(self) -> None:
-        if not self._training_is_running():
-            return
-        worker = self._training_worker
-        clear_completion_checkpoint_save_request = getattr(
-            worker,
-            "clear_completion_checkpoint_save_request",
-            None,
-        )
-        if callable(clear_completion_checkpoint_save_request):
-            clear_completion_checkpoint_save_request()
-        request_stop = getattr(worker, "request_stop", None)
-        if callable(request_stop):
-            request_stop()
+        MainWindow._training_controller_for(self).request_learning_training_stop()
 
     def _runtime_training_provenance(
         self,
         runtime: object,
     ) -> Tuple[Optional[str], bool, int]:
-        source_checkpoint_path = getattr(runtime, "checkpoint_path", None)
-        trained_in_app = False
-        training_run_count = 0
-
-        hyperparameters_obj = getattr(runtime, "hyperparameters", None)
-        if isinstance(hyperparameters_obj, Mapping):
-            raw_source = hyperparameters_obj.get("source_checkpoint_path")
-            if isinstance(raw_source, str) and raw_source.strip():
-                source_checkpoint_path = raw_source.strip()
-
-            raw_trained = hyperparameters_obj.get("trained_in_app")
-            if isinstance(raw_trained, bool):
-                trained_in_app = bool(raw_trained)
-
-            raw_run_count = hyperparameters_obj.get("training_run_count")
-            if isinstance(raw_run_count, Integral) and not isinstance(raw_run_count, bool):
-                if int(raw_run_count) >= 0:
-                    training_run_count = int(raw_run_count)
-
-        if training_run_count > 0 and not trained_in_app:
-            trained_in_app = True
-        if not isinstance(source_checkpoint_path, str) or not source_checkpoint_path.strip():
-            source_checkpoint_path = None
-
-        return source_checkpoint_path, bool(trained_in_app), int(training_run_count)
+        return MainWindow._model_controller_for(self).runtime_training_provenance(runtime)
 
     def _runtime_requires_training_reinitialization(self, runtime: object) -> bool:
-        source_checkpoint_path, trained_in_app, training_run_count = self._runtime_training_provenance(
-            runtime
-        )
-        if trained_in_app or training_run_count > 0:
-            return True
-        default_identity = _normalize_checkpoint_identity(
-            _DEFAULT_TRAINING_FOUNDATION_CHECKPOINT_PATH
-        )
-        source_identity = _normalize_checkpoint_identity(source_checkpoint_path)
-        return bool(default_identity is None or source_identity != default_identity)
+        return MainWindow._model_controller_for(
+            self
+        ).runtime_requires_training_reinitialization(runtime)
 
     def _reinitialize_training_runtime_from_default_checkpoint(self) -> bool:
-        checkpoint_path = _DEFAULT_TRAINING_FOUNDATION_CHECKPOINT_PATH
-        try:
-            preconditions = validate_foundation_model_instantiation_preconditions(
-                require_min_gpu_count=2,
-                **MainWindow._learning_session_kwargs_for(self),
-            )
-            runtime = instantiate_foundation_model_runtime(
-                num_classes=preconditions.num_classes,
-                device_ids=preconditions.device_ids,
-                checkpoint_path=checkpoint_path,
-                **MainWindow._learning_session_kwargs_for(self),
-            )
-            eval_runtimes_by_box_id = getattr(preconditions, "eval_runtimes_by_box_id", None)
-            if isinstance(eval_runtimes_by_box_id, Mapping):
-                persist_label_values = getattr(
-                    self,
-                    "_persist_model_runtime_label_values_from_eval_runtimes",
-                    None,
-                )
-                if callable(persist_label_values):
-                    persist_label_values(
-                        runtime,
-                        eval_runtimes_by_box_id=eval_runtimes_by_box_id,
-                    )
-                else:
-                    MainWindow._persist_model_runtime_label_values_from_eval_runtimes(
-                        self,
-                        runtime,
-                        eval_runtimes_by_box_id=eval_runtimes_by_box_id,
-                    )
-        except Exception as exc:
-            message = _exception_message(exc)
-            show_warning(
-                (
-                    f"{message}\n\n"
-                    "Training requires the default foundation checkpoint:\n"
-                    f"{checkpoint_path}"
-                ),
-                parent=self,
-            )
-            return False
-        return True
+        return MainWindow._model_controller_for(
+            self
+        ).reinitialize_training_runtime_from_default_checkpoint()
 
     def _ensure_training_runtime_for_new_training(self) -> bool:
-        runtime = MainWindow._get_learning_model_runtime_for(self)
-        if runtime is None:
-            return self._reinitialize_training_runtime_from_default_checkpoint()
-        if not self._runtime_requires_training_reinitialization(runtime):
-            return True
-        if not confirm_replace_training_model_with_default_checkpoint(
-            checkpoint_path=_DEFAULT_TRAINING_FOUNDATION_CHECKPOINT_PATH,
-            parent=self,
-        ):
-            return False
-        return self._reinitialize_training_runtime_from_default_checkpoint()
+        return MainWindow._model_controller_for(
+            self
+        ).ensure_training_runtime_for_new_training()
 
     def _mark_current_model_runtime_as_trained(self, *, completed_epoch_count: int) -> None:
-        if int(completed_epoch_count) <= 0:
-            return
-        runtime = MainWindow._get_learning_model_runtime_for(self)
-        if runtime is None:
-            return
-        hyperparameters_obj = getattr(runtime, "hyperparameters", None)
-        if not isinstance(hyperparameters_obj, dict):
-            return
-        previous_count = hyperparameters_obj.get("training_run_count", 0)
-        try:
-            normalized_count = int(previous_count)
-        except Exception:
-            normalized_count = 0
-        if normalized_count < 0:
-            normalized_count = 0
-        hyperparameters_obj["trained_in_app"] = True
-        hyperparameters_obj["training_run_count"] = normalized_count + 1
-        if "source_checkpoint_path" not in hyperparameters_obj:
-            checkpoint_path_obj = getattr(runtime, "checkpoint_path", None)
-            if isinstance(checkpoint_path_obj, str) and checkpoint_path_obj.strip():
-                hyperparameters_obj["source_checkpoint_path"] = checkpoint_path_obj
+        MainWindow._model_controller_for(self).mark_current_model_runtime_as_trained(
+            completed_epoch_count=completed_epoch_count
+        )
 
     def _train_model_on_dataset_with_dialog(self) -> bool:
-        ensure_training_runtime = getattr(self, "_ensure_training_runtime_for_new_training", None)
-        if callable(ensure_training_runtime):
-            if not bool(ensure_training_runtime()):
-                return False
-        else:
-            if not MainWindow._ensure_training_runtime_for_new_training(self):
-                return False
-
-        try:
-            preconditions = validate_learning_model_training_preconditions(
-                require_class_weights=True,
-                **MainWindow._learning_session_kwargs_for(self),
-            )
-        except Exception as exc:
-            show_warning(str(exc), parent=self)
-            return False
-
-        try:
-            self._start_learning_training_background(preconditions=preconditions)
-        except Exception as exc:
-            self._exit_learning_training_running_state()
-            show_warning(str(exc), parent=self)
-            return False
-        return True
+        return MainWindow._training_controller_for(
+            self
+        ).train_model_on_dataset_with_dialog()
 
     def _start_learning_training_background(self, *, preconditions: object) -> None:
-        thread = QThread(self)
-        worker = LearningTrainingWorker()
-        worker.configure(preconditions=preconditions)
-        worker.moveToThread(thread)
-
-        thread.started.connect(worker.run)
-        worker.completed.connect(self._on_learning_training_completed)
-        worker.failed.connect(self._on_learning_training_failed)
-        worker.finished.connect(thread.quit)
-        worker.finished.connect(worker.deleteLater)
-        thread.finished.connect(self._on_learning_training_thread_finished)
-        thread.finished.connect(thread.deleteLater)
-
-        try:
-            self._enter_learning_training_running_state(worker=worker, thread=thread)
-            thread.start()
-        except Exception:
-            try:
-                thread.quit()
-            except Exception:
-                pass
-            try:
-                worker.deleteLater()
-            except Exception:
-                pass
-            try:
-                thread.deleteLater()
-            except Exception:
-                pass
-            raise
+        MainWindow._training_controller_for(self).start_learning_training_background(
+            preconditions=preconditions
+        )
 
     def _on_learning_training_completed(self, result: object) -> None:
-        background_close_mode = bool(
-            getattr(self, "_deferred_close_after_training", False)
-            and getattr(self, "_deferred_close_training_mode", "none")
-            == "continue_in_background"
-        )
-        if not isinstance(result, LearningTrainingLoopResult):
-            if background_close_mode:
-                _LOGGER.error(
-                    "Background training finished with an invalid result payload: %r",
-                    result,
-                )
-            else:
-                show_warning(
-                    "Training finished with an invalid result payload.",
-                    parent=self,
-                )
-            return
-        normalized_reason = str(result.stop_reason).strip().lower()
-        if normalized_reason == "early_stop":
-            stop_reason_text = "early stop"
-        elif normalized_reason == "max_epoch":
-            stop_reason_text = "max epoch"
-        elif normalized_reason == "user_stop":
-            stop_reason_text = "stopped by user"
-        else:
-            if background_close_mode:
-                _LOGGER.error(
-                    "Background training finished with an invalid stop reason: %r",
-                    result.stop_reason,
-                )
-            else:
-                show_warning(
-                    f"Training finished with an invalid stop reason: {result.stop_reason!r}.",
-                    parent=self,
-                )
-            return
-        best_epoch_text = (
-            "N/A"
-            if result.best_epoch is None
-            else str(int(result.best_epoch))
-        )
-        best_dice_text = (
-            "N/A"
-            if result.best_weighted_mean_dice is None
-            else f"{float(result.best_weighted_mean_dice):.6g}"
-        )
-        marker = getattr(self, "_mark_current_model_runtime_as_trained", None)
-        if callable(marker):
-            marker(completed_epoch_count=int(result.completed_epoch_count))
-        else:
-            MainWindow._mark_current_model_runtime_as_trained(
-                self,
-                completed_epoch_count=int(result.completed_epoch_count),
-            )
-        if background_close_mode:
-            _LOGGER.info(
-                "Background training completed: reason=%s, best_epoch=%s, best_weighted_dice=%s, checkpoint=%s",
-                stop_reason_text,
-                best_epoch_text,
-                best_dice_text,
-                getattr(self, "_deferred_close_checkpoint_path", None),
-            )
-            return
-        show_info(
-            (
-                "Training is over.\n"
-                f"- reason: {stop_reason_text}\n"
-                f"- best epoch: {best_epoch_text}\n"
-                f"- best weighted dice: {best_dice_text}"
-            ),
-            parent=self,
-        )
+        MainWindow._training_controller_for(self).on_learning_training_completed(result)
 
     def _on_learning_training_failed(self, message: str) -> None:
-        background_close_mode = bool(
-            getattr(self, "_deferred_close_after_training", False)
-            and getattr(self, "_deferred_close_training_mode", "none")
-            == "continue_in_background"
-        )
-        normalized_message = str(message).strip()
-        if not normalized_message:
-            normalized_message = "Unknown training error."
-        if background_close_mode:
-            lowered = normalized_message.lower()
-            if lowered.startswith("failed to save training completion checkpoint"):
-                _LOGGER.error(
-                    "Background training completion checkpoint save failed: %s",
-                    normalized_message,
-                )
-            else:
-                _LOGGER.error(
-                    "Background training aborted: %s",
-                    normalized_message,
-                )
-            return
-        show_warning(
-            f"Training aborted: {normalized_message}",
-            parent=self,
-        )
+        MainWindow._training_controller_for(self).on_learning_training_failed(message)
 
     def _on_learning_training_thread_finished(self) -> None:
-        self._exit_learning_training_running_state()
-        if not bool(getattr(self, "_deferred_close_after_training", False)):
-            return
-        clear_state = getattr(self, "_clear_deferred_close_training_state", None)
-        if callable(clear_state):
-            clear_state()
-        else:
-            MainWindow._clear_deferred_close_training_state(self)
-
-        app_instance = QApplication.instance()
-        if app_instance is None:
-            return
-        set_quit_on_last = getattr(app_instance, "setQuitOnLastWindowClosed", None)
-        if callable(set_quit_on_last):
-            try:
-                set_quit_on_last(True)
-            except Exception:
-                pass
-        quit_method = getattr(app_instance, "quit", None)
-        if callable(quit_method):
-            quit_method()
+        MainWindow._training_controller_for(self).on_learning_training_thread_finished()
 
     def _save_bounding_boxes_with_dialog(self) -> bool:
         if not self.state.volume_loaded or self._raw_volume is None:
@@ -3305,177 +2452,10 @@ class MainWindow(QMainWindow):
         require_class_weights: bool,
         show_success_dialog: bool,
     ) -> bool:
-        if not self.state.volume_loaded or self._raw_volume is None:
-            show_warning(
-                "Load a raw volume before building datasets from bounding boxes.",
-                parent=self,
-            )
-            return False
-
-        ordered_box_ids = tuple(row.box_id for row in self.bottom_panel.state.bbox_rows)
-        if not ordered_box_ids:
-            show_warning(
-                "There are no bounding boxes to build datasets from.",
-                parent=self,
-            )
-            return False
-        boxes_by_id = {box.id: box for box in self._bbox_manager.boxes()}
-        learning_box_ids = tuple(
-            box_id
-            for box_id in ordered_box_ids
-            if box_id in boxes_by_id and str(boxes_by_id[box_id].label) != "inference"
+        return MainWindow._learning_state_controller_for(self).prepare_learning_state(
+            require_class_weights=require_class_weights,
+            show_success_dialog=show_success_dialog,
         )
-        train_box_ids = tuple(
-            box_id
-            for box_id in learning_box_ids
-            if box_id in boxes_by_id and str(boxes_by_id[box_id].label) == "train"
-        )
-        if not train_box_ids:
-            show_warning(
-                (
-                    "At least one bounding box labeled 'train' is required to build "
-                    "datasets from bboxes."
-                ),
-                parent=self,
-            )
-            return False
-
-        active_segmentation = self._active_segmentation_volume()
-        if active_segmentation is None:
-            show_warning(
-                (
-                    "Load a semantic segmentation map before building datasets "
-                    "from bounding boxes."
-                ),
-                parent=self,
-            )
-            return False
-        seg_kind, seg_volume = active_segmentation
-        if seg_kind != "semantic":
-            show_warning(
-                (
-                    "Only semantic segmentation is supported for learning-state "
-                    "preparation."
-                ),
-                parent=self,
-            )
-            return False
-        validation_box_ids = tuple(
-            box_id
-            for box_id in learning_box_ids
-            if box_id in boxes_by_id and str(boxes_by_id[box_id].label) == "validation"
-        )
-        if not validation_box_ids:
-            show_warning(
-                (
-                    "At least one bounding box labeled 'validation' is required to "
-                    "build datasets from bboxes."
-                ),
-                parent=self,
-            )
-            return False
-
-        try:
-            raw_array = np.asarray(
-                self._raw_volume.get_chunk((slice(None), slice(None), slice(None)))
-            )
-            segmentation_array = np.asarray(
-                seg_volume.get_chunk((slice(None), slice(None), slice(None)))
-            )
-            outcome = extract_learning_bboxes_in_memory(
-                raw_array,
-                segmentation_array,
-                boxes_by_id=boxes_by_id,
-                ordered_box_ids=learning_box_ids,
-                learning_batch_size=4,
-                learning_num_workers=8,
-                learning_pin_memory=True,
-                learning_drop_last=True,
-                build_eval_dataloaders=True,
-                eval_batch_size=4,
-                eval_num_workers=8,
-                eval_pin_memory=True,
-                eval_drop_last=False,
-                **MainWindow._learning_session_kwargs_for(self),
-            )
-            class_weights = None
-            if bool(require_class_weights):
-                class_weights = compute_and_store_current_learning_class_weights(
-                    max_weight=100.0,
-                    device="cuda:0",
-                    **MainWindow._learning_session_kwargs_for(self),
-                )
-            MainWindow._clear_learning_bbox_batch_for(self)
-            residual_batch = MainWindow._get_learning_bbox_batch_for(self)
-            residual_entry_count = int(residual_batch.size) if residual_batch is not None else 0
-        except Exception as exc:
-            MainWindow._clear_learning_bbox_batch_for(self)
-            show_warning(str(exc), parent=self)
-            return False
-
-        if residual_entry_count > 0:
-            show_warning(
-                (
-                    "Dataset build completed, but temporary learning tensors were "
-                    f"not fully released ({residual_entry_count} entries remain in session)."
-                ),
-                parent=self,
-            )
-            return False
-
-        current_signature_getter = getattr(self, "_current_learning_state_signature", None)
-        if callable(current_signature_getter):
-            self._learning_state_signature = current_signature_getter()
-        else:
-            try:
-                self._learning_state_signature = MainWindow._current_learning_state_signature(self)
-            except Exception:
-                self._learning_state_signature = None
-        self._learning_state_stale = False
-
-        if not bool(show_success_dialog):
-            return True
-
-        summary_lines = [
-            "Built bounding box learning datasets and buffers in memory.",
-            (
-                "- Temporary tensor entries built then released: "
-                f"{outcome.tensor_entry_count}"
-            ),
-        ]
-        if outcome.learning_train_box_ids:
-            summary_lines.append(
-                (
-                    "- Learning DataLoader: "
-                    f"{len(outcome.learning_train_box_ids)} train bboxes, "
-                    f"batch_size={outcome.learning_batch_size}, "
-                    f"num_workers={outcome.learning_num_workers}"
-                )
-            )
-        if outcome.eval_validation_box_ids:
-            summary_lines.append(
-                (
-                    "- Evaluation DataLoaders: "
-                    f"{len(outcome.eval_validation_box_ids)} validation bboxes, "
-                    f"batch_size={outcome.eval_batch_size}, "
-                    f"num_workers={outcome.eval_num_workers}"
-                )
-            )
-        if class_weights is not None:
-            formatted_weights = _format_class_weights_for_summary(class_weights)
-            if formatted_weights is None:
-                summary_lines.append("- Loss class weights initialized on cuda:0.")
-            else:
-                summary_lines.append(
-                    "- Loss class weights initialized on cuda:0: "
-                    f"{formatted_weights}"
-                )
-
-        show_info(
-            "\n".join(summary_lines),
-            parent=self,
-        )
-        return True
 
     def _persist_model_runtime_label_values_from_eval_runtimes(
         self,
@@ -3483,120 +2463,20 @@ class MainWindow(QMainWindow):
         *,
         eval_runtimes_by_box_id: Mapping[str, object],
     ) -> None:
-        if runtime is None:
-            return
-        hyperparameters_obj = getattr(runtime, "hyperparameters", None)
-        if not isinstance(hyperparameters_obj, dict):
-            return
-        resolved_label_values = _resolve_shared_eval_label_values(eval_runtimes_by_box_id)
-        hyperparameters_obj["label_values"] = tuple(
-            int(value) for value in tuple(resolved_label_values)
+        MainWindow._model_controller_for(
+            self
+        ).persist_model_runtime_label_values_from_eval_runtimes(
+            runtime,
+            eval_runtimes_by_box_id=eval_runtimes_by_box_id,
         )
 
     def _current_learning_state_signature(self) -> Tuple[object, ...]:
-        bbox_revision = int(getattr(self._bbox_manager, "revision", 0))
-        ordered_box_ids = tuple(
-            str(row.box_id).strip()
-            for row in tuple(self.bottom_panel.state.bbox_rows)
-            if str(row.box_id).strip()
-        )
-        boxes_by_id = {box.id: box for box in self._bbox_manager.boxes()}
-        ordered_box_signature = []
-        for box_id in ordered_box_ids:
-            box = boxes_by_id.get(box_id)
-            if box is None:
-                ordered_box_signature.append((box_id, "<missing>"))
-                continue
-            ordered_box_signature.append(
-                (
-                    str(box.id),
-                    str(box.label),
-                    int(box.z0),
-                    int(box.z1),
-                    int(box.y0),
-                    int(box.y1),
-                    int(box.x0),
-                    int(box.x1),
-                )
-            )
-
-        active_segmentation = self._active_segmentation_volume()
-        semantic_kind: Optional[str] = None
-        semantic_source_path: Optional[str] = None
-        if active_segmentation is not None:
-            semantic_kind, volume = active_segmentation
-            loader = getattr(volume, "loader", None)
-            path_obj = getattr(loader, "path", None)
-            if isinstance(path_obj, str) and path_obj.strip():
-                semantic_source_path = str(path_obj)
-
-        semantic_state_id: Optional[int] = None
-        editor = self._segmentation_editor
-        if editor is not None:
-            semantic_state_id = int(editor.state_id)
-
-        return (
-            bbox_revision,
-            tuple(ordered_box_signature),
-            semantic_kind,
-            semantic_source_path,
-            semantic_state_id,
-        )
+        return MainWindow._learning_state_controller_for(self).current_signature()
 
     def _instantiate_foundation_model_with_dialog(self) -> bool:
-        try:
-            dialog_result = open_model_checkpoint_dialog(self)
-            if not dialog_result.accepted or not dialog_result.path:
-                return False
-            checkpoint_path = str(Path(dialog_result.path).expanduser())
-            if Path(checkpoint_path).suffix.lower() != ".cp":
-                show_warning(
-                    "Model checkpoints must use the .cp extension.",
-                    parent=self,
-                )
-                return False
-
-            preconditions = validate_foundation_checkpoint_load_preconditions(
-                checkpoint_path,
-                require_min_gpu_count=2,
-            )
-            checkpoint_path = str(preconditions.checkpoint_path)
-            existing_runtime = MainWindow._get_learning_model_runtime_for(self)
-            if existing_runtime is not None:
-                if not confirm_reinitialize_model(parent=self):
-                    return False
-
-            runtime = instantiate_foundation_model_runtime(
-                num_classes=preconditions.num_classes,
-                device_ids=preconditions.device_ids,
-                checkpoint_path=checkpoint_path,
-                **MainWindow._learning_session_kwargs_for(self),
-            )
-            hyperparameters_obj = getattr(runtime, "hyperparameters", None)
-            if not isinstance(hyperparameters_obj, dict):
-                raise ValueError("Loaded model runtime does not expose mutable hyperparameters.")
-            hyperparameters_obj["label_values"] = tuple(
-                int(value) for value in tuple(preconditions.label_values)
-            )
-            resolved_label_values = _resolve_inference_label_values_for_runtime(runtime)
-            if tuple(resolved_label_values) != tuple(preconditions.label_values):
-                raise ValueError(
-                    "Loaded model runtime label_values do not match checkpoint metadata."
-                )
-        except Exception as exc:
-            show_warning(_exception_message(exc), parent=self)
-            return False
-
-        show_info(
-            (
-                "Foundation model loaded from checkpoint.\n"
-                f"- checkpoint: {runtime.checkpoint_path}\n"
-                f"- num_classes: {runtime.num_classes}\n"
-                f"- device_ids: {runtime.device_ids}"
-            ),
-            parent=self,
-        )
-        return True
+        return MainWindow._model_controller_for(
+            self
+        ).instantiate_foundation_model_with_dialog()
 
     def _is_valid_segmentation_dtype(self, volume: VolumeData) -> bool:
         dtype = np.dtype(volume.info.dtype)
@@ -3895,10 +2775,10 @@ class MainWindow(QMainWindow):
         )
 
     def _training_is_running(self) -> bool:
-        return bool(self._training_running)
+        return MainWindow._training_controller_for(self).training_is_running()
 
     def _inference_is_running(self) -> bool:
-        return bool(self._inference_running)
+        return MainWindow._inference_controller_for(self).inference_is_running()
 
     @staticmethod
     def _inference_navigation_lock_active(target: object) -> bool:
@@ -3915,13 +2795,12 @@ class MainWindow(QMainWindow):
         return bool(getattr(target, "_inference_stop_requested", False))
 
     def _clear_learning_inference_stop_request_state(self) -> None:
-        self._inference_stop_requested = False
+        MainWindow._inference_controller_for(
+            self
+        ).clear_learning_inference_stop_request_state()
 
     def _clear_deferred_close_inference_state(self) -> None:
-        self._deferred_close_after_inference = False
-        self._deferred_close_inference_mode = "none"
-        self._deferred_close_inference_save_path = None
-        self._deferred_close_inference_save_format = None
+        MainWindow._inference_controller_for(self).clear_deferred_close_inference_state()
 
     def _set_deferred_close_after_stop_inference(self) -> None:
         clear_training_state = getattr(self, "_clear_deferred_close_training_state", None)
@@ -3929,10 +2808,9 @@ class MainWindow(QMainWindow):
             clear_training_state()
         else:
             MainWindow._clear_deferred_close_training_state(self)
-        self._deferred_close_after_inference = True
-        self._deferred_close_inference_mode = "stop_and_close"
-        self._deferred_close_inference_save_path = None
-        self._deferred_close_inference_save_format = None
+        MainWindow._inference_controller_for(
+            self
+        ).set_deferred_close_after_stop_inference()
 
     def _set_deferred_close_with_background_inference(
         self,
@@ -3945,70 +2823,31 @@ class MainWindow(QMainWindow):
             clear_training_state()
         else:
             MainWindow._clear_deferred_close_training_state(self)
-        normalized_path = str(save_path).strip()
-        if not normalized_path:
-            raise ValueError("save_path must be a non-empty string")
-        normalized_format = str(save_format).strip().lower()
-        if not normalized_format:
-            raise ValueError("save_format must be a non-empty string")
-        self._deferred_close_after_inference = True
-        self._deferred_close_inference_mode = "continue_in_background"
-        self._deferred_close_inference_save_path = normalized_path
-        self._deferred_close_inference_save_format = normalized_format
+        MainWindow._inference_controller_for(
+            self
+        ).set_deferred_close_with_background_inference(
+            save_path=save_path,
+            save_format=save_format,
+        )
 
     def _finalize_deferred_close_inference_and_quit(self) -> None:
-        clear_state = getattr(self, "_clear_deferred_close_inference_state", None)
-        if callable(clear_state):
-            clear_state()
-        else:
-            MainWindow._clear_deferred_close_inference_state(self)
-
-        app_instance = QApplication.instance()
-        if app_instance is None:
-            return
-        set_quit_on_last = getattr(app_instance, "setQuitOnLastWindowClosed", None)
-        if callable(set_quit_on_last):
-            try:
-                set_quit_on_last(True)
-            except Exception:
-                pass
-        quit_method = getattr(app_instance, "quit", None)
-        if callable(quit_method):
-            quit_method()
+        MainWindow._inference_controller_for(
+            self
+        ).finalize_deferred_close_inference_and_quit()
 
     def _set_running_training_worker_completion_checkpoint_path(
         self,
         *,
         checkpoint_path: Optional[str],
     ) -> None:
-        worker = getattr(self, "_training_worker", None)
-        if worker is None:
-            return
-        if checkpoint_path is None:
-            clear_request = getattr(worker, "clear_completion_checkpoint_save_request", None)
-            if callable(clear_request):
-                clear_request()
-            return
-        request_save = getattr(worker, "request_completion_checkpoint_save", None)
-        if callable(request_save):
-            request_save(checkpoint_path)
+        MainWindow._training_controller_for(
+            self
+        ).set_running_training_worker_completion_checkpoint_path(checkpoint_path)
 
     def _clear_deferred_close_training_state(self) -> None:
-        self._deferred_close_after_training = False
-        self._deferred_close_training_mode = "none"
-        self._deferred_close_checkpoint_path = None
-        sync_method = getattr(
-            self,
-            "_set_running_training_worker_completion_checkpoint_path",
-            None,
-        )
-        if callable(sync_method):
-            sync_method(checkpoint_path=None)
-            return
-        MainWindow._set_running_training_worker_completion_checkpoint_path(
-            self,
-            checkpoint_path=None,
-        )
+        MainWindow._training_controller_for(
+            self
+        ).clear_deferred_close_training_state()
 
     def _set_deferred_close_after_stop_training(self) -> None:
         clear_inference_state = getattr(self, "_clear_deferred_close_inference_state", None)
@@ -4016,21 +2855,9 @@ class MainWindow(QMainWindow):
             clear_inference_state()
         else:
             MainWindow._clear_deferred_close_inference_state(self)
-        self._deferred_close_after_training = True
-        self._deferred_close_training_mode = "stop_and_close"
-        self._deferred_close_checkpoint_path = None
-        sync_method = getattr(
-            self,
-            "_set_running_training_worker_completion_checkpoint_path",
-            None,
-        )
-        if callable(sync_method):
-            sync_method(checkpoint_path=None)
-            return
-        MainWindow._set_running_training_worker_completion_checkpoint_path(
-            self,
-            checkpoint_path=None,
-        )
+        MainWindow._training_controller_for(
+            self
+        ).set_deferred_close_after_stop_training()
 
     def _set_deferred_close_with_background_training(
         self,
@@ -4042,56 +2869,17 @@ class MainWindow(QMainWindow):
             clear_inference_state()
         else:
             MainWindow._clear_deferred_close_inference_state(self)
-        normalized_path = str(checkpoint_path).strip()
-        if not normalized_path:
-            raise ValueError("checkpoint_path must be a non-empty string")
-        sync_method = getattr(
-            self,
-            "_set_running_training_worker_completion_checkpoint_path",
-            None,
+        MainWindow._training_controller_for(
+            self
+        ).set_deferred_close_with_background_training(
+            checkpoint_path=checkpoint_path
         )
-        if callable(sync_method):
-            sync_method(checkpoint_path=normalized_path)
-        else:
-            MainWindow._set_running_training_worker_completion_checkpoint_path(
-                self,
-                checkpoint_path=normalized_path,
-            )
-        self._deferred_close_after_training = True
-        self._deferred_close_training_mode = "continue_in_background"
-        self._deferred_close_checkpoint_path = normalized_path
 
     def _refresh_learning_training_ui_state(self) -> None:
-        training_running = self._training_is_running()
-        self.bottom_panel.set_learning_training_running(training_running)
-        refresh_inference = getattr(self, "_refresh_learning_inference_ui_state", None)
-        if callable(refresh_inference):
-            refresh_inference()
-        else:
-            MainWindow._refresh_learning_inference_ui_state(self)
-        self.bottom_panel.set_stop_training_enabled(training_running)
+        MainWindow._training_controller_for(self).refresh_learning_training_ui_state()
 
     def _refresh_learning_inference_ui_state(self) -> None:
-        inference_running = MainWindow._inference_navigation_lock_active(self)
-        learning_actions_enabled = not self._training_is_running() and not inference_running
-        self.bottom_panel.set_segment_inference_enabled(learning_actions_enabled)
-        self.bottom_panel.set_train_model_enabled(learning_actions_enabled)
-        set_stop_inference_enabled = getattr(self.bottom_panel, "set_stop_inference_enabled", None)
-        if callable(set_stop_inference_enabled):
-            stop_enabled = bool(
-                inference_running and not MainWindow._inference_stop_already_requested(self)
-            )
-            set_stop_inference_enabled(stop_enabled)
-        set_navigation_only_mode = getattr(
-            self.bottom_panel,
-            "set_inference_navigation_only_mode",
-            None,
-        )
-        if callable(set_navigation_only_mode):
-            set_navigation_only_mode(inference_running)
-        refresh_undo = getattr(self, "_refresh_undo_ui_state", None)
-        if callable(refresh_undo):
-            refresh_undo()
+        MainWindow._inference_controller_for(self).refresh_learning_inference_ui_state()
 
     def _enter_learning_training_running_state(
         self,
@@ -4099,16 +2887,12 @@ class MainWindow(QMainWindow):
         worker: object,
         thread: object,
     ) -> None:
-        self._training_running = True
-        self._training_worker = worker
-        self._training_thread = thread
-        self._refresh_learning_training_ui_state()
+        MainWindow._training_controller_for(
+            self
+        ).enter_learning_training_running_state(worker=worker, thread=thread)
 
     def _exit_learning_training_running_state(self) -> None:
-        self._training_running = False
-        self._training_worker = None
-        self._training_thread = None
-        self._refresh_learning_training_ui_state()
+        MainWindow._training_controller_for(self).exit_learning_training_running_state()
 
     def _enter_learning_inference_running_state(
         self,
@@ -4116,17 +2900,12 @@ class MainWindow(QMainWindow):
         worker: object,
         thread: object,
     ) -> None:
-        self._inference_running = True
-        self._inference_stop_requested = False
-        self._inference_worker = worker
-        self._inference_thread = thread
-        self._refresh_learning_inference_ui_state()
+        MainWindow._inference_controller_for(
+            self
+        ).enter_learning_inference_running_state(worker=worker, thread=thread)
 
     def _exit_learning_inference_running_state(self) -> None:
-        self._inference_running = False
-        self._inference_worker = None
-        self._inference_thread = None
-        self._refresh_learning_inference_ui_state()
+        MainWindow._inference_controller_for(self).exit_learning_inference_running_state()
 
     def _refresh_annotation_ui_state(self) -> None:
         self.bottom_panel.set_interaction_tools_enabled(self.state.volume_loaded)
