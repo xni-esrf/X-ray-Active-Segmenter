@@ -7,6 +7,7 @@ thread wiring, volume loading, and applying predictions remain in MainWindow.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from numbers import Integral
 from threading import Event, Lock
 from typing import Dict, Optional, Sequence, Tuple
 
@@ -125,6 +126,7 @@ class LearningTrainingWorker(QObject):
         super().__init__(parent)
         self._preconditions = None
         self._stop_event = Event()
+        self._early_stop_patience = 2
         self._completion_checkpoint_path: Optional[str] = None
         self._completion_checkpoint_path_lock = Lock()
 
@@ -132,13 +134,29 @@ class LearningTrainingWorker(QObject):
         self,
         *,
         preconditions: object,
+        early_stop_patience: int = 2,
         completion_checkpoint_path: Optional[str] = None,
     ) -> None:
         self._preconditions = preconditions
+        self._early_stop_patience = self._coerce_early_stop_patience(
+            early_stop_patience
+        )
         if completion_checkpoint_path is None:
             self.clear_completion_checkpoint_save_request()
         else:
             self.request_completion_checkpoint_save(completion_checkpoint_path)
+
+    @staticmethod
+    def _coerce_early_stop_patience(value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            raise TypeError(
+                "early_stop_patience must be an integer, "
+                f"got {type(value).__name__}"
+            )
+        normalized = int(value)
+        if normalized < 1:
+            raise ValueError("early_stop_patience must be >= 1")
+        return normalized
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -200,7 +218,7 @@ class LearningTrainingWorker(QObject):
             result = _train_learning_model_with_validation_loop(
                 preconditions=self._preconditions,
                 mixed_precision=True,
-                early_stop_patience=2,
+                early_stop_patience=int(self._early_stop_patience),
                 stop_event=self._stop_event,
             )
             self._maybe_save_completion_checkpoint(result=result)

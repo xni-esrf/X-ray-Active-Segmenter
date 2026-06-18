@@ -119,6 +119,10 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
             self.panel._learning_panel.stop_training_button,
         )
         self.assertIs(
+            self.panel._change_training_parameters_button,
+            self.panel._learning_panel.change_training_parameters_button,
+        )
+        self.assertIs(
             self.panel._learning_training_status,
             self.panel._learning_panel.training_status,
         )
@@ -461,6 +465,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         stop_inference_events = []
         train_events = []
         stop_events = []
+        change_training_parameters_events = []
         median_filter_events = []
         erosion_events = []
         dilation_events = []
@@ -488,6 +493,10 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertEqual(
             self.panel._stop_training_button.text(),
             "Stop Training",
+        )
+        self.assertEqual(
+            self.panel._change_training_parameters_button.text(),
+            "Change default training parameters",
         )
         self.assertEqual(
             self.panel._median_filter_selected_button.text(),
@@ -531,6 +540,9 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.on_stop_training_requested(
             lambda: stop_events.append("stop")
         )
+        self.panel.on_change_training_parameters_requested(
+            lambda: change_training_parameters_events.append("change")
+        )
         self.panel.on_median_filter_selected_requested(
             lambda: median_filter_events.append("median")
         )
@@ -556,6 +568,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel._stop_inference_button.click()
         self.panel._train_model_button.click()
         self.panel._stop_training_button.click()
+        self.panel._change_training_parameters_button.click()
         self.panel._median_filter_selected_button.click()
         self.panel._erosion_selected_button.click()
         self.panel._dilation_selected_button.click()
@@ -570,6 +583,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertEqual(stop_inference_events, ["stop_inference"])
         self.assertEqual(train_events, ["train"])
         self.assertEqual(stop_events, ["stop"])
+        self.assertEqual(change_training_parameters_events, ["change"])
         self.assertEqual(median_filter_events, ["median"])
         self.assertEqual(erosion_events, ["erosion"])
         self.assertEqual(dilation_events, ["dilation"])
@@ -629,6 +643,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertFalse(self.panel._save_model_button.isEnabled())
         self.assertFalse(self.panel._segment_inference_button.isEnabled())
         self.assertFalse(self.panel._train_model_button.isEnabled())
+        self.assertFalse(self.panel._change_training_parameters_button.isEnabled())
         self.assertFalse(self.panel._undo_button.isEnabled())
         self.assertFalse(self.panel._redo_button.isEnabled())
         self.assertTrue(self.panel._stop_inference_button.isEnabled())
@@ -654,6 +669,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertTrue(self.panel._load_model_button.isEnabled())
         self.assertTrue(self.panel._segment_inference_button.isEnabled())
         self.assertTrue(self.panel._train_model_button.isEnabled())
+        self.assertTrue(self.panel._change_training_parameters_button.isEnabled())
         self.assertTrue(self.panel._undo_button.isEnabled())
         self.assertTrue(self.panel._redo_button.isEnabled())
 

@@ -7,11 +7,13 @@ import numpy as np
 
 from ...io import extract_learning_bboxes_in_memory
 from ...learning import (
+    DEFAULT_TRAINING_PARAMETERS,
     clear_current_learning_bbox_batch,
     compute_and_store_current_learning_class_weights,
     get_current_learning_bbox_batch,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
+    validate_training_parameters,
 )
 from ..dialogs import show_info, show_warning
 
@@ -70,6 +72,14 @@ class LearningStateControllerOperations:
 class LearningStateController:
     context: LearningStateContext
     operations: LearningStateControllerOperations
+
+    def training_parameters(self):
+        parameters = getattr(
+            self.context,
+            "_training_parameters",
+            DEFAULT_TRAINING_PARAMETERS,
+        )
+        return validate_training_parameters(parameters)
 
     def ensure_for_action(self, action: LearningStateAction) -> bool:
         """Ensure learning datasets/runtimes are available for a learning action."""
@@ -214,6 +224,7 @@ class LearningStateController:
             )
             return False
 
+        training_parameters = self.training_parameters()
         try:
             raw_array = np.asarray(
                 context._raw_volume.get_chunk((slice(None), slice(None), slice(None)))
@@ -226,12 +237,13 @@ class LearningStateController:
                 segmentation_array,
                 boxes_by_id=boxes_by_id,
                 ordered_box_ids=learning_box_ids,
-                learning_batch_size=4,
+                learning_minivol_per_epoch=training_parameters.patches_per_epoch,
+                learning_batch_size=training_parameters.training_batch_size,
                 learning_num_workers=8,
                 learning_pin_memory=True,
                 learning_drop_last=True,
                 build_eval_dataloaders=True,
-                eval_batch_size=4,
+                eval_batch_size=training_parameters.validation_batch_size,
                 eval_num_workers=8,
                 eval_pin_memory=True,
                 eval_drop_last=False,

@@ -157,6 +157,7 @@ BOTTOM_PANEL_SUBPANEL_SPECS: Tuple[BottomPanelSubpanelSpec, ...] = (
             "on_stop_inference_requested",
             "on_train_model_requested",
             "on_stop_training_requested",
+            "on_change_training_parameters_requested",
         ),
     ),
     BottomPanelSubpanelSpec(
@@ -1121,6 +1122,7 @@ class LearningPanel(QGroupBox):
         self._on_stop_inference_requested: Optional[Callable[[], None]] = None
         self._on_train_model_requested: Optional[Callable[[], None]] = None
         self._on_stop_training_requested: Optional[Callable[[], None]] = None
+        self._on_change_training_parameters_requested: Optional[Callable[[], None]] = None
 
         self.load_model_button = QPushButton("Load Model")
         self.save_model_button = QPushButton("Save Model")
@@ -1130,6 +1132,9 @@ class LearningPanel(QGroupBox):
         self.train_model_button = QPushButton("Train Model")
         self.stop_training_button = QPushButton("Stop Training")
         self.stop_training_button.setEnabled(False)
+        self.change_training_parameters_button = QPushButton(
+            "Change default training parameters"
+        )
         self.training_status = QLabel("Training: Idle")
 
         layout = QVBoxLayout()
@@ -1141,7 +1146,8 @@ class LearningPanel(QGroupBox):
         controls_layout.addWidget(self.stop_inference_button, 1, 1)
         controls_layout.addWidget(self.train_model_button, 2, 0)
         controls_layout.addWidget(self.stop_training_button, 2, 1)
-        controls_layout.addWidget(self.training_status, 3, 0, 1, 2)
+        controls_layout.addWidget(self.change_training_parameters_button, 3, 0, 1, 2)
+        controls_layout.addWidget(self.training_status, 4, 0, 1, 2)
         layout.addLayout(controls_layout)
         self.setLayout(layout)
 
@@ -1153,6 +1159,9 @@ class LearningPanel(QGroupBox):
         self.stop_inference_button.clicked.connect(self._emit_stop_inference_requested)
         self.train_model_button.clicked.connect(self._emit_train_model_requested)
         self.stop_training_button.clicked.connect(self._emit_stop_training_requested)
+        self.change_training_parameters_button.clicked.connect(
+            self._emit_change_training_parameters_requested
+        )
 
     def on_load_model_requested(self, callback: Callable[[], None]) -> None:
         self._on_load_model_requested = callback
@@ -1172,6 +1181,12 @@ class LearningPanel(QGroupBox):
     def on_stop_training_requested(self, callback: Callable[[], None]) -> None:
         self._on_stop_training_requested = callback
 
+    def on_change_training_parameters_requested(
+        self,
+        callback: Callable[[], None],
+    ) -> None:
+        self._on_change_training_parameters_requested = callback
+
     def set_controls_state(
         self,
         *,
@@ -1184,6 +1199,7 @@ class LearningPanel(QGroupBox):
         locked = bool(editing_locked)
         self.load_model_button.setEnabled(not locked)
         self.save_model_button.setEnabled(not locked)
+        self.change_training_parameters_button.setEnabled(not locked)
         self.segment_inference_button.setEnabled(
             bool(segment_inference_enabled and not locked)
         )
@@ -1218,6 +1234,10 @@ class LearningPanel(QGroupBox):
     def _emit_stop_training_requested(self) -> None:
         if self._on_stop_training_requested is not None:
             self._on_stop_training_requested()
+
+    def _emit_change_training_parameters_requested(self) -> None:
+        if self._on_change_training_parameters_requested is not None:
+            self._on_change_training_parameters_requested()
 
 
 class HistoryPanel(QGroupBox):

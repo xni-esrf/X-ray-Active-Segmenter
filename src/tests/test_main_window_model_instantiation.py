@@ -8,9 +8,11 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from src.learning import TrainingParameters
     from src.ui.main_window import MainWindow
 except Exception:  # pragma: no cover - environment dependent
     MainWindow = None  # type: ignore[assignment]
+    TrainingParameters = None  # type: ignore[assignment]
 
 
 @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
@@ -138,6 +140,58 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
         info_text = show_info_mock.call_args.args[0]
         self.assertIn("Foundation model loaded from checkpoint.", info_text)
         self.assertIn("weights_epoch_190.cp", info_text)
+
+    def test_instantiate_model_uses_current_training_learning_rate(self) -> None:
+        window_like = SimpleNamespace(
+            _training_parameters=TrainingParameters(learning_rate=0.002),
+        )
+        preconditions = SimpleNamespace(
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            num_classes=3,
+            label_values=(0, 1, 2),
+            device_ids=(0, 1),
+        )
+        instantiated_runtime = SimpleNamespace(
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            num_classes=3,
+            device_ids=(0, 1),
+            hyperparameters={},
+        )
+        checkpoint_dialog_result = SimpleNamespace(
+            accepted=True,
+            path="foundation_model/weights_epoch_190.cp",
+        )
+
+        with patch(
+            "src.ui.main_window.get_current_learning_model_runtime",
+            return_value=None,
+        ), patch(
+            "src.ui.main_window.confirm_reinitialize_model"
+        ), patch(
+            "src.ui.main_window.validate_foundation_checkpoint_load_preconditions",
+            return_value=preconditions,
+        ), patch(
+            "src.ui.main_window.open_model_checkpoint_dialog",
+            return_value=checkpoint_dialog_result,
+        ), patch(
+            "src.ui.main_window.instantiate_foundation_model_runtime",
+            return_value=instantiated_runtime,
+        ) as instantiate_mock, patch(
+            "src.ui.main_window.show_warning"
+        ), patch(
+            "src.ui.main_window.show_info"
+        ):
+            result = MainWindow._instantiate_foundation_model_with_dialog(window_like)
+
+        self.assertTrue(result)
+        instantiate_kwargs = instantiate_mock.call_args.kwargs
+        self.assertEqual(instantiate_kwargs["num_classes"], 3)
+        self.assertEqual(instantiate_kwargs["device_ids"], (0, 1))
+        self.assertEqual(
+            instantiate_kwargs["checkpoint_path"],
+            "foundation_model/weights_epoch_190.cp",
+        )
+        self.assertAlmostEqual(float(instantiate_kwargs["config"].lr), 0.002, places=12)
 
     def test_instantiate_model_warns_and_aborts_when_gpu_count_is_too_low(self) -> None:
         window_like = SimpleNamespace()

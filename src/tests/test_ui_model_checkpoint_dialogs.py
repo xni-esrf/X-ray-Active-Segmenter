@@ -10,9 +10,13 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from PySide6.QtWidgets import QApplication
+
+    from src.learning import DEFAULT_TRAINING_PARAMETERS, TrainingParameters
     import src.ui.dialogs as dialogs_module
     from src.ui.dialogs import (
         InferenceCloseDecision,
+        TrainingParametersDialog,
         TrainingCloseDecision,
         ask_inference_running_close_decision,
         ask_training_running_close_decision,
@@ -20,13 +24,64 @@ try:
         open_save_model_checkpoint_dialog,
     )
 except Exception:  # pragma: no cover - environment dependent
+    QApplication = None  # type: ignore[assignment]
+    DEFAULT_TRAINING_PARAMETERS = None  # type: ignore[assignment]
+    TrainingParameters = None  # type: ignore[assignment]
     dialogs_module = None  # type: ignore[assignment]
     InferenceCloseDecision = None  # type: ignore[assignment]
+    TrainingParametersDialog = None  # type: ignore[assignment]
     TrainingCloseDecision = None  # type: ignore[assignment]
     ask_inference_running_close_decision = None  # type: ignore[assignment]
     ask_training_running_close_decision = None  # type: ignore[assignment]
     open_save_model_checkpoint_dialog = None  # type: ignore[assignment]
     confirm_replace_training_model_with_default_checkpoint = None  # type: ignore[assignment]
+
+
+@unittest.skipUnless(
+    QApplication is not None and TrainingParametersDialog is not None,
+    "Dialogs are not available",
+)
+class TrainingParametersDialogTests(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls._app = QApplication.instance() or QApplication([])
+
+    def test_training_parameters_dialog_returns_edited_values(self) -> None:
+        dialog = TrainingParametersDialog(DEFAULT_TRAINING_PARAMETERS)
+
+        dialog._learning_rate.setValue(0.001)
+        dialog._training_batch_size.setValue(2)
+        dialog._validation_batch_size.setValue(3)
+        dialog._patches_per_epoch.setValue(12)
+        dialog._early_stopping_patience.setValue(4)
+
+        parameters = dialog.parameters()
+
+        self.assertEqual(
+            parameters,
+            TrainingParameters(
+                learning_rate=0.001,
+                training_batch_size=2,
+                validation_batch_size=3,
+                patches_per_epoch=12,
+                early_stopping_patience=4,
+            ),
+        )
+
+    def test_training_parameters_dialog_reset_restores_defaults(self) -> None:
+        dialog = TrainingParametersDialog(
+            TrainingParameters(
+                learning_rate=0.001,
+                training_batch_size=2,
+                validation_batch_size=3,
+                patches_per_epoch=12,
+                early_stopping_patience=4,
+            )
+        )
+
+        dialog.reset_to_defaults()
+
+        self.assertEqual(dialog.parameters(), DEFAULT_TRAINING_PARAMETERS)
 
 
 @unittest.skipUnless(open_save_model_checkpoint_dialog is not None, "Dialogs are not available")

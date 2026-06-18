@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from numbers import Integral
 from pathlib import Path
 from typing import Dict, Literal, Mapping, Optional, Sequence, Set, Tuple, cast
@@ -51,7 +51,10 @@ from ..io.saver import save_segmentation_volume
 from ..loading import load_prepared_volume
 from ..learning import (
     DEFAULT_FOUNDATION_CHECKPOINT_PATH,
+    DEFAULT_FOUNDATION_MODEL_CONFIG,
+    DEFAULT_TRAINING_PARAMETERS,
     LearningSession,
+    TrainingParameters,
     clear_current_learning_bbox_batch,
     compute_and_store_current_learning_class_weights,
     get_current_learning_dataloader_runtime,
@@ -63,6 +66,7 @@ from ..learning import (
     validate_foundation_checkpoint_load_preconditions,
     validate_foundation_model_instantiation_preconditions,
     validate_learning_model_training_preconditions,
+    validate_training_parameters,
 )
 from ..learning.qt_workers import (
     LearningInferencePrediction,
@@ -100,6 +104,7 @@ from .dialogs import (
     open_bounding_boxes_dialog,
     open_save_bounding_boxes_dialog,
     open_save_segmentation_dialog,
+    open_training_parameters_dialog,
     show_info,
     show_warning,
 )
@@ -448,6 +453,7 @@ class MainWindow(QMainWindow):
         self._inference_worker: Optional[object] = None
         self._inference_thread: Optional[object] = None
         self._learning_session = LearningSession()
+        self._training_parameters: TrainingParameters = DEFAULT_TRAINING_PARAMETERS
         self._learning_state_signature: Optional[Tuple[object, ...]] = None
         self._learning_state_stale = True
         self._deferred_close_after_training = False
@@ -621,6 +627,9 @@ class MainWindow(QMainWindow):
         self.bottom_panel.on_stop_inference_requested(self._handle_stop_inference_request)
         self.bottom_panel.on_train_model_requested(self._handle_train_model_request)
         self.bottom_panel.on_stop_training_requested(self._handle_stop_training_request)
+        self.bottom_panel.on_change_training_parameters_requested(
+            self._handle_change_training_parameters_request
+        )
         self.bottom_panel.on_median_filter_selected_requested(
             self._handle_median_filter_selected_request
         )
@@ -725,6 +734,26 @@ class MainWindow(QMainWindow):
         return get_current_learning_bbox_batch()
 
     @staticmethod
+    def _training_parameters_for(owner: object) -> TrainingParameters:
+        return validate_training_parameters(
+            getattr(owner, "_training_parameters", DEFAULT_TRAINING_PARAMETERS)
+        )
+
+    @staticmethod
+    def _instantiate_foundation_model_runtime_for(owner: object, **kwargs: object) -> object:
+        training_parameters = MainWindow._training_parameters_for(owner)
+        if (
+            "config" not in kwargs
+            and float(training_parameters.learning_rate)
+            != float(DEFAULT_TRAINING_PARAMETERS.learning_rate)
+        ):
+            kwargs["config"] = replace(
+                DEFAULT_FOUNDATION_MODEL_CONFIG,
+                lr=float(training_parameters.learning_rate),
+            )
+        return instantiate_foundation_model_runtime(**kwargs)
+
+    @staticmethod
     def _learning_state_controller_for(owner: object) -> LearningStateController:
         return LearningStateController(
             context=owner,
@@ -767,7 +796,12 @@ class MainWindow(QMainWindow):
                 validate_foundation_model_instantiation_preconditions=(
                     validate_foundation_model_instantiation_preconditions
                 ),
-                instantiate_foundation_model_runtime=instantiate_foundation_model_runtime,
+                instantiate_foundation_model_runtime=(
+                    lambda **kwargs: MainWindow._instantiate_foundation_model_runtime_for(
+                        owner,
+                        **kwargs,
+                    )
+                ),
                 save_foundation_model_checkpoint=save_foundation_model_checkpoint,
                 get_learning_model_runtime=MainWindow._get_learning_model_runtime_for,
                 learning_session_kwargs=MainWindow._learning_session_kwargs_for,
@@ -1815,6 +1849,84 @@ class MainWindow(QMainWindow):
 
     def _handle_stop_training_request(self) -> None:
         MainWindow._training_controller_for(self).handle_stop_training_request()
+
+    def _handle_change_training_parameters_request(self) -> None:
+        result = open_training_parameters_dialog(
+            self._training_parameters,
+            parent=self,
+        )
+        if not bool(getattr(result, "accepted", False)):
+            return
+        parameters = getattr(result, "parameters", None)
+        if parameters is None:
+            return
+        try:
+            MainWindow._apply_training_parameters(self, parameters)
+        except Exception as exc:
+            show_warning(str(exc), parent=self)
+
+    @staticmethod
+    def _training_parameters_require_learning_state_rebuild(
+        before: TrainingParameters,
+        after: TrainingParameters,
+    ) -> bool:
+        return (
+            int(before.training_batch_size) != int(after.training_batch_size)
+            or int(before.validation_batch_size) != int(after.validation_batch_size)
+            or int(before.patches_per_epoch) != int(after.patches_per_epoch)
+        )
+
+    def _apply_training_parameters(self, parameters: TrainingParameters) -> None:
+        normalized = validate_training_parameters(parameters)
+        previous = self._training_parameters
+        if normalized == previous:
+            return
+        self._training_parameters = normalized
+        if float(previous.learning_rate) != float(normalized.learning_rate):
+            MainWindow._apply_training_learning_rate_to_current_runtime(
+                self,
+                float(normalized.learning_rate),
+            )
+        if MainWindow._training_parameters_require_learning_state_rebuild(
+            previous,
+            normalized,
+        ):
+            MainWindow._mark_learning_state_stale_for_training_parameter_change(self)
+
+    def _mark_learning_state_stale_for_training_parameter_change(self) -> None:
+        self._learning_state_stale = True
+
+    def _apply_training_learning_rate_to_current_runtime(self, learning_rate: float) -> None:
+        normalized_lr = float(
+            validate_training_parameters(
+                TrainingParameters(
+                    learning_rate=learning_rate,
+                    training_batch_size=self._training_parameters.training_batch_size,
+                    validation_batch_size=self._training_parameters.validation_batch_size,
+                    patches_per_epoch=self._training_parameters.patches_per_epoch,
+                    early_stopping_patience=self._training_parameters.early_stopping_patience,
+                )
+            ).learning_rate
+        )
+        runtime = MainWindow._get_learning_model_runtime_for(self)
+        if runtime is None:
+            return
+        hyperparameters_obj = getattr(runtime, "hyperparameters", None)
+        if isinstance(hyperparameters_obj, dict):
+            hyperparameters_obj["lr"] = normalized_lr
+
+        optimizer = getattr(runtime, "optimizer", None)
+        param_groups = getattr(optimizer, "param_groups", None)
+        if not isinstance(param_groups, (list, tuple)):
+            return
+        for group in tuple(param_groups):
+            if not isinstance(group, dict):
+                continue
+            try:
+                decay_rate = float(group.get("lwise_lr_decay_rate", 1.0))
+            except Exception:
+                decay_rate = 1.0
+            group["lr"] = normalized_lr * decay_rate
 
     def _handle_median_filter_selected_request(self) -> None:
         self._handle_selected_bbox_segmentation_processing_request("median_filter")

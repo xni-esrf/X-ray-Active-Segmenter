@@ -7,7 +7,9 @@ from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 
 from ...learning import (
+    DEFAULT_TRAINING_PARAMETERS,
     LearningTrainingLoopResult,
+    validate_training_parameters,
     validate_learning_model_training_preconditions,
 )
 from ...learning.qt_workers import LearningTrainingWorker
@@ -56,6 +58,14 @@ class TrainingController:
 
     def training_is_running(self) -> bool:
         return bool(self.context._training_running)
+
+    def training_parameters(self):
+        parameters = getattr(
+            self.context,
+            "_training_parameters",
+            DEFAULT_TRAINING_PARAMETERS,
+        )
+        return validate_training_parameters(parameters)
 
     def handle_train_model_request(self) -> None:
         if self.operations.inference_navigation_lock_active(self.context):
@@ -151,7 +161,11 @@ class TrainingController:
     def start_learning_training_background(self, *, preconditions: object) -> None:
         thread = self.operations.qthread_factory(self.context)
         worker = self.operations.training_worker_factory()
-        worker.configure(preconditions=preconditions)
+        training_parameters = self.training_parameters()
+        worker.configure(
+            preconditions=preconditions,
+            early_stop_patience=training_parameters.early_stopping_patience,
+        )
         worker.moveToThread(thread)
 
         thread.started.connect(worker.run)

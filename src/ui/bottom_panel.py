@@ -154,6 +154,7 @@ class BottomPanel(QWidget):
         self._on_stop_inference_requested: Optional[Callable[[], None]] = None
         self._on_train_model_requested: Optional[Callable[[], None]] = None
         self._on_stop_training_requested: Optional[Callable[[], None]] = None
+        self._on_change_training_parameters_requested: Optional[Callable[[], None]] = None
         self._on_median_filter_selected_requested: Optional[Callable[[], None]] = None
         self._on_erosion_selected_requested: Optional[Callable[[], None]] = None
         self._on_dilation_selected_requested: Optional[Callable[[], None]] = None
@@ -201,6 +202,9 @@ class BottomPanel(QWidget):
         self._stop_inference_button = self._learning_panel.stop_inference_button
         self._train_model_button = self._learning_panel.train_model_button
         self._stop_training_button = self._learning_panel.stop_training_button
+        self._change_training_parameters_button = (
+            self._learning_panel.change_training_parameters_button
+        )
         self._learning_training_status = self._learning_panel.training_status
         self._learning_panel.on_load_model_requested(self._handle_load_model_requested)
         self._learning_panel.on_save_model_requested(self._handle_save_model_requested)
@@ -213,6 +217,9 @@ class BottomPanel(QWidget):
         self._learning_panel.on_train_model_requested(self._handle_train_model_requested)
         self._learning_panel.on_stop_training_requested(
             self._handle_stop_training_requested
+        )
+        self._learning_panel.on_change_training_parameters_requested(
+            self._handle_change_training_parameters_requested
         )
 
         self._navigation_panel = NavigationPanel(
@@ -952,6 +959,9 @@ class BottomPanel(QWidget):
     def on_stop_training_requested(self, callback: Callable[[], None]) -> None:
         self._on_stop_training_requested = callback
 
+    def on_change_training_parameters_requested(self, callback: Callable[[], None]) -> None:
+        self._on_change_training_parameters_requested = callback
+
     def on_median_filter_selected_requested(self, callback: Callable[[], None]) -> None:
         self._on_median_filter_selected_requested = callback
 
@@ -1202,6 +1212,10 @@ class BottomPanel(QWidget):
     def _handle_stop_training_requested(self) -> None:
         if self._on_stop_training_requested:
             self._on_stop_training_requested()
+
+    def _handle_change_training_parameters_requested(self) -> None:
+        if self._on_change_training_parameters_requested:
+            self._on_change_training_parameters_requested()
 
     def _handle_median_filter_selected_requested(self) -> None:
         if self._on_median_filter_selected_requested:

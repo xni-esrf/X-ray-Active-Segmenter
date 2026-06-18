@@ -10,9 +10,11 @@ import numpy as np
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
+    from src.learning import TrainingParameters
     from src.ui.main_window import MainWindow
 except Exception:  # pragma: no cover - environment dependent
     MainWindow = None  # type: ignore[assignment]
+    TrainingParameters = None  # type: ignore[assignment]
 
 from src.bbox import BoundingBox
 from src.io.bbox_tiff_export import LearningBBoxExtractionOutcome
@@ -226,6 +228,7 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
         self.assertEqual(tuple(extract_args.args[1].shape), (16, 16, 16))
         self.assertEqual(extract_args.kwargs["ordered_box_ids"], ("bbox_0007", "bbox_0008"))
         self.assertNotIn("bbox_0010", extract_args.kwargs["ordered_box_ids"])
+        self.assertEqual(extract_args.kwargs["learning_minivol_per_epoch"], 1000)
         self.assertEqual(extract_args.kwargs["learning_batch_size"], 4)
         self.assertEqual(extract_args.kwargs["learning_num_workers"], 8)
         self.assertTrue(extract_args.kwargs["learning_pin_memory"])
@@ -248,6 +251,53 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
             "Loss class weights initialized on cuda:0: [1, 2.5, 100]",
             info_text,
         )
+
+    def test_prepare_learning_state_uses_current_training_parameters(self) -> None:
+        train_box = self._make_box(box_id="bbox_0007", label="train")
+        validation_box = self._make_box(box_id="bbox_0008", label="validation")
+        seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
+        window_like = self._make_window_like(
+            boxes=(train_box, validation_box),
+            raw_array=np.zeros((16, 16, 16), dtype=np.uint8),
+            active_segmentation=("semantic", seg_volume),
+        )
+        window_like._training_parameters = TrainingParameters(
+            training_batch_size=7,
+            validation_batch_size=5,
+            patches_per_epoch=321,
+        )
+
+        with patch(
+            "src.ui.main_window.extract_learning_bboxes_in_memory",
+            return_value=LearningBBoxExtractionOutcome(
+                tensor_entry_count=2,
+                learning_train_box_ids=("bbox_0007",),
+                learning_batch_size=7,
+                learning_num_workers=8,
+                eval_validation_box_ids=("bbox_0008",),
+                eval_batch_size=5,
+                eval_num_workers=8,
+            ),
+        ) as extract_mock, patch(
+            "src.ui.main_window.compute_and_store_current_learning_class_weights",
+            return_value=[1.0, 2.5],
+        ), patch("src.ui.main_window.clear_current_learning_bbox_batch"), patch(
+            "src.ui.main_window.get_current_learning_bbox_batch",
+            return_value=None,
+        ), patch("src.ui.main_window.show_info"), patch(
+            "src.ui.main_window.show_warning"
+        ):
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=False,
+            )
+
+        self.assertTrue(result)
+        extract_kwargs = extract_mock.call_args.kwargs
+        self.assertEqual(extract_kwargs["learning_batch_size"], 7)
+        self.assertEqual(extract_kwargs["eval_batch_size"], 5)
+        self.assertEqual(extract_kwargs["learning_minivol_per_epoch"], 321)
 
     def test_prepare_learning_state_shows_warning_when_extraction_raises(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")

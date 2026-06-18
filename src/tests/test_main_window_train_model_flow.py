@@ -8,11 +8,58 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from src.learning import LearningTrainingLoopResult
+    from src.learning import LearningTrainingLoopResult, TrainingParameters
     from src.ui.main_window import MainWindow
 except Exception:  # pragma: no cover - environment dependent
     MainWindow = None  # type: ignore[assignment]
     LearningTrainingLoopResult = None  # type: ignore[assignment]
+    TrainingParameters = None  # type: ignore[assignment]
+
+
+class _FakeSignal:
+    def __init__(self) -> None:
+        self.callbacks: list[object] = []
+
+    def connect(self, callback: object) -> None:
+        self.callbacks.append(callback)
+
+
+class _FakeTrainingThread:
+    def __init__(self, parent: object) -> None:
+        self.parent = parent
+        self.started = _FakeSignal()
+        self.finished = _FakeSignal()
+        self.started_called = False
+
+    def start(self) -> None:
+        self.started_called = True
+
+    def quit(self) -> None:
+        pass
+
+    def deleteLater(self) -> None:
+        pass
+
+
+class _FakeTrainingWorker:
+    def __init__(self) -> None:
+        self.completed = _FakeSignal()
+        self.failed = _FakeSignal()
+        self.finished = _FakeSignal()
+        self.configure_kwargs: dict[str, object] = {}
+        self.thread: object | None = None
+
+    def configure(self, **kwargs: object) -> None:
+        self.configure_kwargs = dict(kwargs)
+
+    def moveToThread(self, thread: object) -> None:
+        self.thread = thread
+
+    def run(self) -> None:
+        pass
+
+    def deleteLater(self) -> None:
+        pass
 
 
 @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
@@ -89,6 +136,49 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
         validate_mock.assert_called_once_with(require_class_weights=True)
         warning_mock.assert_not_called()
         self.assertEqual(started, [{"preconditions": preconditions}])
+
+    @unittest.skipUnless(
+        TrainingParameters is not None,
+        "Training parameters type unavailable",
+    )
+    def test_start_learning_training_background_uses_current_early_stop_patience(self) -> None:
+        preconditions = object()
+        fake_thread = _FakeTrainingThread(parent=None)
+        fake_worker = _FakeTrainingWorker()
+        entered = []
+        window_like = SimpleNamespace(
+            _training_parameters=TrainingParameters(early_stopping_patience=6),
+            _training_running=False,
+            _training_worker=None,
+            _training_thread=None,
+            _deferred_close_after_training=False,
+            _deferred_close_training_mode="none",
+            _deferred_close_checkpoint_path=None,
+            _on_learning_training_completed=lambda _result: None,
+            _on_learning_training_failed=lambda _message: None,
+            _on_learning_training_thread_finished=lambda: None,
+            _enter_learning_training_running_state=lambda **kwargs: entered.append(kwargs),
+        )
+
+        with patch("src.ui.main_window.QThread", return_value=fake_thread), patch(
+            "src.ui.main_window.LearningTrainingWorker",
+            return_value=fake_worker,
+        ):
+            MainWindow._start_learning_training_background(
+                window_like,
+                preconditions=preconditions,
+            )
+
+        self.assertEqual(
+            fake_worker.configure_kwargs,
+            {
+                "preconditions": preconditions,
+                "early_stop_patience": 6,
+            },
+        )
+        self.assertIs(fake_worker.thread, fake_thread)
+        self.assertEqual(entered, [{"worker": fake_worker, "thread": fake_thread}])
+        self.assertTrue(fake_thread.started_called)
 
     def test_train_model_on_dataset_warns_and_exits_when_background_start_fails(self) -> None:
         exits = []

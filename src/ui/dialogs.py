@@ -5,7 +5,25 @@ from enum import Enum
 from pathlib import Path
 from typing import Optional, Tuple
 
-from PySide6.QtWidgets import QFileDialog, QMessageBox, QWidget
+from PySide6.QtCore import Qt
+from PySide6.QtWidgets import (
+    QDialog,
+    QDialogButtonBox,
+    QDoubleSpinBox,
+    QFileDialog,
+    QFormLayout,
+    QLabel,
+    QMessageBox,
+    QSpinBox,
+    QVBoxLayout,
+    QWidget,
+)
+
+from ..learning import (
+    DEFAULT_TRAINING_PARAMETERS,
+    TrainingParameters,
+    validate_training_parameters,
+)
 
 
 @dataclass
@@ -20,6 +38,12 @@ class SaveDialogResult:
     accepted: bool
     path: Optional[str] = None
     format: Optional[str] = None
+
+
+@dataclass
+class TrainingParametersDialogResult:
+    accepted: bool
+    parameters: Optional[TrainingParameters] = None
 
 
 class UnsavedChangesDecision(str, Enum):
@@ -97,6 +121,104 @@ def confirm_replace_training_model_with_default_checkpoint(
         QMessageBox.StandardButton.No,
     )
     return answer == QMessageBox.StandardButton.Yes
+
+
+class TrainingParametersDialog(QDialog):
+    def __init__(
+        self,
+        parameters: TrainingParameters,
+        parent: Optional[QWidget] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Training Parameters")
+        self._parameters = validate_training_parameters(parameters)
+
+        layout = QVBoxLayout(self)
+
+        warning = QLabel(
+            "These options are intended for advanced users. "
+            "The default training parameters should be appropriate most of the time."
+        )
+        warning.setWordWrap(True)
+        warning.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        layout.addWidget(warning)
+
+        form = QFormLayout()
+        self._learning_rate = QDoubleSpinBox()
+        self._learning_rate.setRange(1e-12, 1e6)
+        self._learning_rate.setDecimals(12)
+        self._learning_rate.setSingleStep(1e-5)
+        self._learning_rate.setCorrectionMode(
+            QDoubleSpinBox.CorrectionMode.CorrectToNearestValue
+        )
+
+        self._training_batch_size = QSpinBox()
+        self._training_batch_size.setRange(1, 1_000_000)
+
+        self._validation_batch_size = QSpinBox()
+        self._validation_batch_size.setRange(1, 1_000_000)
+
+        self._patches_per_epoch = QSpinBox()
+        self._patches_per_epoch.setRange(1, 1_000_000_000)
+
+        self._early_stopping_patience = QSpinBox()
+        self._early_stopping_patience.setRange(1, 1_000_000)
+
+        form.addRow("Learning rate", self._learning_rate)
+        form.addRow("Training batch size", self._training_batch_size)
+        form.addRow("Validation batch size", self._validation_batch_size)
+        form.addRow("Patches per epoch", self._patches_per_epoch)
+        form.addRow("Early stopping patience", self._early_stopping_patience)
+        layout.addLayout(form)
+
+        self._buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+            | QDialogButtonBox.StandardButton.Reset
+        )
+        self._buttons.accepted.connect(self.accept)
+        self._buttons.rejected.connect(self.reject)
+        reset_button = self._buttons.button(QDialogButtonBox.StandardButton.Reset)
+        if reset_button is not None:
+            reset_button.clicked.connect(self.reset_to_defaults)
+        layout.addWidget(self._buttons)
+
+        self.set_parameters(self._parameters)
+
+    def set_parameters(self, parameters: TrainingParameters) -> None:
+        normalized = validate_training_parameters(parameters)
+        self._learning_rate.setValue(float(normalized.learning_rate))
+        self._training_batch_size.setValue(int(normalized.training_batch_size))
+        self._validation_batch_size.setValue(int(normalized.validation_batch_size))
+        self._patches_per_epoch.setValue(int(normalized.patches_per_epoch))
+        self._early_stopping_patience.setValue(int(normalized.early_stopping_patience))
+
+    def reset_to_defaults(self) -> None:
+        self.set_parameters(DEFAULT_TRAINING_PARAMETERS)
+
+    def parameters(self) -> TrainingParameters:
+        return validate_training_parameters(
+            TrainingParameters(
+                learning_rate=float(self._learning_rate.value()),
+                training_batch_size=int(self._training_batch_size.value()),
+                validation_batch_size=int(self._validation_batch_size.value()),
+                patches_per_epoch=int(self._patches_per_epoch.value()),
+                early_stopping_patience=int(self._early_stopping_patience.value()),
+            )
+        )
+
+
+def open_training_parameters_dialog(
+    parameters: TrainingParameters,
+    parent: Optional[QWidget] = None,
+) -> TrainingParametersDialogResult:
+    dialog = TrainingParametersDialog(parameters, parent=parent)
+    if dialog.exec() != QDialog.DialogCode.Accepted:
+        return TrainingParametersDialogResult(accepted=False, parameters=None)
+    return TrainingParametersDialogResult(
+        accepted=True,
+        parameters=dialog.parameters(),
+    )
 
 
 def ask_unsaved_changes(

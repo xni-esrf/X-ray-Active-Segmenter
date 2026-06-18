@@ -12,7 +12,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from src.bbox import BoundingBox
 
 try:
-    from src.learning import LearningBBoxEvalRuntime, LearningSession
+    from src.learning import LearningBBoxEvalRuntime, LearningSession, TrainingParameters
     from src.learning.qt_workers import (
         LearningInferenceBackgroundResult,
         LearningInferenceStopRequested,
@@ -22,6 +22,7 @@ except Exception:  # pragma: no cover - environment dependent
     MainWindow = None  # type: ignore[assignment]
     LearningBBoxEvalRuntime = None  # type: ignore[assignment]
     LearningSession = None  # type: ignore[assignment]
+    TrainingParameters = None  # type: ignore[assignment]
     LearningInferenceBackgroundResult = None  # type: ignore[assignment]
     QThread = None  # type: ignore[assignment]
     LearningInferenceStopRequested = None  # type: ignore[assignment]
@@ -29,6 +30,145 @@ except Exception:  # pragma: no cover - environment dependent
 
 @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
 class MainWindowLearningTrainingStateTests(unittest.TestCase):
+    def test_handle_change_training_parameters_request_applies_accepted_dialog_values(self) -> None:
+        parameters = TrainingParameters(training_batch_size=8)
+        window_like = SimpleNamespace(
+            _training_parameters=TrainingParameters(),
+            _learning_state_stale=False,
+            _learning_session=LearningSession(),
+        )
+
+        with patch(
+            "src.ui.main_window.open_training_parameters_dialog",
+            return_value=SimpleNamespace(accepted=True, parameters=parameters),
+        ) as dialog_mock:
+            MainWindow._handle_change_training_parameters_request(window_like)
+
+        dialog_mock.assert_called_once_with(TrainingParameters(), parent=window_like)
+        self.assertEqual(window_like._training_parameters, parameters)
+        self.assertTrue(window_like._learning_state_stale)
+
+    def test_apply_training_parameters_marks_learning_state_stale_for_dataloader_changes(self) -> None:
+        window_like = SimpleNamespace(
+            _training_parameters=TrainingParameters(),
+            _learning_state_stale=False,
+            _learning_session=LearningSession(),
+        )
+
+        MainWindow._apply_training_parameters(
+            window_like,
+            TrainingParameters(
+                training_batch_size=8,
+                validation_batch_size=6,
+                patches_per_epoch=2000,
+            ),
+        )
+
+        self.assertEqual(window_like._training_parameters.training_batch_size, 8)
+        self.assertEqual(window_like._training_parameters.validation_batch_size, 6)
+        self.assertEqual(window_like._training_parameters.patches_per_epoch, 2000)
+        self.assertTrue(window_like._learning_state_stale)
+
+    def test_apply_training_parameters_keeps_learning_state_current_for_early_stop_only(self) -> None:
+        window_like = SimpleNamespace(
+            _training_parameters=TrainingParameters(),
+            _learning_state_stale=False,
+            _learning_session=LearningSession(),
+        )
+
+        MainWindow._apply_training_parameters(
+            window_like,
+            TrainingParameters(early_stopping_patience=6),
+        )
+
+        self.assertEqual(window_like._training_parameters.early_stopping_patience, 6)
+        self.assertFalse(window_like._learning_state_stale)
+
+    def test_train_request_rebuilds_learning_state_after_dataloader_parameter_change(self) -> None:
+        prepare_calls = []
+        train_calls = []
+
+        def _prepare_learning_state(**kwargs: object) -> bool:
+            prepare_calls.append(dict(kwargs))
+            window_like._learning_state_stale = False
+            return True
+
+        window_like = SimpleNamespace(
+            _training_parameters=TrainingParameters(),
+            _learning_state_signature=("sig",),
+            _learning_state_stale=False,
+            _current_learning_state_signature=lambda: ("sig",),
+            _inference_running=False,
+            _training_running=False,
+            _abort_if_learning_training_running=lambda: False,
+            _ensure_learning_state_for_action=lambda action: MainWindow._ensure_learning_state_for_action(
+                window_like,
+                action,
+            ),
+            _prepare_learning_state=_prepare_learning_state,
+            _train_model_on_dataset_with_dialog=lambda: train_calls.append("train"),
+        )
+
+        MainWindow._apply_training_parameters(
+            window_like,
+            TrainingParameters(training_batch_size=8),
+        )
+        with patch(
+            "src.ui.main_window.get_current_learning_dataloader_runtime",
+            return_value=SimpleNamespace(class_weights=object()),
+        ), patch(
+            "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
+            return_value={"bbox_0001": object()},
+        ):
+            MainWindow._handle_train_model_request(window_like)
+
+        self.assertFalse(window_like._learning_state_stale)
+        self.assertEqual(
+            prepare_calls,
+            [
+                {
+                    "require_class_weights": True,
+                    "show_success_dialog": False,
+                }
+            ],
+        )
+        self.assertEqual(train_calls, ["train"])
+
+    def test_apply_training_parameters_updates_existing_optimizer_learning_rate(self) -> None:
+        optimizer = SimpleNamespace(
+            param_groups=[
+                {"lr": 5e-5, "lwise_lr_decay_rate": 1.0},
+                {"lr": 2.5e-5, "lwise_lr_decay_rate": 0.5},
+                {"lr": 5e-5},
+            ]
+        )
+        session = LearningSession()
+        runtime = session.set_model_components(
+            model=object(),
+            optimizer=optimizer,
+            checkpoint_path="model.cp",
+            device_ids=(0,),
+            num_classes=2,
+            hyperparameters={"lr": 5e-5},
+        )
+        window_like = SimpleNamespace(
+            _training_parameters=TrainingParameters(),
+            _learning_state_stale=False,
+            _learning_session=session,
+        )
+
+        MainWindow._apply_training_parameters(
+            window_like,
+            TrainingParameters(learning_rate=0.002),
+        )
+
+        self.assertEqual(window_like._training_parameters.learning_rate, 0.002)
+        self.assertFalse(window_like._learning_state_stale)
+        self.assertEqual(runtime.hyperparameters["lr"], 0.002)
+        self.assertEqual(optimizer.param_groups[0]["lr"], 0.002)
+        self.assertEqual(optimizer.param_groups[1]["lr"], 0.001)
+        self.assertEqual(optimizer.param_groups[2]["lr"], 0.002)
+
     def _box(
         self,
         *,

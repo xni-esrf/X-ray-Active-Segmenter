@@ -231,6 +231,43 @@ class LearningTrainingWorkerTests(unittest.TestCase):
         self.assertEqual(failed_messages, [])
         self.assertEqual(finished_calls, ["finished"])
 
+    def test_run_uses_configured_early_stop_patience(self) -> None:
+        worker = LearningTrainingWorker()
+        preconditions = object()
+        worker.configure(preconditions=preconditions, early_stop_patience=5)
+        result = LearningTrainingLoopResult(
+            completed_epoch_count=4,
+            total_epoch_count=8,
+            stop_reason="early_stop",
+            best_epoch=4,
+            best_weighted_mean_dice=0.87,
+            early_stop_patience=5,
+            mixed_precision_enabled=True,
+        )
+
+        with patch(
+            "src.learning.qt_workers._train_learning_model_with_validation_loop",
+            return_value=result,
+        ) as train_mock:
+            worker.run()
+
+        train_mock.assert_called_once_with(
+            preconditions=preconditions,
+            mixed_precision=True,
+            early_stop_patience=5,
+            stop_event=worker._stop_event,
+        )
+
+    def test_configure_rejects_invalid_early_stop_patience(self) -> None:
+        worker = LearningTrainingWorker()
+
+        with self.assertRaisesRegex(ValueError, ">= 1"):
+            worker.configure(preconditions=object(), early_stop_patience=0)
+        with self.assertRaisesRegex(TypeError, "integer"):
+            worker.configure(preconditions=object(), early_stop_patience=True)
+        with self.assertRaisesRegex(TypeError, "integer"):
+            worker.configure(preconditions=object(), early_stop_patience=1.5)
+
     def test_run_saves_completion_checkpoint_from_precondition_runtime(self) -> None:
         worker = LearningTrainingWorker()
         runtime = object()
