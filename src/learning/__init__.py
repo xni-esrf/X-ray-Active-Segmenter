@@ -9,6 +9,7 @@ _EXPORT_MODULE_BY_NAME: Dict[str, str] = {
     "extract_train_tensor_pairs": ".dataloader_builder",
     "compute_class_weights_from_segmentation_tensors": ".class_weights",
     "compute_and_store_current_learning_class_weights": ".class_weights",
+    "encode_target_labels": ".label_utils",
     "build_eval_dataloader_runtimes_from_batch": ".eval_dataloader_builder",
     "build_eval_dataloader_runtimes_from_current_batch": ".eval_dataloader_builder",
     "build_inference_dataloader_runtime_from_entry": ".eval_dataloader_builder",

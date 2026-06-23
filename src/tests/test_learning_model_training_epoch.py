@@ -21,11 +21,16 @@ class LearningModelTrainingEpochTests(unittest.TestCase):
         *,
         class_weights,
         batch_count: int = 2,
+        annotations=None,
     ) -> LearningBBoxDataLoaderRuntime:
         samples = []
-        for _ in range(int(batch_count)):
+        if annotations is None:
+            annotations = tuple(
+                torch.randint(low=0, high=3, size=(6, 6, 6), dtype=torch.long)
+                for _ in range(int(batch_count))
+            )
+        for annot in tuple(annotations):
             minivol = torch.randn((1, 6, 6, 6), dtype=torch.float32)
-            annot = torch.randint(low=0, high=3, size=(6, 6, 6), dtype=torch.long)
             samples.append((minivol, annot))
         dataloader = torch.utils.data.DataLoader(samples, batch_size=1, shuffle=False)
         return LearningBBoxDataLoaderRuntime(
@@ -41,8 +46,10 @@ class LearningModelTrainingEpochTests(unittest.TestCase):
         *,
         initial_lr: float,
         lwise_lr_decay: float,
+        num_classes: int = 3,
+        label_values=(0, 1, 2),
     ) -> LearningModelRuntime:
-        model = torch.nn.Conv3d(1, 3, kernel_size=1)
+        model = torch.nn.Conv3d(1, int(num_classes), kernel_size=1)
         optimizer = torch.optim.AdamW(
             [
                 {
@@ -64,10 +71,11 @@ class LearningModelTrainingEpochTests(unittest.TestCase):
             optimizer=optimizer,
             checkpoint_path="foundation_model/weights_epoch_190.cp",
             device_ids=(0,),
-            num_classes=3,
+            num_classes=int(num_classes),
             hyperparameters={
                 "lr": float(initial_lr),
                 "lwise_lr_decay": float(lwise_lr_decay),
+                "label_values": tuple(int(value) for value in tuple(label_values)),
             },
         )
 
@@ -156,7 +164,61 @@ class LearningModelTrainingEpochTests(unittest.TestCase):
                 mixed_precision=False,
             )
 
+    def test_train_one_epoch_encodes_non_contiguous_target_labels(self) -> None:
+        torch.manual_seed(11)
+        runtime = self._make_model_runtime(
+            initial_lr=0.01,
+            lwise_lr_decay=0.8,
+            num_classes=4,
+            label_values=(0, 1, 2, 4),
+        )
+        annotation = torch.zeros((6, 6, 6), dtype=torch.long)
+        annotation[0, 0, 0] = 4
+        annotation[0, 0, 1] = 2
+        train_runtime = self._make_train_runtime(
+            class_weights=torch.tensor([1.0, 1.0, 1.0, 1.0], dtype=torch.float32),
+            annotations=(annotation,),
+        )
+
+        result, _ = train_learning_model_for_one_epoch(
+            epoch_index=0,
+            total_epoch_count=2,
+            model_runtime=runtime,
+            train_runtime=train_runtime,
+            device="cpu",
+            mixed_precision=False,
+        )
+
+        self.assertEqual(result.num_batches, 1)
+        self.assertGreater(result.mean_loss, 0.0)
+
+    def test_train_one_epoch_rejects_unexpected_target_label_before_loss(self) -> None:
+        runtime = self._make_model_runtime(
+            initial_lr=0.01,
+            lwise_lr_decay=0.8,
+            num_classes=4,
+            label_values=(0, 1, 2, 4),
+        )
+        annotation = torch.zeros((6, 6, 6), dtype=torch.long)
+        annotation[0, 0, 0] = 7
+        train_runtime = self._make_train_runtime(
+            class_weights=torch.tensor([1.0, 1.0, 1.0, 1.0], dtype=torch.float32),
+            annotations=(annotation,),
+        )
+
+        with self.assertRaisesRegex(
+            ValueError,
+            "target labels contain values not present in label_values: \\(7,\\)",
+        ):
+            train_learning_model_for_one_epoch(
+                epoch_index=0,
+                total_epoch_count=2,
+                model_runtime=runtime,
+                train_runtime=train_runtime,
+                device="cpu",
+                mixed_precision=False,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
-

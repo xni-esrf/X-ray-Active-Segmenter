@@ -9,7 +9,12 @@ from typing import Dict, Mapping, Optional, Tuple
 import numpy as np
 
 from .eval_bbox_dataset import compute_volume_weighted_mean_score
-from .label_utils import MASK_LABEL, coerce_label_values, unique_non_mask_values
+from .label_utils import (
+    MASK_LABEL,
+    coerce_label_values,
+    encode_target_labels,
+    unique_non_mask_values,
+)
 from .label_space import LearningLabelSpace
 from .session_store import (
     LearningBBoxDataLoaderRuntime,
@@ -314,6 +319,41 @@ def _resolve_training_hyperparameters(
         raise ValueError(f"lwise_lr_decay must be > 0, got {resolved_lwise}")
 
     return float(resolved_initial_lr), float(resolved_lwise)
+
+
+def _resolve_training_target_label_values(
+    model_runtime: LearningModelRuntime,
+    *,
+    learning_session: Optional[LearningSession] = None,
+) -> Tuple[int, ...]:
+    hyperparameters_obj = getattr(model_runtime, "hyperparameters", None)
+    if (
+        isinstance(hyperparameters_obj, Mapping)
+        and "label_values" in hyperparameters_obj
+    ):
+        label_values = coerce_label_values(
+            hyperparameters_obj.get("label_values"),
+            name="model hyperparameters label_values",
+        )
+    else:
+        label_space = _resolve_training_label_space(
+            learning_session=learning_session,
+        )
+        if label_space is None:
+            raise ValueError(
+                "Cannot train model because model label_values metadata is missing; "
+                "target labels cannot be encoded for CrossEntropyLoss."
+            )
+        label_values = tuple(int(value) for value in tuple(label_space.label_values))
+
+    if int(len(label_values)) != int(model_runtime.num_classes):
+        raise ValueError(
+            "Cannot train model because label_values length does not match "
+            "model num_classes:\n"
+            f"- label_values: {tuple(label_values)}\n"
+            f"- model num_classes: {int(model_runtime.num_classes)}"
+        )
+    return tuple(int(value) for value in tuple(label_values))
 
 
 def _compute_epoch_base_learning_rate(
@@ -841,6 +881,10 @@ def train_learning_model_for_one_epoch(
     model = resolved_model_runtime.model
     optimizer = resolved_model_runtime.optimizer
     dataloader = resolved_train_runtime.dataloader
+    target_label_values = _resolve_training_target_label_values(
+        resolved_model_runtime,
+        learning_session=learning_session,
+    )
 
     resolved_initial_lr, resolved_lwise_lr_decay = _resolve_training_hyperparameters(
         resolved_model_runtime,
@@ -895,6 +939,13 @@ def train_learning_model_for_one_epoch(
         target_annotations = target_annotations.to(
             device=resolved_device,
             dtype=getattr(torch_mod, "long"),
+        )
+        # CrossEntropyLoss expects compact channel indices; tensors store semantic labels.
+        target_annotations = encode_target_labels(
+            target_annotations,
+            label_values=target_label_values,
+            mask_label=normalized_ignore_index,
+            torch_module=torch_mod,
         )
 
         zero_grad = getattr(optimizer, "zero_grad", None)

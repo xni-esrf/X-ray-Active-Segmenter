@@ -8,7 +8,7 @@ try:
 except Exception:  # pragma: no cover - environment dependent
     torch = None  # type: ignore[assignment]
 
-from src.learning import TrainBBoxDataset
+from src.learning import TrainBBoxDataset, encode_target_labels
 
 
 @unittest.skipUnless(torch is not None, "PyTorch is not available")
@@ -69,6 +69,30 @@ class TrainBBoxDatasetTests(unittest.TestCase):
         self.assertEqual(seg_0.dtype, torch.long)
         self.assertTrue(torch.all(seg_0 == 7))
         self.assertTrue(torch.all(seg_1 == 13))
+
+    def test_dataset_preserves_semantic_labels_until_loss_encoding(self) -> None:
+        raw = torch.arange(8 * 8 * 8, dtype=torch.float32).reshape((8, 8, 8))
+        seg = torch.zeros((8, 8, 8), dtype=torch.int16)
+        seg[0, 0, 0] = 4
+        seg[0, 0, 1] = 2
+        dataset = TrainBBoxDataset(
+            [(raw, seg)],
+            minivol_size=8,
+            minivol_per_epoch=1,
+            contr_bright_factors=(1.0, 0.0),
+        )
+        dataset.geom_transform = lambda raw, annot: (raw, annot)  # type: ignore[method-assign]
+        dataset.elastic_transform_3d = lambda raw, annot: (raw, annot)  # type: ignore[method-assign]
+
+        _raw_minivol, semantic_target = dataset[0]
+        encoded_target = encode_target_labels(
+            semantic_target,
+            label_values=(0, 1, 2, 4),
+        )
+
+        self.assertIn(4, torch.unique(dataset.annot_tensors[0]).tolist())
+        self.assertEqual(int(semantic_target[0, 0, 0].item()), 4)
+        self.assertEqual(int(encoded_target[0, 0, 0].item()), 3)
 
     def test_getitem_raises_when_idx_out_of_range(self) -> None:
         pair = self._make_pair(raw_value_offset=0, seg_value=1)

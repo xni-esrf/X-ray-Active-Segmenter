@@ -17,6 +17,7 @@ from src.learning import (
     clear_current_learning_eval_runtimes_by_box_id,
     compute_and_store_current_learning_class_weights,
     compute_class_weights_from_segmentation_tensors,
+    encode_target_labels,
     get_current_learning_dataloader_runtime,
     set_current_learning_dataloader_components,
     set_current_learning_eval_runtimes_by_box_id,
@@ -106,6 +107,30 @@ class LearningClassWeightsTests(unittest.TestCase):
         )
 
         self.assertEqual(weights.tolist(), [1.0, 1.0, 100.0])
+
+    def test_compute_class_weights_non_contiguous_labels_match_encoded_indices(self) -> None:
+        segmentation = torch.tensor(
+            [
+                [[0, 0, 0, 0]],
+                [[1, 1, 2, 4]],
+            ],
+            dtype=torch.int16,
+        )
+        label_values = (0, 1, 2, 4)
+
+        weights = compute_class_weights_from_segmentation_tensors(
+            (segmentation,),
+            label_values=label_values,
+            max_weight=100.0,
+            device="cpu",
+        )
+        encoded = encode_target_labels(segmentation, label_values=label_values)
+
+        self.assertEqual(weights.tolist(), [1.5, 3.0, 6.0, 6.0])
+        self.assertEqual(int(encoded[0, 0, 0].item()), 0)
+        self.assertEqual(int(encoded[1, 0, 0].item()), 1)
+        self.assertEqual(int(encoded[1, 0, 2].item()), 2)
+        self.assertEqual(int(encoded[1, 0, 3].item()), 3)
 
     def test_compute_class_weights_rejects_cuda0_when_cuda_is_unavailable(self) -> None:
         first = torch.tensor(

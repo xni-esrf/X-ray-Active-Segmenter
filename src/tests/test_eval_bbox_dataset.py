@@ -137,6 +137,19 @@ class InferenceDestVolBufferTests(unittest.TestCase):
         self.assertEqual(tuple(pred.shape), (2, 2, 2))
         self.assertTrue(bool(torch.all(pred == 5).item()))
 
+    def test_get_pred_labels_decodes_non_contiguous_training_labels(self) -> None:
+        buffer = InferenceDestVolBuffer(
+            volume_shape=(2, 2, 2),
+            label_values=(0, 1, 2, 4),
+            minivol_size=2,
+        )
+
+        buffer.buffer_vol[3] = torch.ones((2, 2, 2), dtype=torch.float32)
+
+        pred = buffer.get_pred_labels()
+        self.assertEqual(tuple(pred.shape), (2, 2, 2))
+        self.assertTrue(bool(torch.all(pred == 4).item()))
+
     def test_rejects_mask_label_in_label_values(self) -> None:
         with self.assertRaises(ValueError):
             InferenceDestVolBuffer(
