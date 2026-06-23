@@ -74,6 +74,7 @@ class ModelControllerOperations:
     get_learning_model_runtime: Callable[[object], object] = (
         lambda _context: get_current_learning_model_runtime()
     )
+    get_learning_label_space: Callable[[object], object] = lambda _context: None
     learning_session_kwargs: Callable[[object], dict[str, object]] = lambda _context: {}
     exception_message: Callable[[Exception], str] = exception_message
     normalize_checkpoint_identity: Callable[[object], Optional[str]] = lambda _path: None
@@ -150,6 +151,7 @@ class ModelController:
         *,
         checkpoint_path: str,
     ) -> None:
+        self.persist_model_runtime_label_values_from_label_space(runtime)
         self.operations.save_foundation_model_checkpoint(
             runtime=runtime,
             checkpoint_path=checkpoint_path,
@@ -186,6 +188,70 @@ class ModelController:
         return source_checkpoint_path, bool(trained_in_app), int(training_run_count)
 
     def runtime_requires_training_reinitialization(self, runtime: object) -> bool:
+        label_space = self.operations.get_learning_label_space(self.context)
+        label_values = getattr(label_space, "label_values", None)
+        num_classes = getattr(label_space, "num_classes", None)
+        if label_values is not None and num_classes is not None:
+            try:
+                normalized_label_values = tuple(
+                    int(value) for value in tuple(label_values)
+                )
+                normalized_num_classes = int(num_classes)
+            except Exception:
+                return True
+            if int(getattr(runtime, "num_classes", 0)) != normalized_num_classes:
+                return True
+            hyperparameters_obj = getattr(runtime, "hyperparameters", None)
+            if not isinstance(hyperparameters_obj, Mapping):
+                return True
+            runtime_label_values = hyperparameters_obj.get("label_values")
+            if runtime_label_values is None:
+                return True
+            try:
+                normalized_runtime_label_values = tuple(
+                    int(value) for value in tuple(runtime_label_values)
+                )
+            except Exception:
+                return True
+            if normalized_runtime_label_values != normalized_label_values:
+                return True
+            runtime_label_space = hyperparameters_obj.get("label_space")
+            if isinstance(runtime_label_space, Mapping):
+                try:
+                    runtime_label_space_values = tuple(
+                        int(value)
+                        for value in tuple(
+                            runtime_label_space.get(
+                                "label_values",
+                                normalized_runtime_label_values,
+                            )
+                        )
+                    )
+                    runtime_background_label = int(
+                        runtime_label_space.get(
+                            "background_label",
+                            getattr(label_space, "background_label", 0),
+                        )
+                    )
+                    runtime_mask_label = int(
+                        runtime_label_space.get(
+                            "mask_label",
+                            getattr(label_space, "mask_label", -100),
+                        )
+                    )
+                except Exception:
+                    return True
+                if runtime_label_space_values != normalized_label_values:
+                    return True
+                if runtime_background_label != int(
+                    getattr(label_space, "background_label", 0)
+                ):
+                    return True
+                if runtime_mask_label != int(getattr(label_space, "mask_label", -100)):
+                    return True
+            elif runtime_label_space is not None:
+                return True
+
         source_checkpoint_path, trained_in_app, training_run_count = (
             self.runtime_training_provenance(runtime)
         )
@@ -212,6 +278,7 @@ class ModelController:
                 checkpoint_path=checkpoint_path,
                 **self.operations.learning_session_kwargs(self.context),
             )
+            self.persist_model_runtime_label_values_from_label_space(runtime)
             eval_runtimes_by_box_id = getattr(preconditions, "eval_runtimes_by_box_id", None)
             if isinstance(eval_runtimes_by_box_id, Mapping):
                 persist_label_values = getattr(
@@ -322,6 +389,26 @@ class ModelController:
             int(value) for value in tuple(resolved_label_values)
         )
 
+    def persist_model_runtime_label_values_from_label_space(self, runtime: object) -> None:
+        if runtime is None:
+            return
+        label_space = self.operations.get_learning_label_space(self.context)
+        label_values = getattr(label_space, "label_values", None)
+        if label_values is None:
+            return
+        hyperparameters_obj = getattr(runtime, "hyperparameters", None)
+        if not isinstance(hyperparameters_obj, dict):
+            return
+        hyperparameters_obj["label_values"] = tuple(
+            int(value) for value in tuple(label_values)
+        )
+        hyperparameters_obj["label_space"] = {
+            "label_values": tuple(int(value) for value in tuple(label_values)),
+            "background_label": int(getattr(label_space, "background_label", 0)),
+            "mask_label": int(getattr(label_space, "mask_label", -100)),
+            "source_signature": getattr(label_space, "source_signature", None),
+        }
+
     def instantiate_foundation_model_with_dialog(self) -> bool:
         try:
             dialog_result = self.operations.open_model_checkpoint_dialog(self.context)
@@ -384,4 +471,3 @@ class ModelController:
             parent=self.context,
         )
         return True
-

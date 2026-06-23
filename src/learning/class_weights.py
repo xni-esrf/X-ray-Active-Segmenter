@@ -9,6 +9,7 @@ from .session_store import (
     LearningSession,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
+    get_current_learning_label_space,
     set_current_learning_dataloader_class_weights,
 )
 
@@ -239,7 +240,21 @@ def compute_and_store_current_learning_class_weights(
         if learning_session is not None
         else get_current_learning_eval_runtimes_by_box_id()
     )
-    label_values = _resolve_shared_eval_label_values(eval_runtimes_by_box_id)
+    label_space = (
+        learning_session.get_label_space()
+        if learning_session is not None
+        else get_current_learning_label_space()
+    )
+    if label_space is not None:
+        label_values = tuple(label_space.label_values)
+        eval_label_values = _resolve_shared_eval_label_values(eval_runtimes_by_box_id)
+        if tuple(eval_label_values) != tuple(label_values):
+            raise ValueError(
+                "Evaluation buffer label_values do not match the current label space: "
+                f"label_space={tuple(label_values)} eval={tuple(eval_label_values)}"
+            )
+    else:
+        label_values = _resolve_shared_eval_label_values(eval_runtimes_by_box_id)
     train_segmentation_tensors = _extract_train_segmentation_tensors(train_runtime)
     class_weights = compute_class_weights_from_segmentation_tensors(
         train_segmentation_tensors,

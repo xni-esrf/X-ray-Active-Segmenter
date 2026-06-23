@@ -56,13 +56,16 @@ from ..learning import (
     LearningSession,
     TrainingParameters,
     clear_current_learning_bbox_batch,
+    clear_current_learning_label_space,
     compute_and_store_current_learning_class_weights,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
+    get_current_learning_label_space,
     get_current_learning_model_runtime,
     get_current_learning_bbox_batch,
     instantiate_foundation_model_runtime,
     save_foundation_model_checkpoint,
+    set_current_learning_label_space,
     validate_foundation_checkpoint_load_preconditions,
     validate_foundation_model_instantiation_preconditions,
     validate_learning_model_training_preconditions,
@@ -734,6 +737,28 @@ class MainWindow(QMainWindow):
         return get_current_learning_bbox_batch()
 
     @staticmethod
+    def _set_learning_label_space_for(owner: object, label_space: object) -> object:
+        session = MainWindow._learning_session_for(owner)
+        if session is not None:
+            return session.set_label_space(label_space)
+        return set_current_learning_label_space(label_space)
+
+    @staticmethod
+    def _clear_learning_label_space_for(owner: object) -> None:
+        session = MainWindow._learning_session_for(owner)
+        if session is not None:
+            session.clear_label_space()
+            return
+        clear_current_learning_label_space()
+
+    @staticmethod
+    def _get_learning_label_space_for(owner: object) -> object:
+        session = MainWindow._learning_session_for(owner)
+        if session is not None:
+            return session.get_label_space()
+        return get_current_learning_label_space()
+
+    @staticmethod
     def _training_parameters_for(owner: object) -> TrainingParameters:
         return validate_training_parameters(
             getattr(owner, "_training_parameters", DEFAULT_TRAINING_PARAMETERS)
@@ -772,6 +797,7 @@ class MainWindow(QMainWindow):
                 ),
                 clear_learning_bbox_batch=MainWindow._clear_learning_bbox_batch_for,
                 get_learning_bbox_batch=MainWindow._get_learning_bbox_batch_for,
+                set_learning_label_space=MainWindow._set_learning_label_space_for,
                 learning_session_kwargs=MainWindow._learning_session_kwargs_for,
                 format_class_weights_for_summary=_format_class_weights_for_summary,
             ),
@@ -804,6 +830,7 @@ class MainWindow(QMainWindow):
                 ),
                 save_foundation_model_checkpoint=save_foundation_model_checkpoint,
                 get_learning_model_runtime=MainWindow._get_learning_model_runtime_for,
+                get_learning_label_space=MainWindow._get_learning_label_space_for,
                 learning_session_kwargs=MainWindow._learning_session_kwargs_for,
                 exception_message=_exception_message,
                 normalize_checkpoint_identity=_normalize_checkpoint_identity,
@@ -1214,6 +1241,7 @@ class MainWindow(QMainWindow):
             self._ensure_editable_segmentation_for_annotation()
         self._refresh_annotation_ui_state()
         self._learning_state_stale = True
+        MainWindow._clear_learning_label_space_for(self)
         return True
 
     def set_semantic_volume(self, volume: VolumeData, levels: Optional[Tuple[VolumeData, ...]] = None) -> bool:
@@ -1239,6 +1267,7 @@ class MainWindow(QMainWindow):
         self.bottom_panel.set_pyramid_levels(1, kind="Semantic")
         self._refresh_annotation_ui_state()
         self._learning_state_stale = True
+        MainWindow._clear_learning_label_space_for(self)
         return True
 
     def set_instance_volume(self, volume: VolumeData, levels: Optional[Tuple[VolumeData, ...]] = None) -> bool:
@@ -1264,6 +1293,7 @@ class MainWindow(QMainWindow):
         self.bottom_panel.set_pyramid_levels(1, kind="Instance")
         self._refresh_annotation_ui_state()
         self._learning_state_stale = True
+        MainWindow._clear_learning_label_space_for(self)
         return True
 
     def set_annotation_mode(
@@ -2786,6 +2816,7 @@ class MainWindow(QMainWindow):
             return
         if str(editor.kind) == "semantic":
             self._learning_state_stale = True
+            MainWindow._clear_learning_label_space_for(self)
         if editor.latest_undo_operation_id() != operation.operation_id:
             return
         bytes_used = estimate_segmentation_history_bytes(editor, operation)

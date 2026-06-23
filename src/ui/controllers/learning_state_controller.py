@@ -10,9 +10,13 @@ from ...learning import (
     DEFAULT_TRAINING_PARAMETERS,
     clear_current_learning_bbox_batch,
     compute_and_store_current_learning_class_weights,
+    compute_learning_label_coverage,
+    derive_label_space_from_semantic_segmentation,
+    format_learning_label_coverage_warning,
     get_current_learning_bbox_batch,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
+    set_current_learning_label_space,
     validate_training_parameters,
 )
 from ..dialogs import show_info, show_warning
@@ -50,6 +54,12 @@ class LearningStateControllerOperations:
     compute_and_store_current_learning_class_weights: Callable[..., object] = (
         compute_and_store_current_learning_class_weights
     )
+    compute_learning_label_coverage: Callable[..., object] = (
+        compute_learning_label_coverage
+    )
+    format_learning_label_coverage_warning: Callable[[object], Optional[str]] = (
+        format_learning_label_coverage_warning
+    )
     get_learning_dataloader_runtime: Callable[[object], object] = (
         lambda _context: get_current_learning_dataloader_runtime()
     )
@@ -61,6 +71,12 @@ class LearningStateControllerOperations:
     )
     get_learning_bbox_batch: Callable[[object], object] = (
         lambda _context: get_current_learning_bbox_batch()
+    )
+    set_learning_label_space: Callable[[object, object], object] = (
+        lambda _context, label_space: set_current_learning_label_space(label_space)
+    )
+    derive_label_space_from_semantic_segmentation: Callable[..., object] = (
+        derive_label_space_from_semantic_segmentation
     )
     learning_session_kwargs: Callable[[object], Dict[str, object]] = lambda _context: {}
     format_class_weights_for_summary: Callable[[object], Optional[str]] = (
@@ -80,6 +96,28 @@ class LearningStateController:
             DEFAULT_TRAINING_PARAMETERS,
         )
         return validate_training_parameters(parameters)
+
+    def semantic_label_space_source_signature(
+        self,
+        *,
+        semantic_kind: str,
+        semantic_volume: object,
+    ) -> Tuple[object, ...]:
+        semantic_source_path: Optional[str] = None
+        loader = getattr(semantic_volume, "loader", None)
+        path_obj = getattr(loader, "path", None)
+        if isinstance(path_obj, str) and path_obj.strip():
+            semantic_source_path = str(path_obj)
+
+        semantic_state_id: Optional[int] = None
+        editor = getattr(self.context, "_segmentation_editor", None)
+        if editor is not None:
+            semantic_state_id = int(editor.state_id)
+        return (
+            str(semantic_kind),
+            semantic_source_path,
+            semantic_state_id,
+        )
 
     def ensure_for_action(self, action: LearningStateAction) -> bool:
         """Ensure learning datasets/runtimes are available for a learning action."""
@@ -232,6 +270,16 @@ class LearningStateController:
             segmentation_array = np.asarray(
                 seg_volume.get_chunk((slice(None), slice(None), slice(None)))
             )
+            label_space = (
+                self.operations.derive_label_space_from_semantic_segmentation(
+                    segmentation_array,
+                    source_signature=self.semantic_label_space_source_signature(
+                        semantic_kind=seg_kind,
+                        semantic_volume=seg_volume,
+                    ),
+                )
+            )
+            self.operations.set_learning_label_space(context, label_space)
             outcome = self.operations.extract_learning_bboxes_in_memory(
                 raw_array,
                 segmentation_array,
@@ -258,6 +306,19 @@ class LearningStateController:
                         **self.operations.learning_session_kwargs(context),
                     )
                 )
+            label_coverage_warning = None
+            try:
+                label_coverage = self.operations.compute_learning_label_coverage(
+                    **self.operations.learning_session_kwargs(context),
+                )
+                label_coverage_warning = (
+                    self.operations.format_learning_label_coverage_warning(
+                        label_coverage
+                    )
+                )
+            except ValueError as exc:
+                if not str(exc).startswith("No "):
+                    raise
             self.operations.clear_learning_bbox_batch(context)
             residual_batch = self.operations.get_learning_bbox_batch(context)
             residual_entry_count = (
@@ -287,6 +348,9 @@ class LearningStateController:
             except Exception:
                 context._learning_state_signature = None
         context._learning_state_stale = False
+
+        if label_coverage_warning:
+            self.operations.show_warning(label_coverage_warning, parent=parent)
 
         if not bool(show_success_dialog):
             return True

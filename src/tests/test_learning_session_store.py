@@ -10,6 +10,7 @@ except Exception:  # pragma: no cover - environment dependent
 from src.learning import (
     LearningBBoxDataLoaderRuntime,
     LearningBBoxEvalRuntime,
+    LearningLabelSpace,
     LearningSession,
     LearningModelRuntime,
     LearningBBoxTensorBatch,
@@ -17,10 +18,12 @@ from src.learning import (
     clear_current_learning_bbox_batch,
     clear_current_learning_dataloader_runtime,
     clear_current_learning_eval_runtimes_by_box_id,
+    clear_current_learning_label_space,
     clear_current_learning_model_runtime,
     get_current_learning_bbox_batch,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
+    get_current_learning_label_space,
     get_current_learning_model_runtime,
     set_current_learning_bbox_batch,
     set_current_learning_dataloader_components,
@@ -29,20 +32,49 @@ from src.learning import (
     set_current_learning_eval_runtime_components_by_box_id,
     set_current_learning_eval_runtimes_by_box_id,
     set_current_learning_bbox_entries,
+    set_current_learning_label_space,
     set_current_learning_model_components,
     set_current_learning_model_runtime,
     get_default_learning_session,
 )
 
 
+class LearningLabelSpaceSessionStoreTests(unittest.TestCase):
+    def setUp(self) -> None:
+        clear_current_learning_label_space()
+
+    def tearDown(self) -> None:
+        clear_current_learning_label_space()
+
+    def test_set_get_and_clear_current_label_space(self) -> None:
+        label_space = LearningLabelSpace(label_values=(0, 1, 5))
+
+        returned = set_current_learning_label_space(label_space)
+
+        self.assertIs(returned, label_space)
+        self.assertIs(get_current_learning_label_space(), label_space)
+
+        clear_current_learning_label_space()
+
+        self.assertIsNone(get_current_learning_label_space())
+
+    def test_session_rejects_invalid_label_space(self) -> None:
+        session = LearningSession()
+
+        with self.assertRaisesRegex(TypeError, "LearningLabelSpace"):
+            session.set_label_space(object())  # type: ignore[arg-type]
+
+
 @unittest.skipUnless(torch is not None, "PyTorch is not available")
 class LearningSessionStoreTests(unittest.TestCase):
     def setUp(self) -> None:
+        clear_current_learning_label_space()
         clear_current_learning_bbox_batch()
         clear_current_learning_dataloader_runtime()
         clear_current_learning_eval_runtimes_by_box_id()
 
     def tearDown(self) -> None:
+        clear_current_learning_label_space()
         clear_current_learning_bbox_batch()
         clear_current_learning_dataloader_runtime()
         clear_current_learning_eval_runtimes_by_box_id()

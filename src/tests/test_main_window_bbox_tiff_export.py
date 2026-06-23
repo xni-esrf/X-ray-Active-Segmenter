@@ -10,11 +10,19 @@ import numpy as np
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from src.learning import TrainingParameters
+    from src.learning import (
+        LearningBBoxEvalRuntime,
+        LearningSession,
+        TrainingParameters,
+        clear_current_learning_label_space,
+    )
     from src.ui.main_window import MainWindow
 except Exception:  # pragma: no cover - environment dependent
+    LearningBBoxEvalRuntime = None  # type: ignore[assignment]
+    LearningSession = None  # type: ignore[assignment]
     MainWindow = None  # type: ignore[assignment]
     TrainingParameters = None  # type: ignore[assignment]
+    clear_current_learning_label_space = None  # type: ignore[assignment]
 
 from src.bbox import BoundingBox
 from src.io.bbox_tiff_export import LearningBBoxExtractionOutcome
@@ -38,6 +46,10 @@ class _FakeBBoxManager:
 
 @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
 class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
+    def tearDown(self) -> None:
+        if clear_current_learning_label_space is not None:
+            clear_current_learning_label_space()
+
     def _make_box(self, *, box_id: str = "bbox_0007", label: str = "train") -> BoundingBox:
         return BoundingBox.from_bounds(
             box_id=box_id,
@@ -66,6 +78,11 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
         window_like.bottom_panel = SimpleNamespace(state=SimpleNamespace(bbox_rows=ordered_rows))
         window_like._active_segmentation_volume = lambda: active_segmentation
         return window_like
+
+    def _semantic_segmentation_array(self) -> np.ndarray:
+        array = np.zeros((16, 16, 16), dtype=np.uint16)
+        array[1, 2, 3] = 1
+        return array
 
     def test_prepare_learning_state_requires_active_segmentation_map(self) -> None:
         box = self._make_box()
@@ -123,7 +140,7 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
     def test_prepare_learning_state_requires_train_labeled_bbox(self) -> None:
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
         inference_box = self._make_box(box_id="bbox_0011", label="inference")
-        seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
+        seg_volume = _FakeVolume(self._semantic_segmentation_array())
         window_like = self._make_window_like(
             boxes=(validation_box, inference_box),
             raw_array=np.zeros((16, 16, 16), dtype=np.uint8),
@@ -150,7 +167,7 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
 
     def test_prepare_learning_state_requires_validation_labeled_bbox(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")
-        seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
+        seg_volume = _FakeVolume(self._semantic_segmentation_array())
         window_like = self._make_window_like(
             boxes=(train_box,),
             raw_array=np.zeros((16, 16, 16), dtype=np.uint8),
@@ -179,7 +196,7 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
         train_box = self._make_box(box_id="bbox_0007", label="train")
         inference_box = self._make_box(box_id="bbox_0010", label="inference")
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
-        seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
+        seg_volume = _FakeVolume(self._semantic_segmentation_array())
         window_like = self._make_window_like(
             boxes=(train_box, inference_box, validation_box),
             raw_array=np.zeros((16, 16, 16), dtype=np.uint8),
@@ -255,7 +272,7 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
     def test_prepare_learning_state_uses_current_training_parameters(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
-        seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
+        seg_volume = _FakeVolume(self._semantic_segmentation_array())
         window_like = self._make_window_like(
             boxes=(train_box, validation_box),
             raw_array=np.zeros((16, 16, 16), dtype=np.uint8),
@@ -299,10 +316,136 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
         self.assertEqual(extract_kwargs["eval_batch_size"], 5)
         self.assertEqual(extract_kwargs["learning_minivol_per_epoch"], 321)
 
+    @unittest.skipUnless(LearningSession is not None, "LearningSession is not available")
+    def test_prepare_learning_state_stores_label_space_from_semantic_segmentation(
+        self,
+    ) -> None:
+        train_box = self._make_box(box_id="bbox_0007", label="train")
+        validation_box = self._make_box(box_id="bbox_0008", label="validation")
+        segmentation = np.zeros((16, 16, 16), dtype=np.int16)
+        segmentation[1, 2, 3] = 5
+        segmentation[2, 3, 4] = 2
+        segmentation[3, 4, 5] = -100
+        seg_volume = _FakeVolume(segmentation)
+        window_like = self._make_window_like(
+            boxes=(train_box, validation_box),
+            raw_array=np.zeros((16, 16, 16), dtype=np.uint8),
+            active_segmentation=("semantic", seg_volume),
+        )
+        window_like._learning_session = LearningSession()
+
+        with patch(
+            "src.ui.main_window.extract_learning_bboxes_in_memory",
+            return_value=LearningBBoxExtractionOutcome(
+                tensor_entry_count=2,
+                learning_train_box_ids=("bbox_0007",),
+                learning_batch_size=4,
+                learning_num_workers=8,
+                eval_validation_box_ids=("bbox_0008",),
+                eval_batch_size=4,
+                eval_num_workers=8,
+            ),
+        ), patch(
+            "src.ui.main_window.compute_and_store_current_learning_class_weights",
+            return_value=[1.0, 2.5, 100.0],
+        ), patch("src.ui.main_window.show_info"), patch(
+            "src.ui.main_window.show_warning"
+        ):
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=False,
+            )
+
+        label_space = window_like._learning_session.get_label_space()
+        self.assertTrue(result)
+        self.assertIsNotNone(label_space)
+        self.assertEqual(label_space.label_values, (0, 2, 5))
+        self.assertEqual(label_space.num_classes, 3)
+        self.assertEqual(label_space.mask_label, -100)
+
+    @unittest.skipUnless(
+        LearningBBoxEvalRuntime is not None,
+        "Learning eval runtime unavailable",
+    )
+    def test_prepare_learning_state_warns_when_label_space_class_is_missing_from_split(
+        self,
+    ) -> None:
+        train_box = self._make_box(label="train")
+        validation_box = self._make_box(box_id="bbox_0008", label="validation")
+        session = LearningSession()
+        window_like = self._make_window_like(
+            boxes=(train_box, validation_box),
+            raw_array=np.zeros((16, 16, 16), dtype=np.uint8),
+            active_segmentation=(
+                "semantic",
+                _FakeVolume(self._semantic_segmentation_array()),
+            ),
+        )
+        window_like._learning_session = session
+
+        def _extract_side_effect(*_args: object, **_kwargs: object):
+            session.set_dataloader_components(
+                dataset=SimpleNamespace(
+                    annot_tensors=(
+                        np.asarray([[[0, 1], [-100, 1]]], dtype=np.int16),
+                    )
+                ),
+                sampler=object(),
+                dataloader=object(),
+                train_box_ids=("bbox_0007",),
+            )
+            session.set_eval_runtimes_by_box_id(
+                {
+                    "bbox_0008": LearningBBoxEvalRuntime(
+                        box_id="bbox_0008",
+                        dataloader=object(),
+                        buffer=SimpleNamespace(
+                            ground_truth=np.asarray(
+                                [[[0, 0], [-100, 0]]],
+                                dtype=np.int16,
+                            ),
+                            label_values=(0, 1),
+                        ),
+                    )
+                }
+            )
+            return LearningBBoxExtractionOutcome(
+                tensor_entry_count=2,
+                learning_train_box_ids=("bbox_0007",),
+                learning_batch_size=4,
+                learning_num_workers=8,
+                eval_validation_box_ids=("bbox_0008",),
+                eval_batch_size=4,
+                eval_num_workers=8,
+            )
+
+        with patch(
+            "src.ui.main_window.extract_learning_bboxes_in_memory",
+            side_effect=_extract_side_effect,
+        ), patch(
+            "src.ui.main_window.compute_and_store_current_learning_class_weights",
+            return_value=object(),
+        ), patch("src.ui.main_window.show_info") as show_info_mock, patch(
+            "src.ui.main_window.show_warning"
+        ) as show_warning_mock:
+            result = MainWindow._prepare_learning_state(
+                window_like,
+                require_class_weights=True,
+                show_success_dialog=True,
+            )
+
+        self.assertTrue(result)
+        show_warning_mock.assert_called_once()
+        warning_text = show_warning_mock.call_args.args[0]
+        self.assertIn("missing from the prepared learning data", warning_text)
+        self.assertIn("Missing from validation boxes: 1", warning_text)
+        show_info_mock.assert_called_once()
+
     def test_prepare_learning_state_shows_warning_when_extraction_raises(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
-        seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
+        seg_volume = _FakeVolume(self._semantic_segmentation_array())
         window_like = self._make_window_like(
             boxes=(train_box, validation_box),
             raw_array=np.zeros((16, 16, 16), dtype=np.uint8),
@@ -338,7 +481,7 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
     def test_prepare_learning_state_warns_when_tensors_remain_in_session(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
-        seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
+        seg_volume = _FakeVolume(self._semantic_segmentation_array())
         window_like = self._make_window_like(
             boxes=(train_box, validation_box),
             raw_array=np.zeros((16, 16, 16), dtype=np.uint8),
@@ -386,7 +529,7 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
     def test_prepare_learning_state_warns_when_class_weight_computation_raises(self) -> None:
         train_box = self._make_box(box_id="bbox_0007", label="train")
         validation_box = self._make_box(box_id="bbox_0008", label="validation")
-        seg_volume = _FakeVolume(np.zeros((16, 16, 16), dtype=np.uint16))
+        seg_volume = _FakeVolume(self._semantic_segmentation_array())
         window_like = self._make_window_like(
             boxes=(train_box, validation_box),
             raw_array=np.zeros((16, 16, 16), dtype=np.uint8),

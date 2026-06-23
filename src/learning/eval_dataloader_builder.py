@@ -9,12 +9,14 @@ except Exception:  # pragma: no cover - environment dependent
     torch = None  # type: ignore[assignment]
 
 from .eval_bbox_dataset import DestVolBuffer, EvalBBoxDataset, InferenceDestVolBuffer
+from .label_space import LearningLabelSpace
 from .session_store import (
     LearningBBoxEvalRuntime,
     LearningSession,
     LearningBBoxTensorBatch,
     LearningBBoxTensorEntry,
     get_current_learning_bbox_batch,
+    get_current_learning_label_space,
     set_current_learning_eval_runtimes_by_box_id,
 )
 
@@ -289,9 +291,42 @@ def compute_eval_label_values_from_batch(batch: LearningBBoxTensorBatch) -> Tupl
     return tuple(sorted(unique_values))
 
 
+def _validate_train_validation_labels_in_label_values(
+    batch: LearningBBoxTensorBatch,
+    *,
+    label_values: Sequence[object],
+) -> None:
+    allowed_values = set(_coerce_label_values(label_values))
+    source_entries = _train_and_validation_entries(batch)
+    if torch is None:  # pragma: no cover - environment dependent
+        raise ImportError("PyTorch is required to validate eval label values")
+
+    unexpected_values = set()
+    for entry in source_entries:
+        segmentation = entry.segmentation_tensor
+        if not isinstance(segmentation, torch.Tensor):
+            raise TypeError(
+                "segmentation_tensor must be a torch.Tensor in learning batch entries"
+            )
+        for raw_value in torch.unique(segmentation).tolist():
+            value = int(raw_value)
+            if value == _MASK_LABEL:
+                continue
+            if value not in allowed_values:
+                unexpected_values.add(value)
+
+    if unexpected_values:
+        ordered_unexpected = tuple(sorted(int(value) for value in unexpected_values))
+        raise ValueError(
+            "Train/validation segmentation contains label values outside the "
+            f"current label space: {ordered_unexpected}"
+        )
+
+
 def build_eval_dataloader_runtimes_from_batch(
     batch: LearningBBoxTensorBatch,
     *,
+    label_values: Optional[Sequence[object]] = None,
     minivol_size: int = 200,
     batch_size: int = 4,
     num_workers: int = 8,
@@ -316,7 +351,22 @@ def build_eval_dataloader_runtimes_from_batch(
             "No validation bounding boxes labeled 'validation' were found in the current learning batch."
         )
 
-    label_values = compute_eval_label_values_from_batch(batch)
+    if label_values is None:
+        label_space = (
+            learning_session.get_label_space()
+            if learning_session is not None
+            else get_current_learning_label_space()
+        )
+        if isinstance(label_space, LearningLabelSpace):
+            normalized_label_values = tuple(label_space.label_values)
+        else:
+            normalized_label_values = compute_eval_label_values_from_batch(batch)
+    else:
+        normalized_label_values = _coerce_label_values(label_values)
+    _validate_train_validation_labels_in_label_values(
+        batch,
+        label_values=normalized_label_values,
+    )
 
     if dataset_factory is None:
         dataset_factory = EvalBBoxDataset
@@ -342,7 +392,7 @@ def build_eval_dataloader_runtimes_from_batch(
             buffer = buffer_factory(
                 entry.segmentation_tensor,
                 dataset.vol.shape,
-                label_values,
+                normalized_label_values,
                 minivol_size=normalized_minivol_size,
             )
             runtime = LearningBBoxEvalRuntime(
@@ -366,6 +416,7 @@ def build_eval_dataloader_runtimes_from_batch(
 
 def build_eval_dataloader_runtimes_from_current_batch(
     *,
+    label_values: Optional[Sequence[object]] = None,
     minivol_size: int = 200,
     batch_size: int = 4,
     num_workers: int = 8,
@@ -386,6 +437,7 @@ def build_eval_dataloader_runtimes_from_current_batch(
         raise ValueError("No learning tensor batch is available in session storage.")
     return build_eval_dataloader_runtimes_from_batch(
         batch,
+        label_values=label_values,
         minivol_size=minivol_size,
         batch_size=batch_size,
         num_workers=num_workers,

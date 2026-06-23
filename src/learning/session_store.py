@@ -6,6 +6,7 @@ from threading import Lock
 from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 from ..bbox import BoundingBoxLabel
+from .label_space import LearningLabelSpace
 
 _ALLOWED_LABELS = ("train", "validation", "inference")
 
@@ -390,11 +391,30 @@ class LearningSession:
     """Container for learning runtime state and resource lifecycle."""
 
     def __init__(self) -> None:
+        self._label_space: Optional[LearningLabelSpace] = None
         self._bbox_batch: Optional[LearningBBoxTensorBatch] = None
         self._dataloader_runtime: Optional[LearningBBoxDataLoaderRuntime] = None
         self._eval_runtimes_by_box_id: Dict[str, LearningBBoxEvalRuntime] = {}
         self._model_runtime: Optional[LearningModelRuntime] = None
         self._lock = Lock()
+
+    def set_label_space(self, label_space: LearningLabelSpace) -> LearningLabelSpace:
+        if not isinstance(label_space, LearningLabelSpace):
+            raise TypeError(
+                "label_space must be a LearningLabelSpace, "
+                f"got {type(label_space).__name__}"
+            )
+        with self._lock:
+            self._label_space = label_space
+        return label_space
+
+    def get_label_space(self) -> Optional[LearningLabelSpace]:
+        with self._lock:
+            return self._label_space
+
+    def clear_label_space(self) -> None:
+        with self._lock:
+            self._label_space = None
 
     def set_bbox_batch(self, batch: LearningBBoxTensorBatch) -> LearningBBoxTensorBatch:
         if not isinstance(batch, LearningBBoxTensorBatch):
@@ -598,6 +618,20 @@ _DEFAULT_LEARNING_SESSION = LearningSession()
 
 def get_default_learning_session() -> LearningSession:
     return _DEFAULT_LEARNING_SESSION
+
+
+def set_current_learning_label_space(
+    label_space: LearningLabelSpace,
+) -> LearningLabelSpace:
+    return get_default_learning_session().set_label_space(label_space)
+
+
+def get_current_learning_label_space() -> Optional[LearningLabelSpace]:
+    return get_default_learning_session().get_label_space()
+
+
+def clear_current_learning_label_space() -> None:
+    get_default_learning_session().clear_label_space()
 
 
 def set_current_learning_bbox_batch(batch: LearningBBoxTensorBatch) -> LearningBBoxTensorBatch:

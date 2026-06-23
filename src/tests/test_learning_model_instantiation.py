@@ -5,10 +5,13 @@ import unittest
 
 from src.learning import (
     LearningBBoxEvalRuntime,
+    LearningLabelSpace,
     LearningSession,
     LearningModelRuntime,
+    clear_current_learning_label_space,
     set_current_learning_dataloader_components,
     set_current_learning_eval_runtimes_by_box_id,
+    set_current_learning_label_space,
     clear_current_learning_dataloader_runtime,
     clear_current_learning_eval_runtimes_by_box_id,
     clear_current_learning_model_runtime,
@@ -81,6 +84,53 @@ class FoundationCheckpointMetadataTests(unittest.TestCase):
         self.assertEqual(metadata.num_classes, 3)
         self.assertEqual(metadata.label_values, (0, 1, 2))
         self.assertEqual(torch_module.calls, [("model.cp", "cpu")])
+
+    def test_inspect_foundation_checkpoint_metadata_reads_label_space_metadata(
+        self,
+    ) -> None:
+        torch_module = self._FakeTorchModule(
+            {
+                "metadata": {
+                    "num_classes": 3,
+                    "label_space": {
+                        "label_values": (0, 2, 5),
+                        "background_label": 0,
+                        "mask_label": -100,
+                        "source_signature": ("semantic", "/tmp/seg.tif", 7),
+                    },
+                    "hyperparameters": {"label_values": (0, 2, 5)},
+                }
+            }
+        )
+
+        metadata = inspect_foundation_checkpoint_metadata(
+            "model.cp",
+            torch_module=torch_module,
+        )
+
+        self.assertEqual(metadata.label_values, (0, 2, 5))
+        self.assertIsNotNone(metadata.label_space)
+        self.assertEqual(metadata.label_space.label_values, (0, 2, 5))
+        self.assertEqual(metadata.label_space.source_signature, ("semantic", "/tmp/seg.tif", 7))
+
+    def test_inspect_foundation_checkpoint_metadata_rejects_label_space_mismatch(
+        self,
+    ) -> None:
+        torch_module = self._FakeTorchModule(
+            {
+                "metadata": {
+                    "num_classes": 3,
+                    "label_space": {"label_values": (0, 1, 3)},
+                    "hyperparameters": {"label_values": (0, 1, 2)},
+                }
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "label_space.label_values"):
+            inspect_foundation_checkpoint_metadata(
+                "model.cp",
+                torch_module=torch_module,
+            )
 
     def test_inspect_foundation_checkpoint_metadata_rejects_missing_metadata(self) -> None:
         torch_module = self._FakeTorchModule({})
@@ -497,6 +547,49 @@ class FoundationModelInstantiationFlowTests(unittest.TestCase):
         self.assertEqual(runtime.hyperparameters["training_run_count"], 3)
         self.assertEqual(runtime.hyperparameters["label_values"], (0, 1, 2, 3, 4, 5))
 
+    def test_instantiate_foundation_model_runtime_preserves_label_space_metadata(
+        self,
+    ) -> None:
+        runtime = instantiate_foundation_model_runtime(
+            num_classes=3,
+            config=FoundationModelConfig(checkpoint_path="foundation_model/weights_epoch_190.cp"),
+            device_ids=(0, 1),
+            store_in_session=False,
+            model_factory=self._FakeModel,
+            checkpoint_loader=lambda _path, *, map_location: {
+                "encoder_weights": {
+                    "module.patch_embed.weight": object(),
+                    "module.blocks.1.weight": object(),
+                    "module.blocks.0.weight": object(),
+                },
+                "metadata": {
+                    "label_space": {
+                        "label_values": (0, 2, 5),
+                        "background_label": 0,
+                        "mask_label": -100,
+                        "source_signature": ("semantic", "/tmp/seg.tif", 9),
+                    },
+                    "hyperparameters": {
+                        "label_values": (0, 2, 5),
+                    },
+                },
+            },
+            data_parallel_factory=self._FakeDataParallel,
+            optimizer_factory=self._FakeOptimizer,
+            torch_module=self._FakeTorchModule(),
+        )
+
+        self.assertEqual(runtime.hyperparameters["label_values"], (0, 2, 5))
+        self.assertEqual(
+            runtime.hyperparameters["label_space"],
+            {
+                "label_values": (0, 2, 5),
+                "background_label": 0,
+                "mask_label": -100,
+                "source_signature": ("semantic", "/tmp/seg.tif", 9),
+            },
+        )
+
     def test_save_checkpoint_roundtrip_load_is_compatible(self) -> None:
         class _SaveTorchModule:
             def __init__(self) -> None:
@@ -606,13 +699,17 @@ class FoundationModelCheckpointSaveTests(unittest.TestCase):
             self.saved_path = str(path)
 
     def _make_runtime(self, *, hyperparameters=None) -> LearningModelRuntime:
+        resolved_hyperparameters = {
+            "label_values": (0, 1, 2, 3, 4, 5),
+        }
+        resolved_hyperparameters.update(dict(hyperparameters or {}))
         return LearningModelRuntime(
             model=self._FakeParallelModel(),
             optimizer=object(),
             checkpoint_path="foundation_model/weights_epoch_190.cp",
             device_ids=(0, 1),
             num_classes=6,
-            hyperparameters=dict(hyperparameters or {}),
+            hyperparameters=resolved_hyperparameters,
         )
 
     def test_save_foundation_model_checkpoint_writes_encoder_full_state_and_metadata(self) -> None:
@@ -659,6 +756,68 @@ class FoundationModelCheckpointSaveTests(unittest.TestCase):
         self.assertEqual(metadata["num_classes"], 6)
         self.assertEqual(metadata["device_ids"], (0, 1))
         self.assertEqual(metadata["checkpoint_path"], "foundation_model/weights_epoch_190.cp")
+        self.assertEqual(
+            metadata["label_space"],
+            {
+                "label_values": (0, 1, 2, 3, 4, 5),
+                "background_label": 0,
+                "mask_label": -100,
+                "source_signature": None,
+            },
+        )
+        self.assertEqual(
+            metadata["hyperparameters"]["label_values"],
+            (0, 1, 2, 3, 4, 5),
+        )
+        self.assertEqual(
+            metadata["hyperparameters"]["label_space"],
+            metadata["label_space"],
+        )
+
+    def test_save_foundation_model_checkpoint_preserves_runtime_label_space_metadata(
+        self,
+    ) -> None:
+        runtime = self._make_runtime(
+            hyperparameters={
+                "encoder_parameter_count": 3,
+                "label_values": (0, 2, 5, 8, 13, 21),
+                "label_space": {
+                    "label_values": (0, 2, 5, 8, 13, 21),
+                    "background_label": 0,
+                    "mask_label": -100,
+                    "source_signature": ("semantic", "/tmp/seg.tif", 11),
+                },
+            }
+        )
+        torch_module = self._FakeTorchModule()
+
+        save_foundation_model_checkpoint(
+            runtime=runtime,
+            checkpoint_path="/tmp/foundation_saved.cp",
+            torch_module=torch_module,
+            saved_at_utc="2026-03-09T00:00:00+00:00",
+        )
+
+        metadata = torch_module.saved_payload["metadata"]
+        self.assertEqual(
+            metadata["label_space"],
+            {
+                "label_values": (0, 2, 5, 8, 13, 21),
+                "background_label": 0,
+                "mask_label": -100,
+                "source_signature": ("semantic", "/tmp/seg.tif", 11),
+            },
+        )
+
+    def test_save_foundation_model_checkpoint_rejects_missing_label_values(self) -> None:
+        runtime = self._make_runtime(hyperparameters={"label_values": None})
+
+        with self.assertRaisesRegex((TypeError, ValueError), "label_values"):
+            save_foundation_model_checkpoint(
+                runtime=runtime,
+                checkpoint_path="/tmp/foundation_saved.cp",
+                torch_module=self._FakeTorchModule(),
+            )
 
     def test_save_foundation_model_checkpoint_rejects_non_cp_extension(self) -> None:
         runtime = self._make_runtime(hyperparameters={"encoder_parameter_count": 3})
@@ -704,13 +863,20 @@ class FoundationModelInstantiationPreconditionsTests(unittest.TestCase):
         )
 
     @staticmethod
-    def _set_eval_runtimes(num_classes_by_box_id):
+    def _set_eval_runtimes(num_classes_by_box_id, *, label_values_by_box_id=None):
         runtimes = {}
         for box_id, num_classes in tuple(num_classes_by_box_id.items()):
+            if label_values_by_box_id is not None:
+                label_values = tuple(label_values_by_box_id[box_id])
+            else:
+                label_values = tuple(range(int(num_classes)))
             runtimes[box_id] = LearningBBoxEvalRuntime(
                 box_id=box_id,
                 dataloader=object(),
-                buffer=SimpleNamespace(num_classes=num_classes),
+                buffer=SimpleNamespace(
+                    num_classes=num_classes,
+                    label_values=label_values,
+                ),
             )
         set_current_learning_eval_runtimes_by_box_id(runtimes)
 
@@ -718,11 +884,13 @@ class FoundationModelInstantiationPreconditionsTests(unittest.TestCase):
         clear_current_learning_model_runtime()
         clear_current_learning_dataloader_runtime()
         clear_current_learning_eval_runtimes_by_box_id()
+        clear_current_learning_label_space()
 
     def tearDown(self) -> None:
         clear_current_learning_model_runtime()
         clear_current_learning_dataloader_runtime()
         clear_current_learning_eval_runtimes_by_box_id()
+        clear_current_learning_label_space()
 
     def test_validate_preconditions_reads_session_and_resolves_num_classes(self) -> None:
         self._set_training_runtime()
@@ -734,6 +902,7 @@ class FoundationModelInstantiationPreconditionsTests(unittest.TestCase):
 
         self.assertIsInstance(preconditions, FoundationInstantiationPreconditions)
         self.assertEqual(preconditions.num_classes, 6)
+        self.assertEqual(preconditions.label_values, (0, 1, 2, 3, 4, 5))
         self.assertEqual(preconditions.available_gpu_count, 3)
         self.assertEqual(preconditions.device_ids, (0, 1, 2))
         self.assertEqual(tuple(sorted(preconditions.eval_runtimes_by_box_id.keys())), ("bbox_0007", "bbox_0011"))
@@ -751,7 +920,10 @@ class FoundationModelInstantiationPreconditionsTests(unittest.TestCase):
                 "bbox_0007": LearningBBoxEvalRuntime(
                     box_id="bbox_0007",
                     dataloader=object(),
-                    buffer=SimpleNamespace(num_classes=6),
+                    buffer=SimpleNamespace(
+                        num_classes=6,
+                        label_values=(0, 1, 2, 3, 4, 5),
+                    ),
                 )
             }
         )
@@ -762,7 +934,36 @@ class FoundationModelInstantiationPreconditionsTests(unittest.TestCase):
         )
 
         self.assertEqual(preconditions.num_classes, 6)
+        self.assertEqual(preconditions.label_values, (0, 1, 2, 3, 4, 5))
         self.assertEqual(tuple(preconditions.eval_runtimes_by_box_id.keys()), ("bbox_0007",))
+
+    def test_validate_preconditions_uses_current_label_space(self) -> None:
+        self._set_training_runtime()
+        self._set_eval_runtimes(
+            {"bbox_0007": 3},
+            label_values_by_box_id={"bbox_0007": (0, 2, 5)},
+        )
+        set_current_learning_label_space(LearningLabelSpace(label_values=(0, 2, 5)))
+
+        preconditions = validate_foundation_model_instantiation_preconditions(
+            torch_module=self._FakeTorchModule(gpu_count=2),
+        )
+
+        self.assertEqual(preconditions.num_classes, 3)
+        self.assertEqual(preconditions.label_values, (0, 2, 5))
+
+    def test_validate_preconditions_rejects_label_space_eval_label_mismatch(self) -> None:
+        self._set_training_runtime()
+        self._set_eval_runtimes(
+            {"bbox_0007": 3},
+            label_values_by_box_id={"bbox_0007": (0, 1, 2)},
+        )
+        set_current_learning_label_space(LearningLabelSpace(label_values=(0, 2, 5)))
+
+        with self.assertRaisesRegex(ValueError, "current label space"):
+            validate_foundation_model_instantiation_preconditions(
+                torch_module=self._FakeTorchModule(gpu_count=2),
+            )
 
     def test_validate_preconditions_rejects_when_training_runtime_missing(self) -> None:
         self._set_eval_runtimes({"bbox_0007": 6})

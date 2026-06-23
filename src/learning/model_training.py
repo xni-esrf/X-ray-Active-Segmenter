@@ -4,11 +4,12 @@ import copy
 import math
 from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import Dict, Mapping, Optional, Tuple
+from typing import Dict, Mapping, Optional, Sequence, Tuple
 
 import numpy as np
 
 from .eval_bbox_dataset import compute_volume_weighted_mean_score
+from .label_space import LearningLabelSpace
 from .session_store import (
     LearningBBoxDataLoaderRuntime,
     LearningBBoxEvalRuntime,
@@ -16,6 +17,7 @@ from .session_store import (
     LearningModelRuntime,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
+    get_current_learning_label_space,
     get_current_learning_model_runtime,
 )
 
@@ -55,6 +57,7 @@ class LearningTrainingPreconditions:
     class_weights: object
     validation_valid_voxel_counts_by_box_id: Dict[str, int]
     total_validation_valid_voxel_count: int
+    label_space: Optional[LearningLabelSpace] = None
 
 
 @dataclass(frozen=True)
@@ -188,6 +191,26 @@ def _format_missing_preconditions_message(missing_items) -> str:
     for item in tuple(missing_items):
         lines.append(f"- {item}")
     return "\n".join(lines)
+
+
+def _coerce_label_values(values: object, *, name: str) -> Tuple[int, ...]:
+    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
+        raise TypeError(f"{name} must be a sequence of integers, got {type(values).__name__}")
+    normalized = []
+    for raw_value in tuple(values):
+        if isinstance(raw_value, bool) or not isinstance(raw_value, Integral):
+            raise TypeError(
+                f"{name} must contain integers only, got {type(raw_value).__name__}"
+            )
+        value = int(raw_value)
+        if value == _MASK_LABEL:
+            raise ValueError(f"{name} must not include mask label {_MASK_LABEL}")
+        if value in normalized:
+            raise ValueError(f"{name} must not contain duplicates, got {value}")
+        normalized.append(value)
+    if not normalized:
+        raise ValueError(f"{name} must contain at least one class label")
+    return tuple(normalized)
 
 
 def _resolve_model_runtime(
@@ -475,6 +498,185 @@ def _resolve_validation_bbox_voxel_volumes(
     return volumes
 
 
+def _resolve_class_weights_class_count(class_weights: object) -> int:
+    numel_method = getattr(class_weights, "numel", None)
+    if not callable(numel_method):
+        raise TypeError(
+            "train_runtime.class_weights must expose numel() so its class count "
+            f"can be validated, got {type(class_weights).__name__}"
+        )
+    count = _require_int(numel_method(), name="class_weights.numel()")
+    if count <= 0:
+        raise ValueError("train_runtime.class_weights must contain at least one value")
+    return int(count)
+
+
+def _resolve_training_label_space(
+    *,
+    learning_session: Optional[LearningSession],
+) -> Optional[LearningLabelSpace]:
+    label_space = (
+        learning_session.get_label_space()
+        if learning_session is not None
+        else get_current_learning_label_space()
+    )
+    if label_space is None:
+        return None
+    if not isinstance(label_space, LearningLabelSpace):
+        raise TypeError(
+            "label_space must be a LearningLabelSpace, "
+            f"got {type(label_space).__name__}"
+        )
+    return label_space
+
+
+def _unique_non_mask_values(
+    values: object,
+    *,
+    mask_label: int,
+    torch_module: Optional[object],
+) -> Tuple[int, ...]:
+    torch_mod = _resolve_torch(torch_module)
+    if torch_mod is not None and isinstance(values, getattr(torch_mod, "Tensor")):
+        unique_values = getattr(torch_mod, "unique")(values.to(dtype=getattr(torch_mod, "long")))
+        return tuple(
+            sorted(
+                int(value)
+                for value in unique_values.tolist()
+                if int(value) != int(mask_label)
+            )
+        )
+    array = np.asarray(values)
+    return tuple(
+        sorted(
+            int(value)
+            for value in np.unique(array).tolist()
+            if int(value) != int(mask_label)
+        )
+    )
+
+
+def _validate_eval_runtimes_match_label_space(
+    eval_runtimes_by_box_id: Mapping[str, LearningBBoxEvalRuntime],
+    *,
+    label_space: LearningLabelSpace,
+    mask_label: int,
+    torch_module: Optional[object],
+) -> None:
+    allowed_values = set(tuple(label_space.label_values))
+    for box_id, runtime in tuple(eval_runtimes_by_box_id.items()):
+        buffer_obj = runtime.buffer
+        if not hasattr(buffer_obj, "label_values"):
+            raise ValueError(
+                f"Evaluation buffer for box_id={box_id!r} does not expose label_values."
+            )
+        buffer_label_values = _coerce_label_values(
+            getattr(buffer_obj, "label_values"),
+            name=f"label_values for box_id={box_id!r}",
+        )
+        if tuple(buffer_label_values) != tuple(label_space.label_values):
+            raise ValueError(
+                "Evaluation buffer label_values do not match the current label space: "
+                f"label_space={tuple(label_space.label_values)} "
+                f"buffer={tuple(buffer_label_values)} for box_id={box_id!r}."
+            )
+        if hasattr(buffer_obj, "ground_truth"):
+            observed_values = _unique_non_mask_values(
+                getattr(buffer_obj, "ground_truth"),
+                mask_label=mask_label,
+                torch_module=torch_module,
+            )
+            unexpected_values = tuple(
+                value for value in observed_values if value not in allowed_values
+            )
+            if unexpected_values:
+                raise ValueError(
+                    "Validation segmentation contains label values outside the "
+                    "current label space: "
+                    f"{unexpected_values} for box_id={box_id!r}."
+                )
+
+
+def _validate_model_matches_label_space(
+    model_runtime: LearningModelRuntime,
+    *,
+    label_space: LearningLabelSpace,
+) -> None:
+    model_class_count = int(model_runtime.num_classes)
+    if model_class_count != int(label_space.num_classes):
+        raise ValueError(
+            "Cannot train model because the current model is incompatible with "
+            "the current label space:\n"
+            f"- model num_classes: {model_class_count}\n"
+            f"- label space num_classes: {label_space.num_classes}"
+        )
+    hyperparameters_obj = getattr(model_runtime, "hyperparameters", None)
+    if not isinstance(hyperparameters_obj, Mapping):
+        raise ValueError(
+            "Cannot train model because model hyperparameters are unavailable; "
+            "label_values metadata is required to match the current label space."
+        )
+
+    if "label_values" not in hyperparameters_obj:
+        raise ValueError(
+            "Cannot train model because model label_values metadata is missing; "
+            "reinitialize the model from the default foundation checkpoint for "
+            "the current label space."
+        )
+    model_label_values = _coerce_label_values(
+        hyperparameters_obj.get("label_values"),
+        name="model hyperparameters label_values",
+    )
+    if tuple(model_label_values) != tuple(label_space.label_values):
+        raise ValueError(
+            "Cannot train model because model label_values do not match the "
+            "current label space:\n"
+            f"- model label_values: {tuple(model_label_values)}\n"
+            f"- label space: {tuple(label_space.label_values)}"
+        )
+
+    model_label_space = hyperparameters_obj.get("label_space")
+    if isinstance(model_label_space, Mapping):
+        model_label_space_values = _coerce_label_values(
+            model_label_space.get("label_values", model_label_values),
+            name="model hyperparameters label_space.label_values",
+        )
+        if tuple(model_label_space_values) != tuple(label_space.label_values):
+            raise ValueError(
+                "Cannot train model because model label_space.label_values do not "
+                "match the current label space:\n"
+                f"- model label_space.label_values: {tuple(model_label_space_values)}\n"
+                f"- label space: {tuple(label_space.label_values)}"
+            )
+        model_background_label = _require_int(
+            model_label_space.get("background_label", label_space.background_label),
+            name="model hyperparameters label_space.background_label",
+        )
+        if int(model_background_label) != int(label_space.background_label):
+            raise ValueError(
+                "Cannot train model because model label_space.background_label "
+                "does not match the current label space:\n"
+                f"- model background_label: {model_background_label}\n"
+                f"- label space background_label: {label_space.background_label}"
+            )
+        model_mask_label = _require_int(
+            model_label_space.get("mask_label", label_space.mask_label),
+            name="model hyperparameters label_space.mask_label",
+        )
+        if int(model_mask_label) != int(label_space.mask_label):
+            raise ValueError(
+                "Cannot train model because model label_space.mask_label does not "
+                "match the current label space:\n"
+                f"- model mask_label: {model_mask_label}\n"
+                f"- label space mask_label: {label_space.mask_label}"
+            )
+    elif model_label_space is not None:
+        raise TypeError(
+            "model hyperparameters label_space must be a mapping when present, "
+            f"got {type(model_label_space).__name__}"
+        )
+
+
 def validate_learning_model_training_preconditions(
     *,
     model_runtime: Optional[LearningModelRuntime] = None,
@@ -552,12 +754,49 @@ def validate_learning_model_training_preconditions(
     if missing_items:
         raise ValueError(_format_missing_preconditions_message(missing_items))
 
+    resolved_label_space = _resolve_training_label_space(
+        learning_session=learning_session,
+    )
+    if resolved_label_space is not None:
+        _validate_model_matches_label_space(
+            resolved_model_runtime,
+            label_space=resolved_label_space,
+        )
+        _validate_eval_runtimes_match_label_space(
+            resolved_eval_runtimes,
+            label_space=resolved_label_space,
+            mask_label=normalized_mask_label,
+            torch_module=torch_module,
+        )
+
     class_weights = getattr(resolved_train_runtime, "class_weights", None)
     if normalized_require_class_weights and class_weights is None:
         raise ValueError(
             "Cannot train model because required learning state is missing:\n"
             "- class weights on training dataloader runtime."
         )
+    if normalized_require_class_weights:
+        class_weight_count = _resolve_class_weights_class_count(class_weights)
+        if (
+            resolved_label_space is not None
+            and int(class_weight_count) != int(resolved_label_space.num_classes)
+        ):
+            raise ValueError(
+                "Cannot train model because class weights are incompatible with "
+                "the current label space:\n"
+                f"- label space num_classes: {resolved_label_space.num_classes}\n"
+                f"- class weight count: {class_weight_count}"
+            )
+        model_class_count = int(resolved_model_runtime.num_classes)
+        if int(class_weight_count) != int(model_class_count):
+            raise ValueError(
+                "Cannot train model because class weights are incompatible with "
+                "the current model output classes:\n"
+                f"- model num_classes: {model_class_count}\n"
+                f"- class weight count: {class_weight_count}\n"
+                "Rebuild the learning state and use a model initialized for the "
+                "current training labels."
+            )
 
     valid_voxel_counts_by_box_id = _resolve_validation_valid_voxel_counts(
         resolved_eval_runtimes,
@@ -577,6 +816,7 @@ def validate_learning_model_training_preconditions(
         class_weights=class_weights,
         validation_valid_voxel_counts_by_box_id=dict(valid_voxel_counts_by_box_id),
         total_validation_valid_voxel_count=total_valid_voxel_count,
+        label_space=resolved_label_space,
     )
 
 

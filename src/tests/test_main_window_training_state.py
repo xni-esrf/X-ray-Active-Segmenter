@@ -12,7 +12,12 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from src.bbox import BoundingBox
 
 try:
-    from src.learning import LearningBBoxEvalRuntime, LearningSession, TrainingParameters
+    from src.learning import (
+        LearningBBoxEvalRuntime,
+        LearningLabelSpace,
+        LearningSession,
+        TrainingParameters,
+    )
     from src.learning.qt_workers import (
         LearningInferenceBackgroundResult,
         LearningInferenceStopRequested,
@@ -21,6 +26,7 @@ try:
 except Exception:  # pragma: no cover - environment dependent
     MainWindow = None  # type: ignore[assignment]
     LearningBBoxEvalRuntime = None  # type: ignore[assignment]
+    LearningLabelSpace = None  # type: ignore[assignment]
     LearningSession = None  # type: ignore[assignment]
     TrainingParameters = None  # type: ignore[assignment]
     LearningInferenceBackgroundResult = None  # type: ignore[assignment]
@@ -168,6 +174,39 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         self.assertEqual(optimizer.param_groups[0]["lr"], 0.002)
         self.assertEqual(optimizer.param_groups[1]["lr"], 0.001)
         self.assertEqual(optimizer.param_groups[2]["lr"], 0.002)
+
+    @unittest.skipUnless(LearningSession is not None, "LearningSession is not available")
+    def test_clear_learning_label_space_for_uses_window_session(self) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 1)))
+        window_like = SimpleNamespace(_learning_session=session)
+
+        MainWindow._clear_learning_label_space_for(window_like)
+
+        self.assertIsNone(session.get_label_space())
+
+    @unittest.skipUnless(LearningSession is not None, "LearningSession is not available")
+    def test_semantic_edit_marks_learning_state_stale_and_clears_label_space(self) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 1)))
+        operation = SimpleNamespace(changed_voxels=3, operation_id="op-1")
+        editor = SimpleNamespace(
+            kind="semantic",
+            latest_undo_operation_id=lambda: "another-op",
+        )
+        window_like = SimpleNamespace(
+            _learning_session=session,
+            _learning_state_stale=False,
+            _segmentation_editor=editor,
+        )
+
+        MainWindow._record_global_history_for_segmentation_operation(
+            window_like,
+            operation,
+        )
+
+        self.assertTrue(window_like._learning_state_stale)
+        self.assertIsNone(session.get_label_space())
 
     def _box(
         self,

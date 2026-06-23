@@ -8,10 +8,19 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from src.learning import LearningTrainingLoopResult, TrainingParameters
+    from src.learning import (
+        DEFAULT_FOUNDATION_CHECKPOINT_PATH,
+        LearningLabelSpace,
+        LearningSession,
+        LearningTrainingLoopResult,
+        TrainingParameters,
+    )
     from src.ui.main_window import MainWindow
 except Exception:  # pragma: no cover - environment dependent
+    DEFAULT_FOUNDATION_CHECKPOINT_PATH = "foundation_model/MAE_XNT.cp"
     MainWindow = None  # type: ignore[assignment]
+    LearningLabelSpace = None  # type: ignore[assignment]
+    LearningSession = None  # type: ignore[assignment]
     LearningTrainingLoopResult = None  # type: ignore[assignment]
     TrainingParameters = None  # type: ignore[assignment]
 
@@ -315,6 +324,81 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
         self.assertTrue(result)
         self.assertEqual(calls, [])
         confirm_mock.assert_not_called()
+
+    def test_runtime_reuse_accepts_runtime_matching_current_label_space(self) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 2, 5)))
+        runtime = SimpleNamespace(
+            checkpoint_path=DEFAULT_FOUNDATION_CHECKPOINT_PATH,
+            num_classes=3,
+            hyperparameters={
+                "source_checkpoint_path": DEFAULT_FOUNDATION_CHECKPOINT_PATH,
+                "trained_in_app": False,
+                "training_run_count": 0,
+                "label_values": (0, 2, 5),
+            },
+        )
+        window_like = SimpleNamespace(_learning_session=session)
+
+        result = MainWindow._runtime_requires_training_reinitialization(
+            window_like,
+            runtime,
+        )
+
+        self.assertFalse(result)
+
+    def test_runtime_reuse_rejects_runtime_label_values_outside_current_label_space(
+        self,
+    ) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 2, 5)))
+        runtime = SimpleNamespace(
+            checkpoint_path=DEFAULT_FOUNDATION_CHECKPOINT_PATH,
+            num_classes=3,
+            hyperparameters={
+                "source_checkpoint_path": DEFAULT_FOUNDATION_CHECKPOINT_PATH,
+                "trained_in_app": False,
+                "training_run_count": 0,
+                "label_values": (0, 1, 2),
+            },
+        )
+        window_like = SimpleNamespace(_learning_session=session)
+
+        result = MainWindow._runtime_requires_training_reinitialization(
+            window_like,
+            runtime,
+        )
+
+        self.assertTrue(result)
+
+    def test_runtime_reuse_rejects_runtime_label_space_metadata_mismatch(
+        self,
+    ) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 2, 5)))
+        runtime = SimpleNamespace(
+            checkpoint_path=DEFAULT_FOUNDATION_CHECKPOINT_PATH,
+            num_classes=3,
+            hyperparameters={
+                "source_checkpoint_path": DEFAULT_FOUNDATION_CHECKPOINT_PATH,
+                "trained_in_app": False,
+                "training_run_count": 0,
+                "label_values": (0, 2, 5),
+                "label_space": {
+                    "label_values": (0, 2, 5),
+                    "background_label": 0,
+                    "mask_label": -1,
+                },
+            },
+        )
+        window_like = SimpleNamespace(_learning_session=session)
+
+        result = MainWindow._runtime_requires_training_reinitialization(
+            window_like,
+            runtime,
+        )
+
+        self.assertTrue(result)
 
     @unittest.skipUnless(
         LearningTrainingLoopResult is not None,

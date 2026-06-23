@@ -12,9 +12,11 @@ except Exception:  # pragma: no cover - environment dependent
 
 from src.learning import (
     LearningBBoxEvalRuntime,
+    LearningLabelSpace,
     LearningSession,
     clear_current_learning_dataloader_runtime,
     clear_current_learning_eval_runtimes_by_box_id,
+    clear_current_learning_label_space,
     clear_current_learning_model_runtime,
     set_current_learning_dataloader_components,
     set_current_learning_eval_runtimes_by_box_id,
@@ -25,23 +27,25 @@ from src.learning import (
 
 class LearningModelTrainingPreconditionsTests(unittest.TestCase):
     def setUp(self) -> None:
+        clear_current_learning_label_space()
         clear_current_learning_model_runtime()
         clear_current_learning_dataloader_runtime()
         clear_current_learning_eval_runtimes_by_box_id()
 
     def tearDown(self) -> None:
+        clear_current_learning_label_space()
         clear_current_learning_model_runtime()
         clear_current_learning_dataloader_runtime()
         clear_current_learning_eval_runtimes_by_box_id()
 
     @staticmethod
-    def _set_model_runtime() -> None:
+    def _set_model_runtime(*, num_classes: int = 2) -> None:
         set_current_learning_model_components(
             model=object(),
             optimizer=object(),
             checkpoint_path="foundation_model/weights_epoch_190.cp",
             device_ids=(0, 1),
-            num_classes=2,
+            num_classes=int(num_classes),
         )
 
     @staticmethod
@@ -99,6 +103,21 @@ class LearningModelTrainingPreconditionsTests(unittest.TestCase):
             validate_learning_model_training_preconditions()
 
     @unittest.skipUnless(torch is not None, "PyTorch is not available")
+    def test_validate_preconditions_rejects_class_weights_that_do_not_match_model_classes(
+        self,
+    ) -> None:
+        self._set_model_runtime(num_classes=2)
+        self._set_train_runtime(
+            class_weights=torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32)
+        )
+        self._set_eval_runtimes(
+            first_ground_truth=np.array([[[0, 1], [2, -100]]], dtype=np.int16)
+        )
+
+        with self.assertRaisesRegex(ValueError, "model num_classes: 2"):
+            validate_learning_model_training_preconditions()
+
+    @unittest.skipUnless(torch is not None, "PyTorch is not available")
     def test_validate_preconditions_resolves_validation_valid_voxel_counts(self) -> None:
         self._set_model_runtime()
         self._set_train_runtime(
@@ -151,6 +170,234 @@ class LearningModelTrainingPreconditionsTests(unittest.TestCase):
 
         self.assertEqual(preconditions.validation_valid_voxel_counts_by_box_id["bbox_0008"], 3)
         self.assertEqual(preconditions.total_validation_valid_voxel_count, 3)
+
+    @unittest.skipUnless(torch is not None, "PyTorch is not available")
+    def test_validate_preconditions_accepts_consistent_label_space(self) -> None:
+        session = LearningSession()
+        label_space = LearningLabelSpace(label_values=(0, 1, 2))
+        session.set_label_space(label_space)
+        session.set_model_components(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=3,
+            hyperparameters={"label_values": (0, 1, 2)},
+        )
+        session.set_dataloader_components(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+            class_weights=torch.tensor([1.0, 2.0, 100.0], dtype=torch.float32),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0008": LearningBBoxEvalRuntime(
+                    box_id="bbox_0008",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(
+                        label_values=(0, 1, 2),
+                        ground_truth=np.array([[[0, 1], [2, -100]]], dtype=np.int16),
+                    ),
+                )
+            }
+        )
+
+        preconditions = validate_learning_model_training_preconditions(
+            learning_session=session,
+        )
+
+        self.assertIs(preconditions.label_space, label_space)
+
+    @unittest.skipUnless(torch is not None, "PyTorch is not available")
+    def test_validate_preconditions_rejects_model_num_classes_mismatch_with_label_space(
+        self,
+    ) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 1, 2)))
+        session.set_model_components(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=2,
+        )
+        session.set_dataloader_components(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+            class_weights=torch.tensor([1.0, 2.0], dtype=torch.float32),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0008": LearningBBoxEvalRuntime(
+                    box_id="bbox_0008",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(
+                        label_values=(0, 1, 2),
+                        ground_truth=np.array([[[0, 1], [2, -100]]], dtype=np.int16),
+                    ),
+                )
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "label space num_classes: 3"):
+            validate_learning_model_training_preconditions(learning_session=session)
+
+    @unittest.skipUnless(torch is not None, "PyTorch is not available")
+    def test_validate_preconditions_rejects_model_missing_label_values_with_label_space(
+        self,
+    ) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 1, 2)))
+        session.set_model_components(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=3,
+            hyperparameters={},
+        )
+        session.set_dataloader_components(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+            class_weights=torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0008": LearningBBoxEvalRuntime(
+                    box_id="bbox_0008",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(
+                        label_values=(0, 1, 2),
+                        ground_truth=np.array([[[0, 1], [2, -100]]], dtype=np.int16),
+                    ),
+                )
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "label_values metadata is missing"):
+            validate_learning_model_training_preconditions(learning_session=session)
+
+    @unittest.skipUnless(torch is not None, "PyTorch is not available")
+    def test_validate_preconditions_rejects_model_label_space_metadata_mismatch(
+        self,
+    ) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 1, 2)))
+        session.set_model_components(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=3,
+            hyperparameters={
+                "label_values": (0, 1, 2),
+                "label_space": {
+                    "label_values": (0, 1, 2),
+                    "background_label": 0,
+                    "mask_label": -1,
+                },
+            },
+        )
+        session.set_dataloader_components(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+            class_weights=torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0008": LearningBBoxEvalRuntime(
+                    box_id="bbox_0008",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(
+                        label_values=(0, 1, 2),
+                        ground_truth=np.array([[[0, 1], [2, -100]]], dtype=np.int16),
+                    ),
+                )
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "label_space.mask_label"):
+            validate_learning_model_training_preconditions(learning_session=session)
+
+    @unittest.skipUnless(torch is not None, "PyTorch is not available")
+    def test_validate_preconditions_rejects_eval_labels_outside_label_space(self) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 1, 2)))
+        session.set_model_components(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=3,
+            hyperparameters={"label_values": (0, 1, 2)},
+        )
+        session.set_dataloader_components(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+            class_weights=torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0008": LearningBBoxEvalRuntime(
+                    box_id="bbox_0008",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(
+                        label_values=(0, 1, 2),
+                        ground_truth=np.array([[[0, 9], [2, -100]]], dtype=np.int16),
+                    ),
+                )
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "outside the current label space"):
+            validate_learning_model_training_preconditions(learning_session=session)
+
+    @unittest.skipUnless(torch is not None, "PyTorch is not available")
+    def test_validate_preconditions_rejects_eval_buffer_label_values_mismatch(
+        self,
+    ) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 1, 2)))
+        session.set_model_components(
+            model=object(),
+            optimizer=object(),
+            checkpoint_path="foundation_model/weights_epoch_190.cp",
+            device_ids=(0, 1),
+            num_classes=3,
+            hyperparameters={"label_values": (0, 1, 2)},
+        )
+        session.set_dataloader_components(
+            dataset=object(),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0001",),
+            class_weights=torch.tensor([1.0, 2.0, 3.0], dtype=torch.float32),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0008": LearningBBoxEvalRuntime(
+                    box_id="bbox_0008",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(
+                        label_values=(0, 2, 1),
+                        ground_truth=np.array([[[0, 1], [2, -100]]], dtype=np.int16),
+                    ),
+                )
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "label_values do not match"):
+            validate_learning_model_training_preconditions(learning_session=session)
 
     def test_validate_preconditions_rejects_validation_buffer_with_zero_valid_voxels(self) -> None:
         self._set_model_runtime()

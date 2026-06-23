@@ -9,6 +9,7 @@ except Exception:  # pragma: no cover - environment dependent
 
 from src.learning import (
     LearningBBoxEvalRuntime,
+    LearningLabelSpace,
     LearningSession,
     LearningBBoxTensorBatch,
     LearningBBoxTensorEntry,
@@ -18,6 +19,7 @@ from src.learning import (
     build_inference_dataloader_runtimes_from_batch,
     clear_current_learning_bbox_batch,
     clear_current_learning_eval_runtimes_by_box_id,
+    clear_current_learning_label_space,
     compute_eval_label_values_from_batch,
     dispose_inference_runtime,
     dispose_inference_runtimes,
@@ -31,10 +33,12 @@ class EvalDataLoaderBuilderTests(unittest.TestCase):
     def setUp(self) -> None:
         clear_current_learning_bbox_batch()
         clear_current_learning_eval_runtimes_by_box_id()
+        clear_current_learning_label_space()
 
     def tearDown(self) -> None:
         clear_current_learning_bbox_batch()
         clear_current_learning_eval_runtimes_by_box_id()
+        clear_current_learning_label_space()
 
     def _entry(
         self,
@@ -159,6 +163,122 @@ class EvalDataLoaderBuilderTests(unittest.TestCase):
 
         stored = get_current_learning_eval_runtimes_by_box_id()
         self.assertEqual(tuple(stored.keys()), ("bbox_0009", "bbox_0002"))
+
+    def test_build_eval_runtimes_from_batch_uses_explicit_label_values(self) -> None:
+        train_entry = self._entry(
+            box_id="bbox_0001",
+            index=1,
+            label="train",
+            raw_value=0,
+            seg_values=(0, 5),
+        )
+        validation_entry = self._entry(
+            box_id="bbox_0009",
+            index=9,
+            label="validation",
+            raw_value=1,
+            seg_values=(0, 5),
+        )
+        batch = LearningBBoxTensorBatch(entries=(train_entry, validation_entry))
+        captured: dict[str, list[object]] = {"buffers": []}
+
+        class _FakeDataset:
+            def __init__(self, raw_tensor, *, minivol_size: int) -> None:
+                del minivol_size
+                self.vol = raw_tensor
+
+        class _FakeLoader:
+            def __init__(self, dataset, **kwargs) -> None:
+                del dataset, kwargs
+
+        class _FakeBuffer:
+            def __init__(self, ground_truth, volume_shape, label_values, *, minivol_size):
+                del ground_truth, volume_shape, minivol_size
+                self.label_values = tuple(int(v) for v in tuple(label_values))
+                self.num_classes = int(len(self.label_values))
+                captured["buffers"].append(self)
+
+        build_eval_dataloader_runtimes_from_batch(
+            batch,
+            label_values=(0, 5, 9),
+            dataset_factory=_FakeDataset,
+            dataloader_factory=_FakeLoader,
+            buffer_factory=_FakeBuffer,
+            store_in_session=False,
+        )
+
+        self.assertEqual(captured["buffers"][0].label_values, (0, 5, 9))
+
+    def test_build_eval_runtimes_from_batch_uses_session_label_space(self) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 5, 9)))
+        train_entry = self._entry(
+            box_id="bbox_0001",
+            index=1,
+            label="train",
+            raw_value=0,
+            seg_values=(0, 5),
+        )
+        validation_entry = self._entry(
+            box_id="bbox_0009",
+            index=9,
+            label="validation",
+            raw_value=1,
+            seg_values=(0, 5),
+        )
+        batch = LearningBBoxTensorBatch(entries=(train_entry, validation_entry))
+        captured: dict[str, list[object]] = {"buffers": []}
+
+        class _FakeDataset:
+            def __init__(self, raw_tensor, *, minivol_size: int) -> None:
+                del minivol_size
+                self.vol = raw_tensor
+
+        class _FakeLoader:
+            def __init__(self, dataset, **kwargs) -> None:
+                del dataset, kwargs
+
+        class _FakeBuffer:
+            def __init__(self, ground_truth, volume_shape, label_values, *, minivol_size):
+                del ground_truth, volume_shape, minivol_size
+                self.label_values = tuple(int(v) for v in tuple(label_values))
+                self.num_classes = int(len(self.label_values))
+                captured["buffers"].append(self)
+
+        build_eval_dataloader_runtimes_from_batch(
+            batch,
+            dataset_factory=_FakeDataset,
+            dataloader_factory=_FakeLoader,
+            buffer_factory=_FakeBuffer,
+            store_in_session=False,
+            learning_session=session,
+        )
+
+        self.assertEqual(captured["buffers"][0].label_values, (0, 5, 9))
+
+    def test_build_eval_runtimes_from_batch_rejects_labels_outside_label_space(self) -> None:
+        train_entry = self._entry(
+            box_id="bbox_0001",
+            index=1,
+            label="train",
+            raw_value=0,
+            seg_values=(0, 5),
+        )
+        validation_entry = self._entry(
+            box_id="bbox_0009",
+            index=9,
+            label="validation",
+            raw_value=1,
+            seg_values=(0, 9),
+        )
+        batch = LearningBBoxTensorBatch(entries=(train_entry, validation_entry))
+
+        with self.assertRaisesRegex(ValueError, "outside the current label space"):
+            build_eval_dataloader_runtimes_from_batch(
+                batch,
+                label_values=(0, 5),
+                store_in_session=False,
+            )
 
     def test_build_eval_runtimes_from_current_batch_can_use_explicit_learning_session(
         self,

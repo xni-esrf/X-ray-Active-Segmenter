@@ -10,7 +10,9 @@ except Exception:  # pragma: no cover - environment dependent
 
 from src.learning import (
     LearningBBoxEvalRuntime,
+    LearningLabelSpace,
     LearningSession,
+    clear_current_learning_label_space,
     clear_current_learning_dataloader_runtime,
     clear_current_learning_eval_runtimes_by_box_id,
     compute_and_store_current_learning_class_weights,
@@ -51,10 +53,12 @@ class LearningClassWeightsTests(unittest.TestCase):
             return torch.device(spec)
 
     def setUp(self) -> None:
+        clear_current_learning_label_space()
         clear_current_learning_dataloader_runtime()
         clear_current_learning_eval_runtimes_by_box_id()
 
     def tearDown(self) -> None:
+        clear_current_learning_label_space()
         clear_current_learning_dataloader_runtime()
         clear_current_learning_eval_runtimes_by_box_id()
 
@@ -235,6 +239,74 @@ class LearningClassWeightsTests(unittest.TestCase):
         self.assertEqual(weights.tolist(), [1.0, 1.0])
         self.assertEqual(session.get_dataloader_runtime().class_weights.tolist(), [1.0, 1.0])
         self.assertIsNone(get_current_learning_dataloader_runtime())
+
+    def test_compute_and_store_current_learning_class_weights_uses_session_label_space(
+        self,
+    ) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 1, 2)))
+        dataset = SimpleNamespace(
+            annot_tensors=(
+                torch.tensor(
+                    [
+                        [[0, 0], [0, 0]],
+                        [[1, 1], [1, 1]],
+                    ],
+                    dtype=torch.int16,
+                ),
+            )
+        )
+        session.set_dataloader_components(
+            dataset=dataset,
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0007",),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0008": LearningBBoxEvalRuntime(
+                    box_id="bbox_0008",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(label_values=(0, 1, 2)),
+                ),
+            }
+        )
+
+        weights = compute_and_store_current_learning_class_weights(
+            device="cpu",
+            learning_session=session,
+        )
+
+        self.assertEqual(weights.tolist(), [1.0, 1.0, 100.0])
+
+    def test_compute_and_store_current_learning_class_weights_rejects_eval_mismatch_with_label_space(
+        self,
+    ) -> None:
+        session = LearningSession()
+        session.set_label_space(LearningLabelSpace(label_values=(0, 1, 2)))
+        session.set_dataloader_components(
+            dataset=SimpleNamespace(
+                annot_tensors=(torch.tensor([[[0, 1]]], dtype=torch.int16),)
+            ),
+            sampler=object(),
+            dataloader=object(),
+            train_box_ids=("bbox_0007",),
+        )
+        session.set_eval_runtimes_by_box_id(
+            {
+                "bbox_0008": LearningBBoxEvalRuntime(
+                    box_id="bbox_0008",
+                    dataloader=object(),
+                    buffer=SimpleNamespace(label_values=(0, 1)),
+                ),
+            }
+        )
+
+        with self.assertRaisesRegex(ValueError, "current label space"):
+            compute_and_store_current_learning_class_weights(
+                device="cpu",
+                learning_session=session,
+            )
 
 
 if __name__ == "__main__":

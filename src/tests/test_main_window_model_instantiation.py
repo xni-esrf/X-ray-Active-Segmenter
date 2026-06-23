@@ -8,9 +8,11 @@ from unittest.mock import patch
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 try:
-    from src.learning import TrainingParameters
+    from src.learning import LearningLabelSpace, LearningSession, TrainingParameters
     from src.ui.main_window import MainWindow
 except Exception:  # pragma: no cover - environment dependent
+    LearningLabelSpace = None  # type: ignore[assignment]
+    LearningSession = None  # type: ignore[assignment]
     MainWindow = None  # type: ignore[assignment]
     TrainingParameters = None  # type: ignore[assignment]
 
@@ -409,6 +411,46 @@ class MainWindowModelInstantiationFlowTests(unittest.TestCase):
         info_text = info_mock.call_args.args[0]
         self.assertIn("Model checkpoint saved.", info_text)
         self.assertIn("tmp/checkpoint.cp", info_text)
+
+    @unittest.skipUnless(LearningSession is not None, "LearningSession unavailable")
+    def test_save_model_runtime_persists_session_label_space_metadata(self) -> None:
+        session = LearningSession()
+        session.set_label_space(
+            LearningLabelSpace(
+                label_values=(0, 2, 5),
+                source_signature=("semantic", "/tmp/seg.tif", 3),
+            )
+        )
+        runtime = SimpleNamespace(
+            hyperparameters={},
+            num_classes=3,
+            device_ids=(0, 1),
+        )
+        window_like = SimpleNamespace(_learning_session=session)
+
+        with patch(
+            "src.ui.main_window.save_foundation_model_checkpoint",
+        ) as save_mock:
+            MainWindow._save_model_runtime_checkpoint(
+                window_like,
+                runtime,
+                checkpoint_path="/tmp/model.cp",
+            )
+
+        save_mock.assert_called_once_with(
+            runtime=runtime,
+            checkpoint_path="/tmp/model.cp",
+        )
+        self.assertEqual(runtime.hyperparameters["label_values"], (0, 2, 5))
+        self.assertEqual(
+            runtime.hyperparameters["label_space"],
+            {
+                "label_values": (0, 2, 5),
+                "background_label": 0,
+                "mask_label": -100,
+                "source_signature": ("semantic", "/tmp/seg.tif", 3),
+            },
+        )
 
 
 if __name__ == "__main__":

@@ -31,8 +31,10 @@ from .session_store import (
     LearningModelRuntime,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
+    get_current_learning_label_space,
     set_current_learning_model_components,
 )
+from .label_space import LearningLabelSpace
 
 
 DEFAULT_FOUNDATION_CHECKPOINT_PATH = "foundation_model/MAE_XNT.cp"
@@ -61,6 +63,12 @@ def _coerce_positive_int(value: object, *, name: str) -> int:
     if normalized <= 0:
         raise ValueError(f"{name} must be >= 1, got {normalized}")
     return normalized
+
+
+def _coerce_int(value: object, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral):
+        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
+    return int(value)
 
 
 def _coerce_positive_real(value: object, *, name: str) -> float:
@@ -118,6 +126,73 @@ def _coerce_label_values(values: object, *, name: str) -> Tuple[int, ...]:
     if not normalized:
         raise ValueError(f"{name} must contain at least one class id")
     return tuple(normalized)
+
+
+def _coerce_optional_source_signature(value: object) -> Optional[Tuple[object, ...]]:
+    if value is None:
+        return None
+    if not isinstance(value, tuple):
+        raise TypeError(
+            "label_space.source_signature must be a tuple when provided, "
+            f"got {type(value).__name__}"
+        )
+    return tuple(value)
+
+
+def _label_space_metadata_from_label_space(
+    label_space: LearningLabelSpace,
+) -> Dict[str, object]:
+    if not isinstance(label_space, LearningLabelSpace):
+        raise TypeError(
+            "label_space must be a LearningLabelSpace, "
+            f"got {type(label_space).__name__}"
+        )
+    return {
+        "label_values": tuple(int(value) for value in tuple(label_space.label_values)),
+        "background_label": int(label_space.background_label),
+        "mask_label": int(label_space.mask_label),
+        "source_signature": label_space.source_signature,
+    }
+
+
+def _coerce_label_space_metadata(
+    value: object,
+    *,
+    fallback_label_values: Optional[Sequence[object]] = None,
+    name: str = "label_space",
+) -> Dict[str, object]:
+    if isinstance(value, LearningLabelSpace):
+        label_space = value
+    elif isinstance(value, Mapping):
+        raw_label_values = value.get("label_values", fallback_label_values)
+        if raw_label_values is None:
+            raise ValueError(f"{name}.label_values is missing")
+        label_space = LearningLabelSpace(
+            label_values=_coerce_label_values(
+                raw_label_values,
+                name=f"{name}.label_values",
+            ),
+            background_label=_coerce_int(
+                value.get("background_label", 0),
+                name=f"{name}.background_label",
+            ),
+            mask_label=_coerce_int(value.get("mask_label", -100), name=f"{name}.mask_label"),
+            source_signature=_coerce_optional_source_signature(
+                value.get("source_signature")
+            ),
+        )
+    elif value is None and fallback_label_values is not None:
+        label_space = LearningLabelSpace(
+            label_values=_coerce_label_values(
+                fallback_label_values,
+                name=f"{name}.label_values",
+            )
+        )
+    else:
+        raise TypeError(
+            f"{name} must be a mapping or LearningLabelSpace, got {type(value).__name__}"
+        )
+    return _label_space_metadata_from_label_space(label_space)
 
 
 def build_3d_sincos_position_embedding(
@@ -573,6 +648,7 @@ class FoundationInstantiationPreconditions:
     train_runtime: LearningBBoxDataLoaderRuntime
     eval_runtimes_by_box_id: Mapping[str, LearningBBoxEvalRuntime]
     num_classes: int
+    label_values: Tuple[int, ...]
     available_gpu_count: int
     device_ids: Tuple[int, ...]
 
@@ -582,6 +658,7 @@ class FoundationCheckpointMetadata:
     checkpoint_path: str
     num_classes: int
     label_values: Tuple[int, ...]
+    label_space: Optional[LearningLabelSpace] = None
 
 
 @dataclass(frozen=True)
@@ -645,11 +722,31 @@ def inspect_foundation_checkpoint_metadata(
             "Checkpoint metadata label_values length must match num_classes: "
             f"len(label_values)={len(label_values)} num_classes={num_classes}."
         )
+    label_space: Optional[LearningLabelSpace] = None
+    label_space_metadata = metadata_obj.get("label_space")
+    if label_space_metadata is not None:
+        coerced_label_space = _coerce_label_space_metadata(
+            label_space_metadata,
+            fallback_label_values=label_values,
+            name="metadata.label_space",
+        )
+        label_space = LearningLabelSpace(
+            label_values=coerced_label_space["label_values"],
+            background_label=coerced_label_space["background_label"],
+            mask_label=coerced_label_space["mask_label"],
+            source_signature=coerced_label_space["source_signature"],
+        )
+        if tuple(label_space.label_values) != tuple(label_values):
+            raise ValueError(
+                "Checkpoint metadata label_space.label_values must match "
+                "metadata.hyperparameters.label_values."
+            )
 
     return FoundationCheckpointMetadata(
         checkpoint_path=resolved_checkpoint_path,
         num_classes=int(num_classes),
         label_values=tuple(int(value) for value in tuple(label_values)),
+        label_space=label_space,
     )
 
 
@@ -727,6 +824,66 @@ def _resolve_shared_num_classes_from_eval_runtimes(
     return int(resolved_num_classes)
 
 
+def _resolve_shared_label_values_from_eval_runtimes(
+    eval_runtimes_by_box_id: Mapping[str, LearningBBoxEvalRuntime],
+) -> Tuple[int, ...]:
+    if not isinstance(eval_runtimes_by_box_id, Mapping):
+        raise TypeError(
+            "eval_runtimes_by_box_id must be a mapping of box_id -> LearningBBoxEvalRuntime, "
+            f"got {type(eval_runtimes_by_box_id).__name__}"
+        )
+    if not eval_runtimes_by_box_id:
+        raise ValueError("No evaluation runtimes/buffers are available in session storage.")
+
+    resolved_label_values: Optional[Tuple[int, ...]] = None
+    for box_id, runtime in tuple(eval_runtimes_by_box_id.items()):
+        if not isinstance(runtime, LearningBBoxEvalRuntime):
+            raise TypeError(
+                "eval_runtimes_by_box_id values must be LearningBBoxEvalRuntime, "
+                f"got {type(runtime).__name__} for id={box_id!r}"
+            )
+        buffer_obj = runtime.buffer
+        if not hasattr(buffer_obj, "label_values"):
+            raise ValueError(
+                f"Evaluation buffer for box_id={box_id!r} does not expose label_values."
+            )
+        label_values = _coerce_label_values(
+            getattr(buffer_obj, "label_values"),
+            name=f"eval_runtimes_by_box_id[{box_id!r}].buffer.label_values",
+        )
+        if resolved_label_values is None:
+            resolved_label_values = label_values
+            continue
+        if label_values != resolved_label_values:
+            raise ValueError(
+                "All evaluation buffers must share the same label_values ordering; "
+                f"expected {resolved_label_values}, got {label_values} for box_id={box_id!r}."
+            )
+
+    if resolved_label_values is None:
+        raise ValueError("No evaluation buffer label_values could be resolved.")
+    return tuple(int(value) for value in resolved_label_values)
+
+
+def _resolve_instantiation_label_space(
+    *,
+    learning_session: Optional[LearningSession],
+) -> Optional[LearningLabelSpace]:
+    label_space = (
+        learning_session.get_label_space()
+        if learning_session is not None
+        else get_current_learning_label_space()
+    )
+    if label_space is None:
+        return None
+    if not isinstance(label_space, LearningLabelSpace):
+        raise TypeError(
+            "learning label space must be a LearningLabelSpace, "
+            f"got {type(label_space).__name__}"
+        )
+    return label_space
+
+
 def validate_foundation_model_instantiation_preconditions(
     *,
     train_runtime: Optional[LearningBBoxDataLoaderRuntime] = None,
@@ -770,9 +927,32 @@ def validate_foundation_model_instantiation_preconditions(
         if eval_runtimes_by_box_id is None
         else dict(eval_runtimes_by_box_id)
     )
-    resolved_num_classes = _resolve_shared_num_classes_from_eval_runtimes(
+    eval_num_classes = _resolve_shared_num_classes_from_eval_runtimes(
         resolved_eval_runtimes
     )
+    eval_label_values = _resolve_shared_label_values_from_eval_runtimes(
+        resolved_eval_runtimes
+    )
+    resolved_label_space = _resolve_instantiation_label_space(
+        learning_session=learning_session
+    )
+    if resolved_label_space is not None:
+        resolved_num_classes = int(resolved_label_space.num_classes)
+        resolved_label_values = tuple(int(value) for value in resolved_label_space.label_values)
+        if int(eval_num_classes) != int(resolved_num_classes):
+            raise ValueError(
+                "Evaluation buffer num_classes do not match the current label space: "
+                f"eval num_classes={int(eval_num_classes)} label space num_classes={resolved_num_classes}."
+            )
+        if tuple(eval_label_values) != tuple(resolved_label_values):
+            raise ValueError(
+                "Evaluation buffer label_values do not match the current label space: "
+                f"eval label_values={tuple(eval_label_values)} "
+                f"label space={tuple(resolved_label_values)}."
+            )
+    else:
+        resolved_num_classes = int(eval_num_classes)
+        resolved_label_values = tuple(int(value) for value in eval_label_values)
 
     available_gpu_count = int(getattr(getattr(torch_mod, "cuda"), "device_count")())
     if available_gpu_count < normalized_min_gpu_count:
@@ -786,6 +966,7 @@ def validate_foundation_model_instantiation_preconditions(
         train_runtime=resolved_train_runtime,
         eval_runtimes_by_box_id=dict(resolved_eval_runtimes),
         num_classes=int(resolved_num_classes),
+        label_values=tuple(int(value) for value in resolved_label_values),
         available_gpu_count=available_gpu_count,
         device_ids=device_ids,
     )
@@ -895,9 +1076,20 @@ def _extract_training_provenance_from_checkpoint_state(
     trained_in_app = False
     training_run_count = 0
     label_values: Optional[Tuple[int, ...]] = None
+    label_space_metadata: Optional[Dict[str, object]] = None
 
     metadata_obj = checkpoint_state.get("metadata")
     if isinstance(metadata_obj, Mapping):
+        raw_label_space = metadata_obj.get("label_space")
+        if raw_label_space is not None:
+            try:
+                label_space_metadata = _coerce_label_space_metadata(
+                    raw_label_space,
+                    name="metadata.label_space",
+                )
+            except Exception:
+                label_space_metadata = None
+
         metadata_hyperparameters = metadata_obj.get("hyperparameters")
         if isinstance(metadata_hyperparameters, Mapping):
             raw_source = metadata_hyperparameters.get("source_checkpoint_path")
@@ -928,6 +1120,14 @@ def _extract_training_provenance_from_checkpoint_state(
                     )
                 except Exception:
                     label_values = None
+        if label_space_metadata is not None:
+            label_space_values = tuple(
+                int(value) for value in tuple(label_space_metadata["label_values"])
+            )
+            if label_values is None:
+                label_values = label_space_values
+            elif tuple(label_values) != label_space_values:
+                label_space_metadata = None
 
     if training_run_count > 0 and not trained_in_app:
         trained_in_app = True
@@ -939,6 +1139,7 @@ def _extract_training_provenance_from_checkpoint_state(
         "trained_in_app": bool(trained_in_app),
         "training_run_count": int(training_run_count),
         "label_values": None if label_values is None else tuple(int(v) for v in tuple(label_values)),
+        "label_space": label_space_metadata,
     }
 
 
@@ -1094,6 +1295,30 @@ def save_foundation_model_checkpoint(
     )
     runtime_hyperparameters.setdefault("trained_in_app", False)
     runtime_hyperparameters.setdefault("training_run_count", 0)
+    if "label_values" not in runtime_hyperparameters:
+        raise ValueError("Runtime hyperparameters must include label_values before saving.")
+    runtime_label_values = _coerce_label_values(
+        runtime_hyperparameters.get("label_values"),
+        name="runtime.hyperparameters.label_values",
+    )
+    if int(len(runtime_label_values)) != int(runtime.num_classes):
+        raise ValueError(
+            "Runtime label_values length must match runtime num_classes before saving: "
+            f"len(label_values)={len(runtime_label_values)} num_classes={int(runtime.num_classes)}."
+        )
+    runtime_hyperparameters["label_values"] = tuple(
+        int(value) for value in tuple(runtime_label_values)
+    )
+    label_space_metadata = _coerce_label_space_metadata(
+        runtime_hyperparameters.get("label_space"),
+        fallback_label_values=runtime_label_values,
+        name="runtime.hyperparameters.label_space",
+    )
+    if tuple(label_space_metadata["label_values"]) != tuple(runtime_label_values):
+        raise ValueError(
+            "Runtime label_space.label_values must match runtime label_values before saving."
+        )
+    runtime_hyperparameters["label_space"] = dict(label_space_metadata)
     encoder_weights = _extract_encoder_weights_for_checkpoint(
         model_obj,
         runtime_hyperparameters=runtime_hyperparameters,
@@ -1122,6 +1347,7 @@ def save_foundation_model_checkpoint(
             "num_classes": int(runtime.num_classes),
             "device_ids": tuple(runtime.device_ids),
             "checkpoint_path": str(runtime.checkpoint_path),
+            "label_space": dict(label_space_metadata),
             "hyperparameters": runtime_hyperparameters,
         },
     }
@@ -1364,6 +1590,21 @@ def instantiate_foundation_model_runtime(
         hyperparameters["label_values"] = tuple(
             int(value) for value in tuple(normalized_label_values)
         )
+    provenance_label_space = training_provenance.get("label_space")
+    if provenance_label_space is not None:
+        normalized_label_space = _coerce_label_space_metadata(
+            provenance_label_space,
+            fallback_label_values=hyperparameters.get("label_values"),
+            name="training_provenance.label_space",
+        )
+        if "label_values" in hyperparameters and tuple(
+            normalized_label_space["label_values"]
+        ) != tuple(hyperparameters["label_values"]):
+            raise ValueError(
+                "Checkpoint metadata label_space.label_values must match "
+                "checkpoint label_values."
+            )
+        hyperparameters["label_space"] = dict(normalized_label_space)
 
     if bool(store_in_session):
         if learning_session is not None:
