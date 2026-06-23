@@ -16,8 +16,7 @@ except Exception:  # pragma: no cover - import availability is environment depen
     class Dataset:  # type: ignore[override]
         pass
 
-
-_MASK_LABEL = -100
+from .label_utils import MASK_LABEL, coerce_label_values
 
 
 def _require_torch():
@@ -33,26 +32,6 @@ def _coerce_positive_int(value: object, *, name: str) -> int:
     if normalized <= 0:
         raise ValueError(f"{name} must be >= 1, got {normalized}")
     return normalized
-
-
-def _coerce_label_values(values: Sequence[object]) -> Tuple[int, ...]:
-    if not isinstance(values, Sequence):
-        raise TypeError(f"label_values must be a sequence, got {type(values).__name__}")
-    normalized = []
-    for value in values:
-        if isinstance(value, bool) or not isinstance(value, Integral):
-            raise TypeError(
-                "label_values must contain integers only, "
-                f"got {type(value).__name__}"
-            )
-        integer = int(value)
-        if integer == _MASK_LABEL:
-            raise ValueError("label_values must not include -100 (reserved mask value)")
-        if integer not in normalized:
-            normalized.append(integer)
-    if not normalized:
-        raise ValueError("label_values must contain at least one class label")
-    return tuple(normalized)
 
 
 def _build_hann_window(*, minivol_size: int):
@@ -164,7 +143,7 @@ def _compute_filtered_mean_dice_score(
     ground_truth,
     label_values: Sequence[int],
     rare_class_ratio: float = 0.01,
-    mask_label: int = _MASK_LABEL,
+    mask_label: int = MASK_LABEL,
 ) -> float:
     torch_mod = _require_torch()
     if pred_labels.shape != ground_truth.shape:
@@ -348,7 +327,7 @@ class DestVolBuffer:
 
         self.minivol_size = _coerce_positive_int(minivol_size, name="minivol_size")
         self.volume_shape = tuple(int(v) for v in volume_shape)
-        self.label_values = _coerce_label_values(label_values)
+        self.label_values = coerce_label_values(label_values, allow_duplicates=True)
         self.num_classes = int(len(self.label_values))
         self.label_to_channel_index: Dict[int, int] = {
             int(label): int(i) for i, label in enumerate(self.label_values)
@@ -386,7 +365,7 @@ class DestVolBuffer:
             ground_truth=self.ground_truth,
             label_values=self.channel_index_to_label,
             rare_class_ratio=0.01,
-            mask_label=_MASK_LABEL,
+            mask_label=MASK_LABEL,
         )
         return torch_mod.tensor(float(dice_value), dtype=torch_mod.float32)
 
@@ -404,7 +383,7 @@ class InferenceDestVolBuffer:
 
         self.minivol_size = _coerce_positive_int(minivol_size, name="minivol_size")
         self.volume_shape = tuple(int(v) for v in volume_shape)
-        self.label_values = _coerce_label_values(label_values)
+        self.label_values = coerce_label_values(label_values, allow_duplicates=True)
         self.num_classes = int(len(self.label_values))
         self.label_to_channel_index: Dict[int, int] = {
             int(label): int(i) for i, label in enumerate(self.label_values)

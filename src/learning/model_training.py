@@ -4,11 +4,12 @@ import copy
 import math
 from dataclasses import dataclass
 from numbers import Integral, Real
-from typing import Dict, Mapping, Optional, Sequence, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 
 import numpy as np
 
 from .eval_bbox_dataset import compute_volume_weighted_mean_score
+from .label_utils import MASK_LABEL, coerce_label_values, unique_non_mask_values
 from .label_space import LearningLabelSpace
 from .session_store import (
     LearningBBoxDataLoaderRuntime,
@@ -20,9 +21,6 @@ from .session_store import (
     get_current_learning_label_space,
     get_current_learning_model_runtime,
 )
-
-
-_MASK_LABEL = -100
 
 # Canonical metric specification for the Dice migration.
 # This block intentionally freezes semantics before implementation so later
@@ -191,26 +189,6 @@ def _format_missing_preconditions_message(missing_items) -> str:
     for item in tuple(missing_items):
         lines.append(f"- {item}")
     return "\n".join(lines)
-
-
-def _coerce_label_values(values: object, *, name: str) -> Tuple[int, ...]:
-    if isinstance(values, (str, bytes)) or not isinstance(values, Sequence):
-        raise TypeError(f"{name} must be a sequence of integers, got {type(values).__name__}")
-    normalized = []
-    for raw_value in tuple(values):
-        if isinstance(raw_value, bool) or not isinstance(raw_value, Integral):
-            raise TypeError(
-                f"{name} must contain integers only, got {type(raw_value).__name__}"
-            )
-        value = int(raw_value)
-        if value == _MASK_LABEL:
-            raise ValueError(f"{name} must not include mask label {_MASK_LABEL}")
-        if value in normalized:
-            raise ValueError(f"{name} must not contain duplicates, got {value}")
-        normalized.append(value)
-    if not normalized:
-        raise ValueError(f"{name} must contain at least one class label")
-    return tuple(normalized)
 
 
 def _resolve_model_runtime(
@@ -530,32 +508,6 @@ def _resolve_training_label_space(
     return label_space
 
 
-def _unique_non_mask_values(
-    values: object,
-    *,
-    mask_label: int,
-    torch_module: Optional[object],
-) -> Tuple[int, ...]:
-    torch_mod = _resolve_torch(torch_module)
-    if torch_mod is not None and isinstance(values, getattr(torch_mod, "Tensor")):
-        unique_values = getattr(torch_mod, "unique")(values.to(dtype=getattr(torch_mod, "long")))
-        return tuple(
-            sorted(
-                int(value)
-                for value in unique_values.tolist()
-                if int(value) != int(mask_label)
-            )
-        )
-    array = np.asarray(values)
-    return tuple(
-        sorted(
-            int(value)
-            for value in np.unique(array).tolist()
-            if int(value) != int(mask_label)
-        )
-    )
-
-
 def _validate_eval_runtimes_match_label_space(
     eval_runtimes_by_box_id: Mapping[str, LearningBBoxEvalRuntime],
     *,
@@ -570,7 +522,7 @@ def _validate_eval_runtimes_match_label_space(
             raise ValueError(
                 f"Evaluation buffer for box_id={box_id!r} does not expose label_values."
             )
-        buffer_label_values = _coerce_label_values(
+        buffer_label_values = coerce_label_values(
             getattr(buffer_obj, "label_values"),
             name=f"label_values for box_id={box_id!r}",
         )
@@ -581,7 +533,7 @@ def _validate_eval_runtimes_match_label_space(
                 f"buffer={tuple(buffer_label_values)} for box_id={box_id!r}."
             )
         if hasattr(buffer_obj, "ground_truth"):
-            observed_values = _unique_non_mask_values(
+            observed_values = unique_non_mask_values(
                 getattr(buffer_obj, "ground_truth"),
                 mask_label=mask_label,
                 torch_module=torch_module,
@@ -623,7 +575,7 @@ def _validate_model_matches_label_space(
             "reinitialize the model from the default foundation checkpoint for "
             "the current label space."
         )
-    model_label_values = _coerce_label_values(
+    model_label_values = coerce_label_values(
         hyperparameters_obj.get("label_values"),
         name="model hyperparameters label_values",
     )
@@ -637,7 +589,7 @@ def _validate_model_matches_label_space(
 
     model_label_space = hyperparameters_obj.get("label_space")
     if isinstance(model_label_space, Mapping):
-        model_label_space_values = _coerce_label_values(
+        model_label_space_values = coerce_label_values(
             model_label_space.get("label_values", model_label_values),
             name="model hyperparameters label_space.label_values",
         )
@@ -684,7 +636,7 @@ def validate_learning_model_training_preconditions(
     eval_runtimes_by_box_id: Optional[Mapping[str, LearningBBoxEvalRuntime]] = None,
     learning_session: Optional[LearningSession] = None,
     require_class_weights: bool = True,
-    mask_label: int = _MASK_LABEL,
+    mask_label: int = MASK_LABEL,
     torch_module: Optional[object] = None,
 ) -> LearningTrainingPreconditions:
     normalized_require_class_weights = _require_bool(
@@ -830,7 +782,7 @@ def train_learning_model_for_one_epoch(
     lwise_lr_decay: Optional[float] = None,
     mixed_precision: bool = True,
     label_smoothing: float = 0.025,
-    ignore_index: int = _MASK_LABEL,
+    ignore_index: int = MASK_LABEL,
     scaler: Optional[object] = None,
     device: Optional[str] = None,
     stop_event: Optional[object] = None,
@@ -1039,7 +991,7 @@ def evaluate_learning_model_on_validation_dataloaders(
         if valid_voxel_counts_by_box_id is None:
             resolved_valid_counts = _resolve_validation_valid_voxel_counts(
                 resolved_eval_runtimes,
-                mask_label=_MASK_LABEL,
+                mask_label=MASK_LABEL,
                 torch_module=torch_mod,
             )
         else:
@@ -1149,7 +1101,7 @@ def train_learning_model_with_validation_loop(
     early_stop_patience: int = 2,
     total_epoch_count: Optional[int] = None,
     label_smoothing: float = 0.025,
-    ignore_index: int = _MASK_LABEL,
+    ignore_index: int = MASK_LABEL,
     device: Optional[str] = None,
     stop_event: Optional[object] = None,
     torch_module: Optional[object] = None,
@@ -1171,7 +1123,7 @@ def train_learning_model_with_validation_loop(
             eval_runtimes_by_box_id=eval_runtimes_by_box_id,
             learning_session=learning_session,
             require_class_weights=True,
-            mask_label=_MASK_LABEL,
+            mask_label=MASK_LABEL,
             torch_module=torch_mod,
         )
     elif not isinstance(preconditions, LearningTrainingPreconditions):

@@ -34,6 +34,7 @@ from .session_store import (
     get_current_learning_label_space,
     set_current_learning_model_components,
 )
+from .label_utils import coerce_label_values
 from .label_space import LearningLabelSpace
 
 
@@ -108,26 +109,6 @@ def _coerce_device_ids(device_ids: Sequence[object]) -> Tuple[int, ...]:
     return tuple(normalized)
 
 
-def _coerce_label_values(values: object, *, name: str) -> Tuple[int, ...]:
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
-        raise TypeError(f"{name} must be a sequence of class ids, got {type(values).__name__}")
-    normalized = []
-    for raw_value in tuple(values):
-        if isinstance(raw_value, bool) or not isinstance(raw_value, Integral):
-            raise TypeError(
-                f"{name} must contain integers only, got {type(raw_value).__name__}"
-            )
-        value = int(raw_value)
-        if value == -100:
-            raise ValueError(f"{name} must not include -100 (reserved mask label)")
-        if value in normalized:
-            raise ValueError(f"{name} must not contain duplicates, got {value}")
-        normalized.append(value)
-    if not normalized:
-        raise ValueError(f"{name} must contain at least one class id")
-    return tuple(normalized)
-
-
 def _coerce_optional_source_signature(value: object) -> Optional[Tuple[object, ...]]:
     if value is None:
         return None
@@ -168,7 +149,7 @@ def _coerce_label_space_metadata(
         if raw_label_values is None:
             raise ValueError(f"{name}.label_values is missing")
         label_space = LearningLabelSpace(
-            label_values=_coerce_label_values(
+            label_values=coerce_label_values(
                 raw_label_values,
                 name=f"{name}.label_values",
             ),
@@ -183,7 +164,7 @@ def _coerce_label_space_metadata(
         )
     elif value is None and fallback_label_values is not None:
         label_space = LearningLabelSpace(
-            label_values=_coerce_label_values(
+            label_values=coerce_label_values(
                 fallback_label_values,
                 name=f"{name}.label_values",
             )
@@ -713,7 +694,7 @@ def inspect_foundation_checkpoint_metadata(
 
     if "label_values" not in hyperparameters_obj:
         raise ValueError("Checkpoint metadata.hyperparameters.label_values is missing.")
-    label_values = _coerce_label_values(
+    label_values = coerce_label_values(
         hyperparameters_obj.get("label_values"),
         name="metadata.hyperparameters.label_values",
     )
@@ -847,7 +828,7 @@ def _resolve_shared_label_values_from_eval_runtimes(
             raise ValueError(
                 f"Evaluation buffer for box_id={box_id!r} does not expose label_values."
             )
-        label_values = _coerce_label_values(
+        label_values = coerce_label_values(
             getattr(buffer_obj, "label_values"),
             name=f"eval_runtimes_by_box_id[{box_id!r}].buffer.label_values",
         )
@@ -1114,7 +1095,7 @@ def _extract_training_provenance_from_checkpoint_state(
             raw_label_values = metadata_hyperparameters.get("label_values")
             if raw_label_values is not None:
                 try:
-                    label_values = _coerce_label_values(
+                    label_values = coerce_label_values(
                         raw_label_values,
                         name="metadata.hyperparameters.label_values",
                     )
@@ -1297,7 +1278,7 @@ def save_foundation_model_checkpoint(
     runtime_hyperparameters.setdefault("training_run_count", 0)
     if "label_values" not in runtime_hyperparameters:
         raise ValueError("Runtime hyperparameters must include label_values before saving.")
-    runtime_label_values = _coerce_label_values(
+    runtime_label_values = coerce_label_values(
         runtime_hyperparameters.get("label_values"),
         name="runtime.hyperparameters.label_values",
     )
@@ -1578,7 +1559,7 @@ def instantiate_foundation_model_runtime(
     }
     provenance_label_values = training_provenance.get("label_values")
     if provenance_label_values is not None:
-        normalized_label_values = _coerce_label_values(
+        normalized_label_values = coerce_label_values(
             provenance_label_values,
             name="training_provenance.label_values",
         )

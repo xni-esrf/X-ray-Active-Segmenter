@@ -1,11 +1,9 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from numbers import Integral
 from typing import Mapping, Optional, Sequence, Tuple
 
-import numpy as np
-
+from .label_utils import coerce_label_values, unique_non_mask_values
 from .label_space import LearningLabelSpace
 from .session_store import (
     LearningBBoxDataLoaderRuntime,
@@ -15,9 +13,6 @@ from .session_store import (
     get_current_learning_eval_runtimes_by_box_id,
     get_current_learning_label_space,
 )
-
-
-_MASK_LABEL = -100
 
 
 @dataclass(frozen=True)
@@ -31,62 +26,6 @@ class LearningLabelCoverage:
     @property
     def has_missing_labels(self) -> bool:
         return bool(self.missing_train_label_values or self.missing_validation_label_values)
-
-
-def _resolve_torch(torch_module: Optional[object]) -> Optional[object]:
-    if torch_module is not None:
-        return torch_module
-    try:  # pragma: no cover - import availability is environment dependent
-        import torch
-    except Exception:  # pragma: no cover - import availability is environment dependent
-        return None
-    return torch
-
-
-def _coerce_label_values(values: object, *, name: str) -> Tuple[int, ...]:
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
-        raise TypeError(f"{name} must be a sequence of class ids, got {type(values).__name__}")
-    normalized = []
-    for raw_value in tuple(values):
-        if isinstance(raw_value, bool) or not isinstance(raw_value, Integral):
-            raise TypeError(
-                f"{name} must contain integers only, got {type(raw_value).__name__}"
-            )
-        value = int(raw_value)
-        if value == _MASK_LABEL:
-            raise ValueError(f"{name} must not include -100 (reserved mask label)")
-        if value in normalized:
-            raise ValueError(f"{name} must not contain duplicates, got {value}")
-        normalized.append(value)
-    if not normalized:
-        raise ValueError(f"{name} must contain at least one class id")
-    return tuple(normalized)
-
-
-def _unique_non_mask_values(
-    values: object,
-    *,
-    mask_label: int,
-    torch_module: Optional[object],
-) -> Tuple[int, ...]:
-    torch_mod = _resolve_torch(torch_module)
-    if torch_mod is not None and isinstance(values, getattr(torch_mod, "Tensor")):
-        unique_values = getattr(torch_mod, "unique")(values.to(dtype=getattr(torch_mod, "long")))
-        return tuple(
-            sorted(
-                int(value)
-                for value in unique_values.tolist()
-                if int(value) != int(mask_label)
-            )
-        )
-    array = np.asarray(values)
-    return tuple(
-        sorted(
-            int(value)
-            for value in np.unique(array).tolist()
-            if int(value) != int(mask_label)
-        )
-    )
 
 
 def _extract_train_segmentation_tensors(
@@ -195,7 +134,7 @@ def _present_label_values(
     present = set()
     for tensor in tuple(tensors):
         present.update(
-            _unique_non_mask_values(
+            unique_non_mask_values(
                 tensor,
                 mask_label=mask_label,
                 torch_module=torch_module,
@@ -216,7 +155,7 @@ def compute_learning_label_coverage(
         learning_session=learning_session,
         label_space=label_space,
     )
-    label_values = _coerce_label_values(
+    label_values = coerce_label_values(
         resolved_label_space.label_values,
         name="label_space.label_values",
     )

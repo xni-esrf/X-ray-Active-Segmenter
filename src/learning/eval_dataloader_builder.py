@@ -9,6 +9,7 @@ except Exception:  # pragma: no cover - environment dependent
     torch = None  # type: ignore[assignment]
 
 from .eval_bbox_dataset import DestVolBuffer, EvalBBoxDataset, InferenceDestVolBuffer
+from .label_utils import MASK_LABEL, coerce_label_values
 from .label_space import LearningLabelSpace
 from .session_store import (
     LearningBBoxEvalRuntime,
@@ -19,9 +20,6 @@ from .session_store import (
     get_current_learning_label_space,
     set_current_learning_eval_runtimes_by_box_id,
 )
-
-
-_MASK_LABEL = -100
 
 
 def _best_effort_invoke(callable_obj) -> None:
@@ -93,30 +91,6 @@ def _coerce_bool(value: object, *, name: str) -> bool:
     if not isinstance(value, bool):
         raise TypeError(f"{name} must be a bool, got {type(value).__name__}")
     return value
-
-
-def _coerce_label_values(label_values: Sequence[object]) -> Tuple[int, ...]:
-    if not isinstance(label_values, Sequence):
-        raise TypeError(
-            "label_values must be a sequence of class IDs, "
-            f"got {type(label_values).__name__}"
-        )
-    normalized = []
-    for raw_value in tuple(label_values):
-        if isinstance(raw_value, bool) or not isinstance(raw_value, Integral):
-            raise TypeError(
-                "label_values must contain integers only, "
-                f"got {type(raw_value).__name__}"
-            )
-        value = int(raw_value)
-        if value == _MASK_LABEL:
-            raise ValueError("label_values must not include -100 (reserved mask label)")
-        if value in normalized:
-            raise ValueError(f"label_values must not contain duplicates, got {value}")
-        normalized.append(value)
-    if not normalized:
-        raise ValueError("label_values must contain at least one class label")
-    return tuple(normalized)
 
 
 def _resolve_shared_num_classes_from_eval_runtimes(
@@ -280,7 +254,7 @@ def compute_eval_label_values_from_batch(batch: LearningBBoxTensorBatch) -> Tupl
         values = torch.unique(segmentation).tolist()
         for value in values:
             integer = int(value)
-            if integer == _MASK_LABEL:
+            if integer == MASK_LABEL:
                 continue
             unique_values.add(integer)
 
@@ -296,7 +270,7 @@ def _validate_train_validation_labels_in_label_values(
     *,
     label_values: Sequence[object],
 ) -> None:
-    allowed_values = set(_coerce_label_values(label_values))
+    allowed_values = set(coerce_label_values(label_values))
     source_entries = _train_and_validation_entries(batch)
     if torch is None:  # pragma: no cover - environment dependent
         raise ImportError("PyTorch is required to validate eval label values")
@@ -310,7 +284,7 @@ def _validate_train_validation_labels_in_label_values(
             )
         for raw_value in torch.unique(segmentation).tolist():
             value = int(raw_value)
-            if value == _MASK_LABEL:
+            if value == MASK_LABEL:
                 continue
             if value not in allowed_values:
                 unexpected_values.add(value)
@@ -362,7 +336,7 @@ def build_eval_dataloader_runtimes_from_batch(
         else:
             normalized_label_values = compute_eval_label_values_from_batch(batch)
     else:
-        normalized_label_values = _coerce_label_values(label_values)
+        normalized_label_values = coerce_label_values(label_values)
     _validate_train_validation_labels_in_label_values(
         batch,
         label_values=normalized_label_values,
@@ -469,7 +443,7 @@ def build_inference_dataloader_runtime_from_entry(
             "entry must be a LearningBBoxTensorEntry, "
             f"got {type(entry).__name__}"
         )
-    normalized_label_values = _coerce_label_values(label_values)
+    normalized_label_values = coerce_label_values(label_values)
     normalized_minivol_size = _coerce_positive_int(minivol_size, name="minivol_size")
     normalized_batch_size = _coerce_positive_int(batch_size, name="batch_size")
     normalized_num_workers = _coerce_non_negative_int(num_workers, name="num_workers")

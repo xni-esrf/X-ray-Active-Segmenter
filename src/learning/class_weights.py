@@ -1,8 +1,9 @@
 from __future__ import annotations
 
-from numbers import Integral, Real
+from numbers import Real
 from typing import Dict, Mapping, Optional, Sequence, Tuple
 
+from .label_utils import MASK_LABEL, coerce_label_values
 from .session_store import (
     LearningBBoxDataLoaderRuntime,
     LearningBBoxEvalRuntime,
@@ -12,9 +13,6 @@ from .session_store import (
     get_current_learning_label_space,
     set_current_learning_dataloader_class_weights,
 )
-
-
-_MASK_LABEL = -100
 
 
 def _require_torch():
@@ -32,27 +30,6 @@ def _coerce_positive_real(value: object, *, name: str) -> float:
     if normalized <= 0.0:
         raise ValueError(f"{name} must be > 0, got {normalized}")
     return normalized
-
-
-def _coerce_label_values(label_values: Sequence[object]) -> Tuple[int, ...]:
-    if not isinstance(label_values, Sequence):
-        raise TypeError(f"label_values must be a sequence, got {type(label_values).__name__}")
-    normalized = []
-    for raw_value in tuple(label_values):
-        if isinstance(raw_value, bool) or not isinstance(raw_value, Integral):
-            raise TypeError(
-                "label_values must contain integers only, "
-                f"got {type(raw_value).__name__}"
-            )
-        integer = int(raw_value)
-        if integer == _MASK_LABEL:
-            raise ValueError("label_values must not include -100 (reserved mask label)")
-        if integer in normalized:
-            raise ValueError(f"label_values must not contain duplicates, got {integer}")
-        normalized.append(integer)
-    if not normalized:
-        raise ValueError("label_values must contain at least one class label")
-    return tuple(normalized)
 
 
 def _resolve_target_device(torch_mod, *, device: str):
@@ -101,7 +78,7 @@ def _resolve_shared_eval_label_values(
             raise ValueError(
                 f"Evaluation buffer for box_id={box_id!r} does not expose 'label_values'."
             )
-        label_values = _coerce_label_values(getattr(buffer_obj, "label_values"))
+        label_values = coerce_label_values(getattr(buffer_obj, "label_values"))
         if resolved_label_values is None:
             resolved_label_values = label_values
             continue
@@ -149,7 +126,7 @@ def compute_class_weights_from_segmentation_tensors(
 ):
     torch_mod = _require_torch() if torch_module is None else torch_module
     resolved_max_weight = _coerce_positive_real(max_weight, name="max_weight")
-    resolved_label_values = _coerce_label_values(label_values)
+    resolved_label_values = coerce_label_values(label_values)
     target_device = _resolve_target_device(torch_mod, device=device)
 
     if not isinstance(segmentation_tensors, Sequence):
@@ -176,7 +153,7 @@ def compute_class_weights_from_segmentation_tensors(
             unique_counts.tolist(),
         ):
             value = int(raw_value)
-            if value == _MASK_LABEL:
+            if value == MASK_LABEL:
                 continue
             if value not in label_counts:
                 raise ValueError(
