@@ -68,18 +68,22 @@ class _CastingArrayLoader(VolumeLoader):
         return chunk.astype(self._cast_dtype, copy=False)
 
 
+def _array_data_range(array: np.ndarray) -> tuple[float, float]:
+    return (float(np.min(array)), float(np.max(array)))
+
+
 class RendererContrastWindowTests(unittest.TestCase):
-    def test_attach_volume_computes_data_range_and_default_window(self) -> None:
+    def test_attach_volume_uses_precomputed_data_range_and_default_window(self) -> None:
         array = np.arange(4 * 4 * 4, dtype=np.float32).reshape((4, 4, 4))
         loader = _ArrayLoader(array, chunk_shape=(2, 2, 2))
-        volume = open_volume(loader, cache=None)
+        volume = open_volume(loader, cache=None, data_range=_array_data_range(array))
         renderer = Renderer()
 
         renderer.attach_volume(volume)
 
         self.assertEqual(renderer.get_data_range(), (0.0, 63.0))
         self.assertEqual(renderer.get_window_range(), (0.0, 63.0))
-        self.assertGreater(loader.calls, 1)
+        self.assertEqual(loader.calls, 0)
 
     def test_set_window_applies_linear_clipping(self) -> None:
         array = np.asarray(
@@ -90,7 +94,7 @@ class RendererContrastWindowTests(unittest.TestCase):
             dtype=np.float32,
         )
         loader = _ArrayLoader(array, chunk_shape=(1, 2, 2))
-        volume = open_volume(loader, cache=None)
+        volume = open_volume(loader, cache=None, data_range=_array_data_range(array))
         renderer = Renderer()
         renderer.attach_volume(volume)
         renderer.set_window(25.0, 125.0)
@@ -102,7 +106,7 @@ class RendererContrastWindowTests(unittest.TestCase):
 
     def test_set_window_rejects_invalid_bounds(self) -> None:
         array = np.arange(3 * 3 * 3, dtype=np.uint16).reshape((3, 3, 3))
-        volume = open_volume(_ArrayLoader(array), cache=None)
+        volume = open_volume(_ArrayLoader(array), cache=None, data_range=_array_data_range(array))
         renderer = Renderer()
         renderer.attach_volume(volume)
 
@@ -118,15 +122,19 @@ class RendererContrastWindowTests(unittest.TestCase):
             [[[0.0, 1.0], [2.0, np.nan]], [[4.0, 5.0], [6.0, 7.0]]],
             dtype=np.float32,
         )
-        volume = open_volume(_ArrayLoader(array), cache=None)
+        volume = open_volume(_ArrayLoader(array), cache=None, data_range=_array_data_range(array))
         renderer = Renderer()
 
-        with self.assertRaisesRegex(ValueError, "NaN or Inf"):
+        with self.assertRaisesRegex(ValueError, "finite"):
             renderer.attach_volume(volume)
 
     def test_attach_volume_failure_keeps_previous_volume_and_window(self) -> None:
         initial = np.arange(2 * 2 * 2, dtype=np.float32).reshape((2, 2, 2))
-        initial_volume = open_volume(_ArrayLoader(initial), cache=None)
+        initial_volume = open_volume(
+            _ArrayLoader(initial),
+            cache=None,
+            data_range=_array_data_range(initial),
+        )
         renderer = Renderer()
         renderer.attach_volume(initial_volume)
 
@@ -134,8 +142,12 @@ class RendererContrastWindowTests(unittest.TestCase):
             [[[0.0, 1.0], [2.0, np.nan]], [[4.0, 5.0], [6.0, 7.0]]],
             dtype=np.float32,
         )
-        invalid_volume = open_volume(_ArrayLoader(invalid), cache=None)
-        with self.assertRaisesRegex(ValueError, "NaN or Inf"):
+        invalid_volume = open_volume(
+            _ArrayLoader(invalid),
+            cache=None,
+            data_range=_array_data_range(invalid),
+        )
+        with self.assertRaisesRegex(ValueError, "finite"):
             renderer.attach_volume(invalid_volume)
 
         self.assertEqual(renderer.get_data_range(), (0.0, 7.0))
@@ -146,7 +158,7 @@ class RendererContrastWindowTests(unittest.TestCase):
 
     def test_constant_volume_defaults_to_zero_image(self) -> None:
         array = np.full((2, 2, 2), fill_value=7, dtype=np.uint16)
-        volume = open_volume(_ArrayLoader(array), cache=None)
+        volume = open_volume(_ArrayLoader(array), cache=None, data_range=_array_data_range(array))
         renderer = Renderer()
         renderer.attach_volume(volume)
 
@@ -159,8 +171,8 @@ class RendererContrastWindowTests(unittest.TestCase):
     def test_attach_volume_resets_window_to_default_on_new_raw_load(self) -> None:
         first = np.arange(3 * 3 * 3, dtype=np.float32).reshape((3, 3, 3))
         second = np.arange(8, dtype=np.uint16).reshape((2, 2, 2)) + 100
-        first_volume = open_volume(_ArrayLoader(first), cache=None)
-        second_volume = open_volume(_ArrayLoader(second), cache=None)
+        first_volume = open_volume(_ArrayLoader(first), cache=None, data_range=_array_data_range(first))
+        second_volume = open_volume(_ArrayLoader(second), cache=None, data_range=_array_data_range(second))
         renderer = Renderer()
         renderer.attach_volume(first_volume)
         renderer.set_window(3.0, 10.0)
@@ -173,8 +185,16 @@ class RendererContrastWindowTests(unittest.TestCase):
     def test_attach_volume_resets_level_mode_to_defaults_on_new_raw_load(self) -> None:
         first = np.arange(4001, dtype=np.float32).reshape((4001, 1, 1))
         second = np.arange(16, dtype=np.float32).reshape((16, 1, 1))
-        first_volume = open_volume(_ArrayLoader(first, chunk_shape=(4001, 1, 1)), cache=None)
-        second_volume = open_volume(_ArrayLoader(second, chunk_shape=(16, 1, 1)), cache=None)
+        first_volume = open_volume(
+            _ArrayLoader(first, chunk_shape=(4001, 1, 1)),
+            cache=None,
+            data_range=_array_data_range(first),
+        )
+        second_volume = open_volume(
+            _ArrayLoader(second, chunk_shape=(16, 1, 1)),
+            cache=None,
+            data_range=_array_data_range(second),
+        )
         renderer = Renderer()
         renderer.attach_volume(
             first_volume,
@@ -200,13 +220,13 @@ class RendererContrastWindowTests(unittest.TestCase):
             info_dtype=str(np.dtype(np.float32)),
             cast_dtype=np.float16,
         )
-        volume = open_volume(loader, cache=None)
+        casted = source.astype(np.float16, copy=False)
+        volume = open_volume(loader, cache=None, data_range=_array_data_range(casted))
         renderer = Renderer()
 
         renderer.attach_volume(volume)
 
-        casted = source.astype(np.float16, copy=False)
-        expected = (float(np.min(casted)), float(np.max(casted)))
+        expected = _array_data_range(casted)
         self.assertEqual(renderer.get_data_range(), expected)
         self.assertEqual(renderer.get_window_range(), expected)
 
@@ -215,6 +235,7 @@ class RendererContrastWindowTests(unittest.TestCase):
         raw_volume = open_volume(
             _ArrayLoader(raw_array, chunk_shape=(4001, 1, 1)),
             cache=None,
+            data_range=_array_data_range(raw_array),
         )
         renderer = Renderer()
         renderer.attach_volume(
@@ -249,6 +270,7 @@ class RendererContrastWindowTests(unittest.TestCase):
         raw_volume = open_volume(
             _ArrayLoader(raw_array, chunk_shape=(2001, 1, 1)),
             cache=None,
+            data_range=_array_data_range(raw_array),
         )
         renderer = Renderer()
         renderer.attach_volume(
@@ -273,6 +295,7 @@ class RendererContrastWindowTests(unittest.TestCase):
         raw_volume = open_volume(
             _ArrayLoader(raw_array, chunk_shape=(4001, 1, 1)),
             cache=None,
+            data_range=_array_data_range(raw_array),
         )
         seg_volume = open_volume(
             _ArrayLoader(seg_array, chunk_shape=(4001, 1, 1)),
@@ -303,6 +326,7 @@ class RendererContrastWindowTests(unittest.TestCase):
         raw_volume = open_volume(
             _ArrayLoader(raw_array, chunk_shape=(4001, 1, 1)),
             cache=None,
+            data_range=_array_data_range(raw_array),
         )
         seg_volume = open_volume(
             _ArrayLoader(seg_array, chunk_shape=(4001, 1, 1)),

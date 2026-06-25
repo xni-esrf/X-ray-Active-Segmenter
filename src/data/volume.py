@@ -14,6 +14,7 @@ class VolumeData:
     loader: VolumeLoader
     info: VolumeInfo
     cache: Optional[ChunkCache] = None
+    data_range: Optional[Tuple[float, float]] = None
 
     @property
     def shape(self) -> Tuple[int, int, int]:
@@ -171,5 +172,10 @@ class VolumeData:
         return result
 
 
-def open_volume(loader: VolumeLoader, *, cache: Optional[ChunkCache] = None) -> VolumeData:
-    return VolumeData(loader=loader, info=loader.info, cache=cache)
+def open_volume(
+    loader: VolumeLoader,
+    *,
+    cache: Optional[ChunkCache] = None,
+    data_range: Optional[Tuple[float, float]] = None,
+) -> VolumeData:
+    return VolumeData(loader=loader, info=loader.info, cache=cache, data_range=data_range)

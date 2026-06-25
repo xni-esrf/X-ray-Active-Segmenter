@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Literal, Tuple
+from typing import Iterable, Literal, Optional, Tuple
 
 import logging
 import numpy as np
@@ -43,8 +43,9 @@ def load_prepared_volume(
     else:
         raise ValueError("load_mode must be 'ram' or 'lazy'")
 
+    data_range = _compute_raw_data_range(loader) if kind == "raw" else None
     cache = ChunkCache(max_bytes=cache_max_bytes)
-    volume = open_volume(loader, cache=cache)
+    volume = open_volume(loader, cache=cache, data_range=data_range)
     levels = levels_builder(volume, levels=pyramid_levels)
     return PreparedVolume(volume=volume, levels=levels, cache=cache)
 
@@ -97,6 +98,77 @@ def _value_range(array: np.ndarray) -> Tuple[int, int]:
     if array.size == 0:
         return (0, 0)
     return (int(np.min(array)), int(np.max(array)))
+
+
+def _compute_raw_data_range(loader: VolumeLoader) -> Tuple[float, float]:
+    shape = tuple(int(dim) for dim in loader.info.shape)
+    if len(shape) != 3 or any(dim <= 0 for dim in shape):
+        raise ValueError(
+            "Raw volume must have a strictly positive 3D shape (z, y, x), "
+            f"got {shape}."
+        )
+
+    declared_dtype = np.dtype(loader.info.dtype)
+    if np.issubdtype(declared_dtype, np.complexfloating):
+        raise ValueError("Complex-valued raw volumes are not supported for rendering.")
+
+    chunk_shape = _scan_chunk_shape(shape, loader.info.chunk_shape)
+    global_min: Optional[float] = None
+    global_max: Optional[float] = None
+    for zyx_slices in _iter_chunk_slices(shape, chunk_shape):
+        chunk = np.asarray(loader.get_chunk(zyx_slices))
+        if chunk.size == 0:
+            continue
+        chunk_dtype = np.dtype(chunk.dtype)
+        if np.issubdtype(chunk_dtype, np.complexfloating):
+            raise ValueError("Complex-valued raw volumes are not supported for rendering.")
+        if np.issubdtype(chunk_dtype, np.floating) and not np.all(np.isfinite(chunk)):
+            raise ValueError("Raw volume contains NaN or Inf values and cannot be displayed.")
+        local_min = float(np.min(chunk))
+        local_max = float(np.max(chunk))
+        if global_min is None or local_min < global_min:
+            global_min = local_min
+        if global_max is None or local_max > global_max:
+            global_max = local_max
+
+    if global_min is None or global_max is None:
+        raise ValueError("Raw volume has no voxels to render.")
+    return (global_min, global_max)
+
+
+def _scan_chunk_shape(
+    shape: Tuple[int, int, int],
+    chunk_shape: Optional[Tuple[int, int, int]],
+) -> Tuple[int, int, int]:
+    if (
+        chunk_shape is not None
+        and len(chunk_shape) == 3
+        and all(int(dim) > 0 for dim in chunk_shape)
+    ):
+        return (int(chunk_shape[0]), int(chunk_shape[1]), int(chunk_shape[2]))
+
+    max_elements = 4_000_000
+    base = max(1, int(round(max_elements ** (1.0 / 3.0))))
+    candidate = [max(1, min(int(dim), base)) for dim in shape]
+    while candidate[0] * candidate[1] * candidate[2] > max_elements:
+        largest_axis = max(range(3), key=lambda axis: candidate[axis])
+        if candidate[largest_axis] <= 1:
+            break
+        candidate[largest_axis] = max(1, candidate[largest_axis] // 2)
+    return (candidate[0], candidate[1], candidate[2])
+
+
+def _iter_chunk_slices(
+    shape: Tuple[int, int, int],
+    chunk_shape: Tuple[int, int, int],
+) -> Iterable[Tuple[slice, slice, slice]]:
+    for z_start in range(0, shape[0], chunk_shape[0]):
+        z_stop = min(z_start + chunk_shape[0], shape[0])
+        for y_start in range(0, shape[1], chunk_shape[1]):
+            y_stop = min(y_start + chunk_shape[1], shape[1])
+            for x_start in range(0, shape[2], chunk_shape[2]):
+                x_stop = min(x_start + chunk_shape[2], shape[2])
+                yield (slice(z_start, z_stop), slice(y_start, y_stop), slice(x_start, x_stop))
 
 
 def _smallest_integer_dtype_for_range(min_value: int, max_value: int) -> np.dtype:
