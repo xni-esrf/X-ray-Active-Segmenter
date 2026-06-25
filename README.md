@@ -27,7 +27,7 @@ python3 open_ui_raw_viewer.py --help
 ```
 
 ### Typical Usage
-1. Open a raw volume.
+1. Open a volume to segment.
 2. Create training and validation bounding boxes for the data to segment.
 3. Use the 3D brush segmentation tool to fully segment data inside these boxes.
 4. Build a dataset from the bounding boxes.
@@ -50,6 +50,7 @@ python3 open_ui_raw_viewer.py --help
 - For a fixed amount of annotated data, the training set is often larger than the validation set (typically 2x to 10x).
 - For each feature, start with easier examples, then progressively add harder cases.
 - You can close the application without stopping a running training job. When training finishes, the best checkpoint (best validation weighted Dice) is saved and can be used for inference.
+- For long training or inference jobs on a remote node, use `Train Headless and Close` or `Segment Inference Headless and Close`. The UI writes a reproducible headless job, closes, and the job starts after the UI process exits, so it can continue safely inside `screen` after you detach.
 - Training can be stopped at any point. If at least the first epoch has finished (about 1 hour), the best state reached so far is restored and can be used for inference.
 
 ### Pointer/Scaling Troubleshooting

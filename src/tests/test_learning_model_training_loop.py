@@ -112,6 +112,60 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         self.assertAlmostEqual(result.best_weighted_mean_dice, 0.60, places=10)
         self.assertAlmostEqual(float(model.weight.detach().item()), 2.0, places=10)
 
+    def test_training_loop_reports_epoch_progress(self) -> None:
+        preconditions = self._make_preconditions(train_box_count=2)
+
+        def _train_side_effect(**kwargs):
+            return (
+                LearningTrainEpochResult(
+                    epoch_index=int(kwargs["epoch_index"]),
+                    total_epoch_count=int(kwargs["total_epoch_count"]),
+                    base_learning_rate=0.001,
+                    num_batches=1,
+                    mean_loss=1.25 + float(kwargs["epoch_index"]),
+                    mixed_precision_used=False,
+                ),
+                object(),
+            )
+
+        eval_values = iter((0.25, 0.50, 0.40))
+
+        def _eval_side_effect(**_kwargs):
+            value = float(next(eval_values))
+            return LearningValidationEvalResult(
+                weighted_mean_dice=value,
+                per_box_dice_by_box_id={"bbox_eval_0001": value},
+                valid_voxel_counts_by_box_id={"bbox_eval_0001": 10},
+                total_valid_voxel_count=10,
+                mixed_precision_used=False,
+            )
+
+        progress_events = []
+        with patch(
+            "src.learning.model_training.train_learning_model_for_one_epoch",
+            side_effect=_train_side_effect,
+        ), patch(
+            "src.learning.model_training.evaluate_learning_model_on_validation_dataloaders",
+            side_effect=_eval_side_effect,
+        ):
+            train_learning_model_with_validation_loop(
+                preconditions=preconditions,
+                mixed_precision=False,
+                early_stop_patience=2,
+                device="cpu",
+                total_epoch_count=3,
+                progress_callback=progress_events.append,
+            )
+
+        self.assertEqual(len(progress_events), 3)
+        self.assertEqual(progress_events[0].completed_epoch_count, 1)
+        self.assertEqual(progress_events[0].total_epoch_count, 3)
+        self.assertAlmostEqual(progress_events[0].mean_loss, 1.25)
+        self.assertAlmostEqual(progress_events[1].weighted_mean_dice, 0.50)
+        self.assertEqual(progress_events[1].best_epoch, 2)
+        self.assertAlmostEqual(progress_events[1].best_weighted_mean_dice, 0.50)
+        self.assertEqual(progress_events[2].epochs_without_improvement, 1)
+
     def test_training_loop_runs_to_max_epoch_and_reports_best_epoch(self) -> None:
         preconditions = self._make_preconditions(train_box_count=2)
         model = preconditions.model_runtime.model

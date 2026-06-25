@@ -151,8 +151,12 @@ class BottomPanel(QWidget):
         self._on_load_model_requested: Optional[Callable[[], None]] = None
         self._on_save_model_requested: Optional[Callable[[], None]] = None
         self._on_segment_inference_requested: Optional[Callable[[], None]] = None
+        self._on_segment_inference_headless_close_requested: Optional[
+            Callable[[], None]
+        ] = None
         self._on_stop_inference_requested: Optional[Callable[[], None]] = None
         self._on_train_model_requested: Optional[Callable[[], None]] = None
+        self._on_train_model_headless_close_requested: Optional[Callable[[], None]] = None
         self._on_stop_training_requested: Optional[Callable[[], None]] = None
         self._on_change_training_parameters_requested: Optional[Callable[[], None]] = None
         self._on_median_filter_selected_requested: Optional[Callable[[], None]] = None
@@ -211,10 +215,16 @@ class BottomPanel(QWidget):
         self._learning_panel.on_segment_inference_requested(
             self._handle_segment_inference_requested
         )
+        self._learning_panel.on_segment_inference_headless_close_requested(
+            self._handle_segment_inference_headless_close_requested
+        )
         self._learning_panel.on_stop_inference_requested(
             self._handle_stop_inference_requested
         )
         self._learning_panel.on_train_model_requested(self._handle_train_model_requested)
+        self._learning_panel.on_train_model_headless_close_requested(
+            self._handle_train_model_headless_close_requested
+        )
         self._learning_panel.on_stop_training_requested(
             self._handle_stop_training_requested
         )
@@ -950,11 +960,23 @@ class BottomPanel(QWidget):
     def on_segment_inference_requested(self, callback: Callable[[], None]) -> None:
         self._on_segment_inference_requested = callback
 
+    def on_segment_inference_headless_close_requested(
+        self,
+        callback: Callable[[], None],
+    ) -> None:
+        self._on_segment_inference_headless_close_requested = callback
+
     def on_stop_inference_requested(self, callback: Callable[[], None]) -> None:
         self._on_stop_inference_requested = callback
 
     def on_train_model_requested(self, callback: Callable[[], None]) -> None:
         self._on_train_model_requested = callback
+
+    def on_train_model_headless_close_requested(
+        self,
+        callback: Callable[[], None],
+    ) -> None:
+        self._on_train_model_headless_close_requested = callback
 
     def on_stop_training_requested(self, callback: Callable[[], None]) -> None:
         self._on_stop_training_requested = callback
@@ -1201,6 +1223,10 @@ class BottomPanel(QWidget):
         if self._on_segment_inference_requested:
             self._on_segment_inference_requested()
 
+    def _handle_segment_inference_headless_close_requested(self) -> None:
+        if self._on_segment_inference_headless_close_requested:
+            self._on_segment_inference_headless_close_requested()
+
     def _handle_stop_inference_requested(self) -> None:
         if self._on_stop_inference_requested:
             self._on_stop_inference_requested()
@@ -1208,6 +1234,10 @@ class BottomPanel(QWidget):
     def _handle_train_model_requested(self) -> None:
         if self._on_train_model_requested:
             self._on_train_model_requested()
+
+    def _handle_train_model_headless_close_requested(self) -> None:
+        if self._on_train_model_headless_close_requested:
+            self._on_train_model_headless_close_requested()
 
     def _handle_stop_training_requested(self) -> None:
         if self._on_stop_training_requested:

@@ -263,15 +263,15 @@ def ask_training_running_close_decision(
     dialog.setIcon(QMessageBox.Icon.Warning)
     dialog.setWindowTitle("Training In Progress")
     dialog.setText("A model training is currently running.")
-    dialog.setInformativeText("Choose what to do before closing this window.")
+    dialog.setInformativeText(
+        "Closing the application will stop this training.\n\n"
+        "To leave the UI while training continues, use the "
+        "'Train Headless and Close' button before starting the job."
+    )
 
     stop_button = dialog.addButton(
         "Stop training and close",
         QMessageBox.ButtonRole.DestructiveRole,
-    )
-    continue_button = dialog.addButton(
-        "Continue in background",
-        QMessageBox.ButtonRole.AcceptRole,
     )
     cancel_button = dialog.addButton(
         "Cancel",
@@ -283,8 +283,6 @@ def ask_training_running_close_decision(
     clicked = dialog.clickedButton()
     if clicked is stop_button:
         return TrainingCloseDecision.STOP_AND_CLOSE
-    if clicked is continue_button:
-        return TrainingCloseDecision.CONTINUE_IN_BACKGROUND
     if clicked is cancel_button:
         return TrainingCloseDecision.CANCEL
     return TrainingCloseDecision.CANCEL
@@ -297,15 +295,15 @@ def ask_inference_running_close_decision(
     dialog.setIcon(QMessageBox.Icon.Warning)
     dialog.setWindowTitle("Inference In Progress")
     dialog.setText("A segmentation inference is currently running.")
-    dialog.setInformativeText("Choose what to do before closing this window.")
+    dialog.setInformativeText(
+        "Closing the application will stop this inference.\n\n"
+        "To leave the UI while inference continues, use the "
+        "'Segment Inference Headless and Close' button before starting the job."
+    )
 
     stop_button = dialog.addButton(
         "Stop inference and close",
         QMessageBox.ButtonRole.DestructiveRole,
-    )
-    continue_button = dialog.addButton(
-        "Continue in background",
-        QMessageBox.ButtonRole.AcceptRole,
     )
     cancel_button = dialog.addButton(
         "Cancel",
@@ -317,8 +315,6 @@ def ask_inference_running_close_decision(
     clicked = dialog.clickedButton()
     if clicked is stop_button:
         return InferenceCloseDecision.STOP_AND_CLOSE
-    if clicked is continue_button:
-        return InferenceCloseDecision.CONTINUE_IN_BACKGROUND
     if clicked is cancel_button:
         return InferenceCloseDecision.CANCEL
     return InferenceCloseDecision.CANCEL

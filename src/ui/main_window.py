@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+from datetime import datetime, timezone
 from numbers import Integral
+import os
 from pathlib import Path
+import subprocess
+import sys
 from typing import Dict, Literal, Mapping, Optional, Sequence, Set, Tuple, cast
 
 import numpy as np
@@ -46,6 +50,7 @@ from ..history import (
     estimate_bounding_box_history_bytes,
     estimate_segmentation_history_bytes,
 )
+from ..headless.job_spec import HeadlessJobSpec, save_headless_job_spec
 from ..io import extract_learning_bboxes_in_memory
 from ..io.saver import save_segmentation_volume
 from ..loading import load_prepared_volume
@@ -56,7 +61,10 @@ from ..learning import (
     LearningSession,
     TrainingParameters,
     clear_current_learning_bbox_batch,
+    clear_current_learning_dataloader_runtime,
+    clear_current_learning_eval_runtimes_by_box_id,
     clear_current_learning_label_space,
+    clear_current_learning_model_runtime,
     compute_and_store_current_learning_class_weights,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
@@ -64,6 +72,7 @@ from ..learning import (
     get_current_learning_model_runtime,
     get_current_learning_bbox_batch,
     instantiate_foundation_model_runtime,
+    prepare_learning_state_from_volumes,
     save_foundation_model_checkpoint,
     set_current_learning_label_space,
     validate_foundation_checkpoint_load_preconditions,
@@ -466,6 +475,10 @@ class MainWindow(QMainWindow):
         self._deferred_close_inference_mode: DeferredInferenceCloseMode = "none"
         self._deferred_close_inference_save_path: Optional[str] = None
         self._deferred_close_inference_save_format: Optional[str] = None
+        self._headless_close_requested = False
+        self._last_saved_segmentation_path: Optional[str] = None
+        self._last_saved_segmentation_kind: Optional[SegmentationKind] = None
+        self._last_saved_bounding_boxes_path: Optional[str] = None
         self._segmentation_editor: Optional[SegmentationEditor] = None
         self._annotation_kind: SegmentationKind = "semantic"
         self._raw_volume: Optional[VolumeData] = None
@@ -627,8 +640,14 @@ class MainWindow(QMainWindow):
         self.bottom_panel.on_segment_inference_requested(
             self._handle_segment_inference_request
         )
+        self.bottom_panel.on_segment_inference_headless_close_requested(
+            self._handle_segment_inference_headless_close_request
+        )
         self.bottom_panel.on_stop_inference_requested(self._handle_stop_inference_request)
         self.bottom_panel.on_train_model_requested(self._handle_train_model_request)
+        self.bottom_panel.on_train_model_headless_close_requested(
+            self._handle_train_model_headless_close_request
+        )
         self.bottom_panel.on_stop_training_requested(self._handle_stop_training_request)
         self.bottom_panel.on_change_training_parameters_requested(
             self._handle_change_training_parameters_request
@@ -785,6 +804,7 @@ class MainWindow(QMainWindow):
             operations=LearningStateControllerOperations(
                 show_warning=show_warning,
                 show_info=show_info,
+                prepare_learning_state_from_volumes=prepare_learning_state_from_volumes,
                 extract_learning_bboxes_in_memory=extract_learning_bboxes_in_memory,
                 compute_and_store_current_learning_class_weights=(
                     compute_and_store_current_learning_class_weights
@@ -908,6 +928,14 @@ class MainWindow(QMainWindow):
         )
 
     def closeEvent(self, event: QCloseEvent) -> None:  # type: ignore[override]
+        if getattr(self, "_headless_close_requested", False):
+            if self._app_event_filter_installed:
+                app_instance = QApplication.instance()
+                if app_instance is not None:
+                    app_instance.removeEventFilter(self)
+                self._app_event_filter_installed = False
+            event.accept()
+            return
         if not self._maybe_resolve_unsaved_data_before_close():
             event.ignore()
             return
@@ -1035,19 +1063,6 @@ class MainWindow(QMainWindow):
             self._set_deferred_close_after_stop_training()
             self._request_learning_training_stop()
             return True
-        if decision == TrainingCloseDecision.CONTINUE_IN_BACKGROUND:
-            dialog_result = open_save_model_checkpoint_dialog(
-                self,
-                retry_on_overwrite_decline=True,
-            )
-            if not dialog_result.accepted or not dialog_result.path:
-                self._clear_deferred_close_training_state()
-                return False
-            checkpoint_path = str(Path(dialog_result.path).expanduser())
-            self._set_deferred_close_with_background_training(
-                checkpoint_path=checkpoint_path,
-            )
-            return True
         self._clear_deferred_close_training_state()
         return False
 
@@ -1060,31 +1075,6 @@ class MainWindow(QMainWindow):
             self._set_deferred_close_after_stop_inference()
             self._request_learning_inference_stop()
             return True
-        if decision == InferenceCloseDecision.CONTINUE_IN_BACKGROUND:
-            active_segmentation_getter = getattr(self, "_active_segmentation_volume", None)
-            if callable(active_segmentation_getter):
-                try:
-                    if active_segmentation_getter() is None:
-                        show_warning("No semantic or instance segmentation map is loaded.", parent=self)
-                        self._clear_deferred_close_inference_state()
-                        return False
-                except Exception:
-                    pass
-
-            while True:
-                dialog_result = open_save_segmentation_dialog(self)
-                if not dialog_result.accepted or not dialog_result.path or not dialog_result.format:
-                    self._clear_deferred_close_inference_state()
-                    return False
-                save_path = str(Path(dialog_result.path).expanduser())
-                if Path(save_path).exists():
-                    if not confirm_overwrite(save_path, parent=self):
-                        continue
-                self._set_deferred_close_with_background_inference(
-                    save_path=save_path,
-                    save_format=str(dialog_result.format),
-                )
-                return True
         self._clear_deferred_close_inference_state()
         return False
 
@@ -1194,6 +1184,9 @@ class MainWindow(QMainWindow):
         if self._instance_volume is not None:
             self._instance_volume = None
             self._instance_worker = None
+        self._last_saved_segmentation_path = None
+        self._last_saved_segmentation_kind = None
+        self._last_saved_bounding_boxes_path = None
         self._segmentation_editor = None
         self._pending_render_view_ids.clear()
         self._render_flush_scheduled = False
@@ -1260,6 +1253,8 @@ class MainWindow(QMainWindow):
             return False
         self._clear_picker_selection()
         self._annotation_kind = "semantic"
+        self._last_saved_segmentation_path = volume.loader.path
+        self._last_saved_segmentation_kind = "semantic"
         self._bbox_drag_staged_history_updates.clear()
         self._global_history.clear()
         editor = SegmentationEditor.from_volume(volume, kind="semantic")
@@ -1286,6 +1281,8 @@ class MainWindow(QMainWindow):
             return False
         self._clear_picker_selection()
         self._annotation_kind = "instance"
+        self._last_saved_segmentation_path = volume.loader.path
+        self._last_saved_segmentation_kind = "instance"
         self._bbox_drag_staged_history_updates.clear()
         self._global_history.clear()
         editor = SegmentationEditor.from_volume(volume, kind="instance")
@@ -1783,6 +1780,7 @@ class MainWindow(QMainWindow):
                 expected_shape=self._bbox_manager.volume_shape,
             )
             self._bbox_manager.replace_all(payload.boxes, selected_id=None, mark_clean=True)
+            self._last_saved_bounding_boxes_path = normalized_path
             # External replacement invalidates bbox command replay assumptions.
             self._bbox_drag_staged_history_updates.clear()
             self._global_history.clear()
@@ -1871,8 +1869,14 @@ class MainWindow(QMainWindow):
     def _handle_train_model_request(self) -> None:
         MainWindow._training_controller_for(self).handle_train_model_request()
 
+    def _handle_train_model_headless_close_request(self) -> None:
+        self._launch_headless_learning_job_and_close(kind="train")
+
     def _handle_segment_inference_request(self) -> None:
         MainWindow._inference_controller_for(self).handle_segment_inference_request()
+
+    def _handle_segment_inference_headless_close_request(self) -> None:
+        self._launch_headless_learning_job_and_close(kind="inference")
 
     def _handle_stop_inference_request(self) -> None:
         MainWindow._inference_controller_for(self).handle_stop_inference_request()
@@ -1894,6 +1898,355 @@ class MainWindow(QMainWindow):
             MainWindow._apply_training_parameters(self, parameters)
         except Exception as exc:
             show_warning(str(exc), parent=self)
+
+    def _launch_headless_learning_job_and_close(self, *, kind: str) -> bool:
+        normalized_kind = str(kind).strip().lower()
+        if normalized_kind not in {"train", "inference"}:
+            raise ValueError(f"Unsupported headless job kind: {kind!r}")
+        if MainWindow._inference_navigation_lock_active(self):
+            return False
+        if self._abort_if_learning_training_running():
+            return False
+
+        job_dir = self._create_headless_job_dir(normalized_kind)
+        try:
+            common_inputs = self._prepare_headless_common_inputs()
+            input_checkpoint_path = self._prepare_headless_input_checkpoint(
+                kind=normalized_kind,
+                job_dir=job_dir,
+            )
+            if normalized_kind == "train":
+                spec = self._build_headless_training_spec(
+                    job_dir=job_dir,
+                    input_checkpoint_path=input_checkpoint_path,
+                    **common_inputs,
+                )
+            else:
+                spec = self._build_headless_inference_spec(
+                    job_dir=job_dir,
+                    input_checkpoint_path=input_checkpoint_path,
+                    **common_inputs,
+                )
+            job_path = save_headless_job_spec(spec, str(job_dir / "job.json"))
+            self._spawn_headless_after_ui_exit(job_path)
+        except Exception as exc:
+            show_warning(_exception_message(exc), parent=self)
+            return False
+
+        self._release_ui_state_for_headless_close()
+        self._headless_close_requested = True
+        self.close()
+        return True
+
+    def _release_ui_state_for_headless_close(self) -> None:
+        self._release_learning_state_for_headless_close()
+        self._close_loaded_volumes_for_headless_close()
+        self._segmentation_editor = None
+        self._semantic_worker = None
+        self._instance_worker = None
+        self._io_worker = None
+        self._pending_render_view_ids.clear()
+        self._pending_annotation_peer_view_ids.clear()
+        self._annotation_dirty_views.clear()
+        self._bbox_pending_peer_view_ids.clear()
+        self._bbox_drag_staged_history_updates.clear()
+        self._global_history.clear()
+
+    def _release_learning_state_for_headless_close(self) -> None:
+        session = getattr(self, "_learning_session", None)
+        for method_name in (
+            "clear_dataloader_runtime",
+            "clear_eval_runtimes_by_box_id",
+            "clear_model_runtime",
+            "clear_bbox_batch",
+            "clear_label_space",
+        ):
+            method = getattr(session, method_name, None)
+            if callable(method):
+                try:
+                    method()
+                except Exception:
+                    _LOGGER.debug(
+                        "Failed to clear learning session state during headless close: %s",
+                        method_name,
+                        exc_info=True,
+                    )
+        for clear_func in (
+            clear_current_learning_dataloader_runtime,
+            clear_current_learning_eval_runtimes_by_box_id,
+            clear_current_learning_model_runtime,
+            clear_current_learning_bbox_batch,
+            clear_current_learning_label_space,
+        ):
+            try:
+                clear_func()
+            except Exception:
+                _LOGGER.debug(
+                    "Failed to clear global learning state during headless close",
+                    exc_info=True,
+                )
+
+    def _close_loaded_volumes_for_headless_close(self) -> None:
+        seen_ids = set()
+        for attr_name in ("_raw_volume", "_semantic_volume", "_instance_volume"):
+            volume = getattr(self, attr_name, None)
+            if volume is None:
+                setattr(self, attr_name, None)
+                continue
+            volume_id = id(volume)
+            if volume_id not in seen_ids:
+                seen_ids.add(volume_id)
+                close = getattr(volume, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        _LOGGER.debug(
+                            "Failed to close %s during headless close",
+                            attr_name,
+                            exc_info=True,
+                        )
+            setattr(self, attr_name, None)
+
+    def _prepare_headless_common_inputs(self) -> Dict[str, str]:
+        raw_path = self._headless_reopenable_volume_path(self._raw_volume, name="raw volume")
+        active_segmentation = self._active_segmentation_volume()
+        if active_segmentation is None:
+            raise RuntimeError(
+                "Headless learning requires a saved semantic segmentation map."
+            )
+        segmentation_kind, _segmentation_volume = active_segmentation
+        if segmentation_kind != "semantic":
+            raise RuntimeError(
+                "Headless learning currently requires the active segmentation to be semantic."
+            )
+        segmentation_path = self._ensure_headless_segmentation_path()
+        bbox_path = self._ensure_headless_bounding_boxes_path()
+        return {
+            "raw_volume_path": raw_path,
+            "segmentation_path": segmentation_path,
+            "segmentation_kind": segmentation_kind,
+            "bbox_path": bbox_path,
+        }
+
+    def _build_headless_training_spec(
+        self,
+        *,
+        job_dir: Path,
+        raw_volume_path: str,
+        segmentation_path: str,
+        segmentation_kind: str,
+        bbox_path: str,
+        input_checkpoint_path: str,
+    ) -> HeadlessJobSpec:
+        self._require_headless_training_boxes()
+        dialog_result = open_save_model_checkpoint_dialog(
+            self,
+            retry_on_overwrite_decline=True,
+        )
+        if not dialog_result.accepted or not dialog_result.path:
+            raise RuntimeError("Headless training canceled: no output checkpoint selected.")
+        return HeadlessJobSpec(
+            kind="train",
+            raw_volume_path=raw_volume_path,
+            segmentation_path=segmentation_path,
+            segmentation_kind=cast(SegmentationKind, segmentation_kind),
+            bbox_path=bbox_path,
+            load_mode=self._load_mode,
+            cache_max_bytes=int(self._cache_max_bytes),
+            training_parameters=validate_training_parameters(self._training_parameters),
+            input_checkpoint_path=input_checkpoint_path,
+            output_checkpoint_path=str(Path(dialog_result.path).expanduser()),
+            job_dir=str(job_dir),
+            source_pid=os.getpid(),
+        )
+
+    def _build_headless_inference_spec(
+        self,
+        *,
+        job_dir: Path,
+        raw_volume_path: str,
+        segmentation_path: str,
+        segmentation_kind: str,
+        bbox_path: str,
+        input_checkpoint_path: str,
+    ) -> HeadlessJobSpec:
+        self._require_headless_inference_boxes()
+        while True:
+            dialog_result = open_save_segmentation_dialog(self)
+            if not dialog_result.accepted or not dialog_result.path or not dialog_result.format:
+                raise RuntimeError("Headless inference canceled: no output segmentation selected.")
+            output_path = str(Path(dialog_result.path).expanduser())
+            if Path(output_path).exists() and not confirm_overwrite(output_path, parent=self):
+                continue
+            return HeadlessJobSpec(
+                kind="inference",
+                raw_volume_path=raw_volume_path,
+                segmentation_path=segmentation_path,
+                segmentation_kind=cast(SegmentationKind, segmentation_kind),
+                bbox_path=bbox_path,
+                load_mode=self._load_mode,
+                cache_max_bytes=int(self._cache_max_bytes),
+                training_parameters=validate_training_parameters(self._training_parameters),
+                input_checkpoint_path=input_checkpoint_path,
+                output_segmentation_path=output_path,
+                output_segmentation_format=str(dialog_result.format),
+                job_dir=str(job_dir),
+                source_pid=os.getpid(),
+            )
+
+    def _prepare_headless_input_checkpoint(self, *, kind: str, job_dir: Path) -> str:
+        runtime = MainWindow._get_learning_model_runtime_for(self)
+        if runtime is None:
+            if kind == "train":
+                checkpoint_path = str(
+                    Path(_DEFAULT_TRAINING_FOUNDATION_CHECKPOINT_PATH).expanduser()
+                )
+                if Path(checkpoint_path).exists():
+                    return checkpoint_path
+            raise RuntimeError(
+                "Headless learning requires a loaded model runtime so the starting "
+                "checkpoint can be saved for the job."
+            )
+        checkpoint_path = str(job_dir / "input_model.cp")
+        self._save_model_runtime_checkpoint(runtime, checkpoint_path=checkpoint_path)
+        return checkpoint_path
+
+    def _ensure_headless_segmentation_path(self) -> str:
+        active = self._active_segmentation_volume()
+        if active is None:
+            raise RuntimeError("No semantic segmentation map is loaded.")
+        kind, volume = active
+        tracked_path = (
+            self._last_saved_segmentation_path
+            if self._last_saved_segmentation_kind == kind
+            else None
+        )
+        if (
+            not self._has_unsaved_segmentation_changes()
+            and self._is_headless_reopenable_path(tracked_path)
+        ):
+            return str(tracked_path)
+        if (
+            not self._has_unsaved_segmentation_changes()
+            and self._is_headless_reopenable_path(volume.loader.path)
+        ):
+            return str(volume.loader.path)
+
+        show_info(
+            (
+                "The current segmentation must be saved before launching a "
+                "headless job and closing the UI because the headless job "
+                "reloads the segmentation from disk after the UI exits."
+            ),
+            parent=self,
+        )
+        if not self._save_active_segmentation_with_dialog():
+            raise RuntimeError("Headless job canceled: segmentation was not saved.")
+        if not self._is_headless_reopenable_path(self._last_saved_segmentation_path):
+            raise RuntimeError("Saved segmentation path cannot be reopened by the headless job.")
+        return str(self._last_saved_segmentation_path)
+
+    def _ensure_headless_bounding_boxes_path(self) -> str:
+        if (
+            not self._has_unsaved_bounding_box_changes()
+            and self._is_headless_reopenable_path(self._last_saved_bounding_boxes_path)
+        ):
+            return str(self._last_saved_bounding_boxes_path)
+        show_info(
+            (
+                "The current bounding boxes must be saved before launching a "
+                "headless job and closing the UI because the headless job "
+                "reloads the boxes from disk after the UI exits."
+            ),
+            parent=self,
+        )
+        if not self._save_bounding_boxes_with_dialog():
+            raise RuntimeError("Headless job canceled: bounding boxes were not saved.")
+        if not self._is_headless_reopenable_path(self._last_saved_bounding_boxes_path):
+            raise RuntimeError("Saved bounding-box path cannot be reopened by the headless job.")
+        return str(self._last_saved_bounding_boxes_path)
+
+    def _require_headless_training_boxes(self) -> None:
+        boxes = tuple(self._bbox_manager.boxes())
+        if not any(str(box.label) == "train" for box in boxes):
+            raise RuntimeError("Headless training requires at least one bbox labeled 'train'.")
+        if not any(str(box.label) == "validation" for box in boxes):
+            raise RuntimeError(
+                "Headless training requires at least one bbox labeled 'validation'."
+            )
+
+    def _require_headless_inference_boxes(self) -> None:
+        ordered_box_ids = tuple(row.box_id for row in self.bottom_panel.state.bbox_rows)
+        boxes_by_id = {box.id: box for box in self._bbox_manager.boxes()}
+        inference_boxes = _ordered_inference_boxes(
+            ordered_box_ids=ordered_box_ids,
+            boxes_by_id=boxes_by_id,
+        )
+        if not inference_boxes:
+            raise RuntimeError(
+                "Headless inference requires at least one bbox labeled 'inference'."
+            )
+        overlapping_pairs = _find_overlapping_box_id_pairs(inference_boxes)
+        if overlapping_pairs:
+            formatted = ", ".join(f"{a}/{b}" for a, b in overlapping_pairs)
+            raise RuntimeError(
+                "Headless inference bboxes must not overlap. Overlapping pairs: "
+                f"{formatted}"
+            )
+
+    def _headless_reopenable_volume_path(
+        self,
+        volume: Optional[VolumeData],
+        *,
+        name: str,
+    ) -> str:
+        if volume is None:
+            raise RuntimeError(f"Headless job requires a loaded {name}.")
+        path = getattr(getattr(volume, "loader", None), "path", None)
+        if not self._is_headless_reopenable_path(path):
+            raise RuntimeError(f"The {name} path cannot be reopened by the headless job.")
+        return str(path)
+
+    @staticmethod
+    def _is_headless_reopenable_path(path: object) -> bool:
+        if not isinstance(path, str) or not path.strip():
+            return False
+        path_parts = str(path).split("::")
+        base_path = path_parts[0]
+        for qualifier in path_parts[1:]:
+            normalized = qualifier.strip().lower()
+            if normalized == "editable" or normalized.startswith("generated-"):
+                return False
+        return bool(base_path and Path(base_path).expanduser().exists())
+
+    @staticmethod
+    def _create_headless_job_dir(kind: str) -> Path:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        job_dir = Path(".headless-job") / f"{timestamp}-{kind}-{os.getpid()}"
+        job_dir.mkdir(parents=True, exist_ok=False)
+        return job_dir
+
+    @staticmethod
+    def _spawn_headless_after_ui_exit(job_path: str) -> subprocess.Popen:
+        repo_root = Path(__file__).resolve().parents[2]
+        launcher_path = repo_root / "launch_headless_after_ui_exit.py"
+        runner_path = repo_root / "run_headless_job.py"
+        command = [
+            sys.executable,
+            str(launcher_path),
+            "--wait-pid",
+            str(os.getpid()),
+            "--job",
+            str(job_path),
+            "--python",
+            sys.executable,
+            "--runner",
+            str(runner_path),
+            "--log-level",
+            "INFO",
+        ]
+        return subprocess.Popen(command, close_fds=True, start_new_session=True)
 
     @staticmethod
     def _training_parameters_require_learning_state_rebuild(
@@ -2581,6 +2934,7 @@ class MainWindow(QMainWindow):
                 return False
 
             box_count = len(self._bbox_manager.boxes())
+            self._last_saved_bounding_boxes_path = save_path
             self._mark_bounding_boxes_clean()
             show_info(
                 f"Saved {box_count} bounding box(es) to {save_path}",
@@ -4034,6 +4388,8 @@ class MainWindow(QMainWindow):
                 return False
 
             self._mark_segmentation_clean()
+            self._last_saved_segmentation_path = save_path
+            self._last_saved_segmentation_kind = kind
             self._refresh_annotation_ui_state()
             show_info(f"Saved {kind} segmentation to {save_path}", parent=self)
             return True

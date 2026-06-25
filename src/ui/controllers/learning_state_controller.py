@@ -3,8 +3,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable, Dict, Mapping, Optional, Protocol, Tuple
 
-import numpy as np
-
 from ...io import extract_learning_bboxes_in_memory
 from ...learning import (
     DEFAULT_TRAINING_PARAMETERS,
@@ -16,6 +14,8 @@ from ...learning import (
     get_current_learning_bbox_batch,
     get_current_learning_dataloader_runtime,
     get_current_learning_eval_runtimes_by_box_id,
+    prepare_learning_state_from_volumes,
+    semantic_label_space_source_signature,
     set_current_learning_label_space,
     validate_training_parameters,
 )
@@ -48,6 +48,9 @@ class LearningStateContext(Protocol):
 class LearningStateControllerOperations:
     show_warning: Callable[..., object] = show_warning
     show_info: Callable[..., object] = show_info
+    prepare_learning_state_from_volumes: Callable[..., object] = (
+        prepare_learning_state_from_volumes
+    )
     extract_learning_bboxes_in_memory: Callable[..., object] = (
         extract_learning_bboxes_in_memory
     )
@@ -103,20 +106,14 @@ class LearningStateController:
         semantic_kind: str,
         semantic_volume: object,
     ) -> Tuple[object, ...]:
-        semantic_source_path: Optional[str] = None
-        loader = getattr(semantic_volume, "loader", None)
-        path_obj = getattr(loader, "path", None)
-        if isinstance(path_obj, str) and path_obj.strip():
-            semantic_source_path = str(path_obj)
-
         semantic_state_id: Optional[int] = None
         editor = getattr(self.context, "_segmentation_editor", None)
         if editor is not None:
             semantic_state_id = int(editor.state_id)
-        return (
-            str(semantic_kind),
-            semantic_source_path,
-            semantic_state_id,
+        return semantic_label_space_source_signature(
+            semantic_kind=semantic_kind,
+            semantic_volume=semantic_volume,
+            semantic_state_id=semantic_state_id,
         )
 
     def ensure_for_action(self, action: LearningStateAction) -> bool:
@@ -262,81 +259,42 @@ class LearningStateController:
             )
             return False
 
-        training_parameters = self.training_parameters()
         try:
-            raw_array = np.asarray(
-                context._raw_volume.get_chunk((slice(None), slice(None), slice(None)))
-            )
-            segmentation_array = np.asarray(
-                seg_volume.get_chunk((slice(None), slice(None), slice(None)))
-            )
-            label_space = (
-                self.operations.derive_label_space_from_semantic_segmentation(
-                    segmentation_array,
-                    source_signature=self.semantic_label_space_source_signature(
-                        semantic_kind=seg_kind,
-                        semantic_volume=seg_volume,
-                    ),
-                )
-            )
-            self.operations.set_learning_label_space(context, label_space)
-            outcome = self.operations.extract_learning_bboxes_in_memory(
-                raw_array,
-                segmentation_array,
+            result = self.operations.prepare_learning_state_from_volumes(
+                raw_volume=context._raw_volume,
+                segmentation_volume=seg_volume,
+                segmentation_kind=seg_kind,
                 boxes_by_id=boxes_by_id,
                 ordered_box_ids=learning_box_ids,
-                learning_minivol_per_epoch=training_parameters.patches_per_epoch,
-                learning_batch_size=training_parameters.training_batch_size,
-                learning_num_workers=8,
-                learning_pin_memory=True,
-                learning_drop_last=True,
-                build_eval_dataloaders=True,
-                eval_batch_size=training_parameters.validation_batch_size,
-                eval_num_workers=8,
-                eval_pin_memory=True,
-                eval_drop_last=False,
+                training_parameters=self.training_parameters(),
+                require_class_weights=bool(require_class_weights),
+                label_space_source_signature=self.semantic_label_space_source_signature(
+                    semantic_kind=seg_kind,
+                    semantic_volume=seg_volume,
+                ),
+                extract_learning_bboxes_in_memory_fn=(
+                    self.operations.extract_learning_bboxes_in_memory
+                ),
+                compute_class_weights_fn=(
+                    self.operations.compute_and_store_current_learning_class_weights
+                ),
+                compute_label_coverage_fn=self.operations.compute_learning_label_coverage,
+                format_label_coverage_warning_fn=(
+                    self.operations.format_learning_label_coverage_warning
+                ),
+                derive_label_space_fn=(
+                    self.operations.derive_label_space_from_semantic_segmentation
+                ),
+                clear_learning_bbox_batch_fn=lambda: self.operations.clear_learning_bbox_batch(
+                    context
+                ),
+                get_learning_bbox_batch_fn=lambda: self.operations.get_learning_bbox_batch(
+                    context
+                ),
                 **self.operations.learning_session_kwargs(context),
             )
-            class_weights = None
-            if bool(require_class_weights):
-                class_weights = (
-                    self.operations.compute_and_store_current_learning_class_weights(
-                        max_weight=100.0,
-                        device="cuda:0",
-                        **self.operations.learning_session_kwargs(context),
-                    )
-                )
-            label_coverage_warning = None
-            try:
-                label_coverage = self.operations.compute_learning_label_coverage(
-                    **self.operations.learning_session_kwargs(context),
-                )
-                label_coverage_warning = (
-                    self.operations.format_learning_label_coverage_warning(
-                        label_coverage
-                    )
-                )
-            except ValueError as exc:
-                if not str(exc).startswith("No "):
-                    raise
-            self.operations.clear_learning_bbox_batch(context)
-            residual_batch = self.operations.get_learning_bbox_batch(context)
-            residual_entry_count = (
-                int(residual_batch.size) if residual_batch is not None else 0
-            )
         except Exception as exc:
-            self.operations.clear_learning_bbox_batch(context)
             self.operations.show_warning(str(exc), parent=parent)
-            return False
-
-        if residual_entry_count > 0:
-            self.operations.show_warning(
-                (
-                    "Dataset build completed, but temporary learning tensors were "
-                    f"not fully released ({residual_entry_count} entries remain in session)."
-                ),
-                parent=parent,
-            )
             return False
 
         current_signature_getter = getattr(context, "_current_learning_state_signature", None)
@@ -349,8 +307,8 @@ class LearningStateController:
                 context._learning_state_signature = None
         context._learning_state_stale = False
 
-        if label_coverage_warning:
-            self.operations.show_warning(label_coverage_warning, parent=parent)
+        if result.label_coverage_warning:
+            self.operations.show_warning(result.label_coverage_warning, parent=parent)
 
         if not bool(show_success_dialog):
             return True
@@ -359,30 +317,30 @@ class LearningStateController:
             "Built bounding box learning datasets and buffers in memory.",
             (
                 "- Temporary tensor entries built then released: "
-                f"{outcome.tensor_entry_count}"
+                f"{result.outcome.tensor_entry_count}"
             ),
         ]
-        if outcome.learning_train_box_ids:
+        if result.outcome.learning_train_box_ids:
             summary_lines.append(
                 (
                     "- Learning DataLoader: "
-                    f"{len(outcome.learning_train_box_ids)} train bboxes, "
-                    f"batch_size={outcome.learning_batch_size}, "
-                    f"num_workers={outcome.learning_num_workers}"
+                    f"{len(result.outcome.learning_train_box_ids)} train bboxes, "
+                    f"batch_size={result.outcome.learning_batch_size}, "
+                    f"num_workers={result.outcome.learning_num_workers}"
                 )
             )
-        if outcome.eval_validation_box_ids:
+        if result.outcome.eval_validation_box_ids:
             summary_lines.append(
                 (
                     "- Evaluation DataLoaders: "
-                    f"{len(outcome.eval_validation_box_ids)} validation bboxes, "
-                    f"batch_size={outcome.eval_batch_size}, "
-                    f"num_workers={outcome.eval_num_workers}"
+                    f"{len(result.outcome.eval_validation_box_ids)} validation bboxes, "
+                    f"batch_size={result.outcome.eval_batch_size}, "
+                    f"num_workers={result.outcome.eval_num_workers}"
                 )
             )
-        if class_weights is not None:
+        if result.class_weights is not None:
             formatted_weights = self.operations.format_class_weights_for_summary(
-                class_weights
+                result.class_weights
             )
             if formatted_weights is None:
                 summary_lines.append("- Loss class weights initialized on cuda:0.")

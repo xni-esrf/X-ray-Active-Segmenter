@@ -1036,7 +1036,7 @@ class MainWindowAnnotationToolShortcutPolicyTests(unittest.TestCase):
         self.assertEqual(actions, ["set_stop_mode", "request_stop"])
 
     @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
-    def test_prepare_close_while_inference_continue_in_background_sets_deferred_save_target(self) -> None:
+    def test_prepare_close_while_inference_unexpected_continue_decision_cancels(self) -> None:
         actions: list[str] = []
         window_like = SimpleNamespace(
             _clear_deferred_close_inference_state=lambda: actions.append("clear"),
@@ -1056,69 +1056,9 @@ class MainWindowAnnotationToolShortcutPolicyTests(unittest.TestCase):
         ) as save_dialog_mock:
             should_close = MainWindow._maybe_prepare_close_while_inference(window_like)
 
-        self.assertTrue(should_close)
-        self.assertEqual(actions, ["set_bg_mode:/tmp/background_inference.npz:npz"])
-        save_dialog_mock.assert_called_once_with(window_like)
-
-    @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
-    def test_prepare_close_while_inference_continue_in_background_cancelled_picker_keeps_window_open(self) -> None:
-        actions: list[str] = []
-        window_like = SimpleNamespace(
-            _clear_deferred_close_inference_state=lambda: actions.append("clear"),
-            _set_deferred_close_after_stop_inference=lambda: actions.append("set_stop_mode"),
-            _set_deferred_close_with_background_inference=lambda **kwargs: actions.append(
-                f"set_bg_mode:{kwargs.get('save_path')}:{kwargs.get('save_format')}"
-            ),
-            _request_learning_inference_stop=lambda: actions.append("request_stop"),
-        )
-
-        with patch(
-            "src.ui.main_window.ask_inference_running_close_decision",
-            return_value=main_window_module.InferenceCloseDecision.CONTINUE_IN_BACKGROUND,
-        ), patch(
-            "src.ui.main_window.open_save_segmentation_dialog",
-            return_value=SimpleNamespace(accepted=False, path=None, format=None),
-        ):
-            should_close = MainWindow._maybe_prepare_close_while_inference(window_like)
-
         self.assertFalse(should_close)
         self.assertEqual(actions, ["clear"])
-
-    @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
-    def test_prepare_close_while_inference_continue_in_background_reprompts_when_overwrite_declined(self) -> None:
-        actions: list[str] = []
-        window_like = SimpleNamespace(
-            _clear_deferred_close_inference_state=lambda: actions.append("clear"),
-            _set_deferred_close_after_stop_inference=lambda: actions.append("set_stop_mode"),
-            _set_deferred_close_with_background_inference=lambda **kwargs: actions.append(
-                f"set_bg_mode:{kwargs.get('save_path')}:{kwargs.get('save_format')}"
-            ),
-            _request_learning_inference_stop=lambda: actions.append("request_stop"),
-        )
-
-        with patch(
-            "src.ui.main_window.ask_inference_running_close_decision",
-            return_value=main_window_module.InferenceCloseDecision.CONTINUE_IN_BACKGROUND,
-        ):
-            with patch(
-                "src.ui.main_window.open_save_segmentation_dialog",
-                side_effect=[
-                    SimpleNamespace(accepted=True, path="/tmp/existing_background.npz", format="npz"),
-                    SimpleNamespace(accepted=True, path="/tmp/new_background.npz", format="npz"),
-                ],
-            ) as save_dialog_mock, patch(
-                "src.ui.main_window.Path.exists",
-                side_effect=[True, False],
-            ), patch(
-                "src.ui.main_window.confirm_overwrite",
-                return_value=False,
-            ) as confirm_mock:
-                should_close = MainWindow._maybe_prepare_close_while_inference(window_like)
-
-        self.assertTrue(should_close)
-        self.assertEqual(actions, ["set_bg_mode:/tmp/new_background.npz:npz"])
-        self.assertEqual(save_dialog_mock.call_count, 2)
-        confirm_mock.assert_called_once_with("/tmp/existing_background.npz", parent=window_like)
+        save_dialog_mock.assert_not_called()
 
     @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
     def test_clear_and_set_deferred_close_inference_state_helpers(self) -> None:
@@ -1221,7 +1161,7 @@ class MainWindowAnnotationToolShortcutPolicyTests(unittest.TestCase):
         self.assertEqual(actions, ["set_stop_mode", "request_stop"])
 
     @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
-    def test_prepare_close_while_training_continue_configures_background_checkpoint(self) -> None:
+    def test_prepare_close_while_training_unexpected_continue_decision_cancels(self) -> None:
         actions: list[tuple[str, object]] = []
         window_like = SimpleNamespace(
             _clear_deferred_close_training_state=lambda: actions.append(("clear", None)),
@@ -1241,34 +1181,9 @@ class MainWindowAnnotationToolShortcutPolicyTests(unittest.TestCase):
         ) as save_dialog_mock:
             should_close = MainWindow._maybe_prepare_close_while_training(window_like)
 
-        self.assertTrue(should_close)
-        self.assertEqual(actions, [("set_bg_mode", "/tmp/background_best.cp")])
-        save_dialog_mock.assert_called_once_with(
-            window_like,
-            retry_on_overwrite_decline=True,
-        )
-
-    @unittest.skipUnless(MainWindow is not None and main_window_module is not None, "MainWindow is not available")
-    def test_prepare_close_while_training_continue_cancelled_checkpoint_picker_keeps_window_open(self) -> None:
-        actions: list[str] = []
-        window_like = SimpleNamespace(
-            _clear_deferred_close_training_state=lambda: actions.append("clear"),
-            _set_deferred_close_after_stop_training=lambda: actions.append("set_stop_mode"),
-            _request_learning_training_stop=lambda: actions.append("request_stop"),
-            _set_deferred_close_with_background_training=lambda **_: actions.append("set_bg_mode"),
-        )
-
-        with patch(
-            "src.ui.main_window.ask_training_running_close_decision",
-            return_value=main_window_module.TrainingCloseDecision.CONTINUE_IN_BACKGROUND,
-        ), patch(
-            "src.ui.main_window.open_save_model_checkpoint_dialog",
-            return_value=SimpleNamespace(accepted=False, path=None),
-        ):
-            should_close = MainWindow._maybe_prepare_close_while_training(window_like)
-
         self.assertFalse(should_close)
-        self.assertEqual(actions, ["clear"])
+        self.assertEqual(actions, [("clear", None)])
+        save_dialog_mock.assert_not_called()
 
 
 if __name__ == "__main__":

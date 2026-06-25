@@ -224,6 +224,9 @@ class TrainingCloseDecisionDialogTests(unittest.TestCase):
     @staticmethod
     def _fake_message_box_class(*, clicked_label: Optional[str]):
         class _FakeMessageBox:
+            buttons: list[str] = []
+            informative_text: Optional[str] = None
+
             class Icon:
                 Warning = object()
 
@@ -244,11 +247,12 @@ class TrainingCloseDecisionDialogTests(unittest.TestCase):
             def setText(self, _text: str) -> None:
                 pass
 
-            def setInformativeText(self, _text: str) -> None:
-                pass
+            def setInformativeText(self, text: str) -> None:
+                type(self).informative_text = text
 
             def addButton(self, text: str, _role):
                 button = object()
+                type(self).buttons.append(text)
                 if clicked_label is not None and text == clicked_label:
                     self._clicked = button
                 return button
@@ -272,11 +276,13 @@ class TrainingCloseDecisionDialogTests(unittest.TestCase):
             result = ask_training_running_close_decision(parent=None)
         self.assertEqual(result, TrainingCloseDecision.STOP_AND_CLOSE)
 
-    def test_returns_continue_in_background_when_continue_button_clicked(self) -> None:
+    def test_no_longer_offers_continue_in_background_from_close_dialog(self) -> None:
         fake_box = self._fake_message_box_class(clicked_label="Continue in background")
         with patch("src.ui.dialogs.QMessageBox", fake_box):
             result = ask_training_running_close_decision(parent=None)
-        self.assertEqual(result, TrainingCloseDecision.CONTINUE_IN_BACKGROUND)
+        self.assertEqual(result, TrainingCloseDecision.CANCEL)
+        self.assertNotIn("Continue in background", fake_box.buttons)
+        self.assertIn("Train Headless and Close", fake_box.informative_text or "")
 
     def test_returns_cancel_when_cancel_button_clicked(self) -> None:
         fake_box = self._fake_message_box_class(clicked_label="Cancel")
@@ -299,6 +305,9 @@ class InferenceCloseDecisionDialogTests(unittest.TestCase):
     @staticmethod
     def _fake_message_box_class(*, clicked_label: Optional[str]):
         class _FakeMessageBox:
+            buttons: list[str] = []
+            informative_text: Optional[str] = None
+
             class Icon:
                 Warning = object()
 
@@ -319,11 +328,12 @@ class InferenceCloseDecisionDialogTests(unittest.TestCase):
             def setText(self, _text: str) -> None:
                 pass
 
-            def setInformativeText(self, _text: str) -> None:
-                pass
+            def setInformativeText(self, text: str) -> None:
+                type(self).informative_text = text
 
             def addButton(self, text: str, _role):
                 button = object()
+                type(self).buttons.append(text)
                 if clicked_label is not None and text == clicked_label:
                     self._clicked = button
                 return button
@@ -347,11 +357,16 @@ class InferenceCloseDecisionDialogTests(unittest.TestCase):
             result = ask_inference_running_close_decision(parent=None)
         self.assertEqual(result, InferenceCloseDecision.STOP_AND_CLOSE)
 
-    def test_returns_continue_in_background_when_continue_button_clicked(self) -> None:
+    def test_no_longer_offers_continue_in_background_from_close_dialog(self) -> None:
         fake_box = self._fake_message_box_class(clicked_label="Continue in background")
         with patch("src.ui.dialogs.QMessageBox", fake_box):
             result = ask_inference_running_close_decision(parent=None)
-        self.assertEqual(result, InferenceCloseDecision.CONTINUE_IN_BACKGROUND)
+        self.assertEqual(result, InferenceCloseDecision.CANCEL)
+        self.assertNotIn("Continue in background", fake_box.buttons)
+        self.assertIn(
+            "Segment Inference Headless and Close",
+            fake_box.informative_text or "",
+        )
 
     def test_returns_cancel_when_cancel_button_clicked(self) -> None:
         fake_box = self._fake_message_box_class(clicked_label="Cancel")

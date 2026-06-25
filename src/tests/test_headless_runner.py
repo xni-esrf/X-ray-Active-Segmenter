@@ -1,0 +1,386 @@
+from __future__ import annotations
+
+from pathlib import Path
+from tempfile import TemporaryDirectory
+import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
+
+import numpy as np
+
+from src.bbox import BoundingBox, save_bounding_boxes
+from src.headless.job_spec import HeadlessJobSpec, save_headless_job_spec
+from src.headless.runner import main as headless_main
+from src.learning.inference import LearningInferencePrediction
+import src.headless.runner as runner_module
+
+
+class HeadlessRunnerTests(unittest.TestCase):
+    def test_validate_only_reopens_inputs(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_path = root / "raw.npy"
+            seg_path = root / "seg.npy"
+            bbox_path = root / "boxes.json"
+            checkpoint_path = root / "input.cp"
+            job_dir = root / ".headless-job"
+            job_path = job_dir / "job.json"
+
+            np.save(raw_path, np.arange(27, dtype=np.float32).reshape(3, 3, 3))
+            np.save(seg_path, np.ones((3, 3, 3), dtype=np.uint8))
+            checkpoint_path.write_bytes(b"checkpoint")
+            save_bounding_boxes(
+                str(bbox_path),
+                volume_shape=(3, 3, 3),
+                boxes=(
+                    BoundingBox.from_bounds(
+                        box_id="box-1",
+                        z0=0,
+                        z1=2,
+                        y0=0,
+                        y1=2,
+                        x0=0,
+                        x1=2,
+                        label="train",
+                        volume_shape=(3, 3, 3),
+                    ),
+                ),
+            )
+            spec = HeadlessJobSpec(
+                kind="train",
+                raw_volume_path=str(raw_path),
+                segmentation_path=str(seg_path),
+                segmentation_kind="semantic",
+                bbox_path=str(bbox_path),
+                load_mode="lazy",
+                cache_max_bytes=1024 * 1024,
+                input_checkpoint_path=str(checkpoint_path),
+                output_checkpoint_path=str(root / "trained.cp"),
+                job_dir=str(job_dir),
+            )
+            save_headless_job_spec(spec, str(job_path))
+
+            exit_code = headless_main([str(job_path), "--validate-only"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((job_dir / "headless.log").exists())
+
+    def test_validate_only_reopens_inference_inputs(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_path = root / "raw.npy"
+            seg_path = root / "seg.npy"
+            bbox_path = root / "boxes.json"
+            checkpoint_path = root / "input.cp"
+            job_dir = root / ".headless-job"
+            job_path = job_dir / "job.json"
+
+            np.save(raw_path, np.arange(27, dtype=np.float32).reshape(3, 3, 3))
+            np.save(seg_path, np.zeros((3, 3, 3), dtype=np.uint8))
+            checkpoint_path.write_bytes(b"checkpoint")
+            save_bounding_boxes(
+                str(bbox_path),
+                volume_shape=(3, 3, 3),
+                boxes=(
+                    BoundingBox.from_bounds(
+                        box_id="infer-box",
+                        z0=0,
+                        z1=2,
+                        y0=0,
+                        y1=2,
+                        x0=0,
+                        x1=2,
+                        label="inference",
+                        volume_shape=(3, 3, 3),
+                    ),
+                ),
+            )
+            spec = HeadlessJobSpec(
+                kind="inference",
+                raw_volume_path=str(raw_path),
+                segmentation_path=str(seg_path),
+                segmentation_kind="semantic",
+                bbox_path=str(bbox_path),
+                load_mode="lazy",
+                cache_max_bytes=1024 * 1024,
+                input_checkpoint_path=str(checkpoint_path),
+                output_segmentation_path=str(root / "out.npy"),
+                output_segmentation_format="npy",
+                job_dir=str(job_dir),
+            )
+            save_headless_job_spec(spec, str(job_path))
+
+            exit_code = headless_main([str(job_path), "--validate-only"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((job_dir / "headless.log").exists())
+
+    def test_non_validate_train_returns_not_implemented_code(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_path = root / "raw.npy"
+            seg_path = root / "seg.npy"
+            bbox_path = root / "boxes.json"
+            checkpoint_path = root / "input.cp"
+            job_dir = root / ".headless-job"
+            job_path = job_dir / "job.json"
+
+            np.save(raw_path, np.zeros((2, 2, 2), dtype=np.float32))
+            np.save(seg_path, np.zeros((2, 2, 2), dtype=np.uint8))
+            checkpoint_path.write_bytes(b"checkpoint")
+            save_bounding_boxes(
+                str(bbox_path),
+                volume_shape=(2, 2, 2),
+                boxes=(
+                    BoundingBox.from_bounds(
+                        box_id="box-1",
+                        z0=0,
+                        z1=1,
+                        y0=0,
+                        y1=1,
+                        x0=0,
+                        x1=1,
+                        label="train",
+                        volume_shape=(2, 2, 2),
+                    ),
+                ),
+            )
+            spec = HeadlessJobSpec(
+                kind="train",
+                raw_volume_path=str(raw_path),
+                segmentation_path=str(seg_path),
+                segmentation_kind="semantic",
+                bbox_path=str(bbox_path),
+                input_checkpoint_path=str(checkpoint_path),
+                output_checkpoint_path=str(root / "trained.cp"),
+                job_dir=str(job_dir),
+            )
+            save_headless_job_spec(spec, str(job_path))
+
+            exit_code = headless_main([str(job_path)])
+
+            self.assertEqual(exit_code, 1)
+
+    def test_training_job_orchestration_uses_session_checkpoint_and_saves_output(self) -> None:
+        sources = SimpleNamespace(
+            raw_volume=SimpleNamespace(shape=(2, 2, 2), dtype="float16"),
+            segmentation_volume=SimpleNamespace(shape=(2, 2, 2), dtype="uint8"),
+            boxes_by_id={"box-1": object()},
+            close=lambda: None,
+        )
+        context = SimpleNamespace(sources=sources)
+        label_space = SimpleNamespace(
+            label_values=(0, 1),
+            background_label=0,
+            mask_label=-100,
+            source_signature=("semantic", "seg.npy", None),
+        )
+        prepared_state = SimpleNamespace(
+            label_space=label_space,
+            label_coverage_warning=None,
+            train_box_ids=("train-box",),
+            validation_box_ids=("val-box",),
+        )
+        runtime = SimpleNamespace(
+            hyperparameters={},
+            checkpoint_path="input.cp",
+        )
+        train_runtime = SimpleNamespace(train_count=3)
+        preconditions = SimpleNamespace(
+            train_runtime=train_runtime,
+            model_runtime=runtime,
+        )
+        result = SimpleNamespace(
+            stop_reason="early_stop",
+            completed_epoch_count=2,
+            total_epoch_count=6,
+            best_epoch=2,
+            best_weighted_mean_dice=0.75,
+        )
+        spec = HeadlessJobSpec(
+            kind="train",
+            raw_volume_path="raw.npy",
+            segmentation_path="seg.npy",
+            segmentation_kind="semantic",
+            bbox_path="boxes.json",
+            input_checkpoint_path="input.cp",
+            output_checkpoint_path="output.cp",
+        )
+
+        with patch.object(
+            runner_module,
+            "prepare_learning_state_from_sources",
+            return_value=prepared_state,
+        ) as prepare_mock, patch.object(
+            runner_module,
+            "validate_foundation_model_instantiation_preconditions",
+            return_value=SimpleNamespace(num_classes=2, device_ids=(0, 1)),
+        ) as instantiate_preconditions_mock, patch.object(
+            runner_module,
+            "instantiate_model_runtime_from_checkpoint",
+            return_value=runtime,
+        ) as instantiate_mock, patch.object(
+            runner_module,
+            "validate_training_preconditions_for_session",
+            return_value=preconditions,
+        ) as training_preconditions_mock, patch.object(
+            runner_module,
+            "train_learning_model_with_validation_loop",
+            return_value=result,
+        ) as train_mock, patch.object(
+            runner_module,
+            "save_foundation_model_checkpoint",
+            return_value="output.cp",
+        ) as save_mock:
+            runner_module._run_training_job(spec, context)
+
+        prepare_mock.assert_called_once()
+        self.assertTrue(prepare_mock.call_args.kwargs["require_class_weights"])
+        instantiate_preconditions_mock.assert_called_once()
+        instantiate_mock.assert_called_once()
+        self.assertEqual(instantiate_mock.call_args.kwargs["num_classes"], 2)
+        self.assertEqual(instantiate_mock.call_args.kwargs["device_ids"], (0, 1))
+        training_preconditions_mock.assert_called_once()
+        train_mock.assert_called_once()
+        self.assertEqual(
+            train_mock.call_args.kwargs["early_stop_patience"],
+            spec.training_parameters.early_stopping_patience,
+        )
+        save_mock.assert_called_once_with(runtime=runtime, checkpoint_path="output.cp")
+        self.assertEqual(runtime.hyperparameters["label_values"], (0, 1))
+        self.assertTrue(runtime.hyperparameters["trained_in_app"])
+        self.assertEqual(runtime.hyperparameters["training_run_count"], 1)
+
+    def test_inference_job_orchestration_loads_checkpoint_applies_predictions_and_saves_output(self) -> None:
+        inference_box = BoundingBox.from_bounds(
+            box_id="infer-box",
+            z0=0,
+            z1=1,
+            y0=0,
+            y1=2,
+            x0=0,
+            x1=2,
+            label="inference",
+            volume_shape=(2, 2, 2),
+        )
+        train_box = BoundingBox.from_bounds(
+            box_id="train-box",
+            z0=1,
+            z1=2,
+            y0=0,
+            y1=1,
+            x0=0,
+            x1=1,
+            label="train",
+            volume_shape=(2, 2, 2),
+        )
+        raw_array = np.arange(8, dtype=np.float32).reshape(2, 2, 2)
+        segmentation_array = np.zeros((2, 2, 2), dtype=np.uint8)
+        raw_volume = _FakeVolume(raw_array, axes="zyx")
+        segmentation_volume = _FakeVolume(segmentation_array, axes="zyx")
+        sources = SimpleNamespace(
+            raw_volume=raw_volume,
+            segmentation_volume=segmentation_volume,
+            boxes_by_id={
+                "train-box": train_box,
+                "infer-box": inference_box,
+            },
+            ordered_box_ids=("train-box", "infer-box"),
+        )
+        context = SimpleNamespace(
+            sources=sources,
+            raw_volume=raw_volume,
+            segmentation_volume=segmentation_volume,
+        )
+        runtime = SimpleNamespace(model=object())
+        prediction = LearningInferencePrediction(
+            box=inference_box,
+            predicted_bbox=np.ones((1, 2, 2), dtype=np.uint8),
+        )
+        inference_result = SimpleNamespace(
+            total_count=1,
+            predictions=(prediction,),
+            failure_by_box_id={},
+            cleanup_errors_by_box_id={},
+        )
+        spec = HeadlessJobSpec(
+            kind="inference",
+            raw_volume_path="raw.npy",
+            segmentation_path="seg.npy",
+            segmentation_kind="semantic",
+            bbox_path="boxes.json",
+            input_checkpoint_path="input.cp",
+            output_segmentation_path="output.npy",
+            output_segmentation_format="npy",
+        )
+
+        saved_arrays = []
+
+        def fake_save(volume, path, *, save_format, overwrite=False):
+            saved_arrays.append(
+                np.asarray(volume.get_chunk((slice(None), slice(None), slice(None))))
+            )
+            self.assertEqual(path, "output.npy")
+            self.assertEqual(save_format, "npy")
+            self.assertTrue(overwrite)
+            return path
+
+        with patch.object(
+            runner_module,
+            "validate_foundation_checkpoint_load_preconditions",
+            return_value=SimpleNamespace(
+                num_classes=2,
+                label_values=(0, 1),
+                device_ids=(0, 1),
+            ),
+        ) as validate_mock, patch.object(
+            runner_module,
+            "instantiate_model_runtime_from_checkpoint",
+            return_value=runtime,
+        ) as instantiate_mock, patch.object(
+            runner_module,
+            "run_learning_inference",
+            return_value=inference_result,
+        ) as inference_mock, patch.object(
+            runner_module,
+            "save_segmentation_volume",
+            side_effect=fake_save,
+        ) as save_mock:
+            runner_module._run_inference_job(spec, context)
+
+        validate_mock.assert_called_once_with("input.cp", require_min_gpu_count=2)
+        instantiate_mock.assert_called_once_with(
+            checkpoint_path="input.cp",
+            num_classes=2,
+            device_ids=(0, 1),
+        )
+        inference_mock.assert_called_once()
+        self.assertEqual(inference_mock.call_args.kwargs["model_runtime"], runtime)
+        self.assertEqual(inference_mock.call_args.kwargs["inference_boxes"], (inference_box,))
+        self.assertEqual(inference_mock.call_args.kwargs["label_values"], (0, 1))
+        self.assertEqual(inference_mock.call_args.kwargs["volume_shape"], (2, 2, 2))
+        self.assertTrue(callable(inference_mock.call_args.kwargs["progress_callback"]))
+        save_mock.assert_called_once()
+        self.assertEqual(len(saved_arrays), 1)
+        expected = np.zeros((2, 2, 2), dtype=np.uint8)
+        expected[0:1, 0:2, 0:2] = 1
+        np.testing.assert_array_equal(saved_arrays[0], expected)
+
+
+class _FakeVolume:
+    def __init__(self, array: np.ndarray, *, axes: str) -> None:
+        self._array = np.asarray(array)
+        self.shape = tuple(self._array.shape)
+        self.dtype = self._array.dtype
+        self.info = SimpleNamespace(
+            dtype=str(self._array.dtype),
+            voxel_spacing=(1.0, 1.0, 1.0),
+            axes=axes,
+        )
+
+    def get_chunk(self, zyx_slices):
+        return np.asarray(self._array[zyx_slices])
+
+
+if __name__ == "__main__":
+    unittest.main()

@@ -154,8 +154,10 @@ BOTTOM_PANEL_SUBPANEL_SPECS: Tuple[BottomPanelSubpanelSpec, ...] = (
             "on_load_model_requested",
             "on_save_model_requested",
             "on_segment_inference_requested",
+            "on_segment_inference_headless_close_requested",
             "on_stop_inference_requested",
             "on_train_model_requested",
+            "on_train_model_headless_close_requested",
             "on_stop_training_requested",
             "on_change_training_parameters_requested",
         ),
@@ -1119,17 +1121,25 @@ class LearningPanel(QGroupBox):
         self._on_load_model_requested: Optional[Callable[[], None]] = None
         self._on_save_model_requested: Optional[Callable[[], None]] = None
         self._on_segment_inference_requested: Optional[Callable[[], None]] = None
+        self._on_segment_inference_headless_close_requested: Optional[
+            Callable[[], None]
+        ] = None
         self._on_stop_inference_requested: Optional[Callable[[], None]] = None
         self._on_train_model_requested: Optional[Callable[[], None]] = None
+        self._on_train_model_headless_close_requested: Optional[Callable[[], None]] = None
         self._on_stop_training_requested: Optional[Callable[[], None]] = None
         self._on_change_training_parameters_requested: Optional[Callable[[], None]] = None
 
         self.load_model_button = QPushButton("Load Model")
         self.save_model_button = QPushButton("Save Model")
         self.segment_inference_button = QPushButton("Segment Inference BBox")
+        self.segment_inference_headless_close_button = QPushButton(
+            "Segment Inference Headless and Close"
+        )
         self.stop_inference_button = QPushButton("Stop Inference")
         self.stop_inference_button.setEnabled(False)
         self.train_model_button = QPushButton("Train Model")
+        self.train_model_headless_close_button = QPushButton("Train Headless and Close")
         self.stop_training_button = QPushButton("Stop Training")
         self.stop_training_button.setEnabled(False)
         self.change_training_parameters_button = QPushButton(
@@ -1144,10 +1154,12 @@ class LearningPanel(QGroupBox):
         controls_layout.addWidget(self.save_model_button, 0, 1)
         controls_layout.addWidget(self.segment_inference_button, 1, 0)
         controls_layout.addWidget(self.stop_inference_button, 1, 1)
-        controls_layout.addWidget(self.train_model_button, 2, 0)
-        controls_layout.addWidget(self.stop_training_button, 2, 1)
-        controls_layout.addWidget(self.change_training_parameters_button, 3, 0, 1, 2)
-        controls_layout.addWidget(self.training_status, 4, 0, 1, 2)
+        controls_layout.addWidget(self.segment_inference_headless_close_button, 2, 0, 1, 2)
+        controls_layout.addWidget(self.train_model_button, 3, 0)
+        controls_layout.addWidget(self.stop_training_button, 3, 1)
+        controls_layout.addWidget(self.train_model_headless_close_button, 4, 0, 1, 2)
+        controls_layout.addWidget(self.change_training_parameters_button, 5, 0, 1, 2)
+        controls_layout.addWidget(self.training_status, 6, 0, 1, 2)
         layout.addLayout(controls_layout)
         self.setLayout(layout)
 
@@ -1156,8 +1168,14 @@ class LearningPanel(QGroupBox):
         self.segment_inference_button.clicked.connect(
             self._emit_segment_inference_requested
         )
+        self.segment_inference_headless_close_button.clicked.connect(
+            self._emit_segment_inference_headless_close_requested
+        )
         self.stop_inference_button.clicked.connect(self._emit_stop_inference_requested)
         self.train_model_button.clicked.connect(self._emit_train_model_requested)
+        self.train_model_headless_close_button.clicked.connect(
+            self._emit_train_model_headless_close_requested
+        )
         self.stop_training_button.clicked.connect(self._emit_stop_training_requested)
         self.change_training_parameters_button.clicked.connect(
             self._emit_change_training_parameters_requested
@@ -1172,11 +1190,23 @@ class LearningPanel(QGroupBox):
     def on_segment_inference_requested(self, callback: Callable[[], None]) -> None:
         self._on_segment_inference_requested = callback
 
+    def on_segment_inference_headless_close_requested(
+        self,
+        callback: Callable[[], None],
+    ) -> None:
+        self._on_segment_inference_headless_close_requested = callback
+
     def on_stop_inference_requested(self, callback: Callable[[], None]) -> None:
         self._on_stop_inference_requested = callback
 
     def on_train_model_requested(self, callback: Callable[[], None]) -> None:
         self._on_train_model_requested = callback
+
+    def on_train_model_headless_close_requested(
+        self,
+        callback: Callable[[], None],
+    ) -> None:
+        self._on_train_model_headless_close_requested = callback
 
     def on_stop_training_requested(self, callback: Callable[[], None]) -> None:
         self._on_stop_training_requested = callback
@@ -1203,7 +1233,13 @@ class LearningPanel(QGroupBox):
         self.segment_inference_button.setEnabled(
             bool(segment_inference_enabled and not locked)
         )
+        self.segment_inference_headless_close_button.setEnabled(
+            bool(segment_inference_enabled and not locked)
+        )
         self.train_model_button.setEnabled(bool(train_model_enabled and not locked))
+        self.train_model_headless_close_button.setEnabled(
+            bool(train_model_enabled and not locked)
+        )
         self.stop_training_button.setEnabled(bool(stop_training_enabled and not locked))
         self.stop_inference_button.setEnabled(bool(stop_inference_enabled))
 
@@ -1223,6 +1259,10 @@ class LearningPanel(QGroupBox):
         if self._on_segment_inference_requested is not None:
             self._on_segment_inference_requested()
 
+    def _emit_segment_inference_headless_close_requested(self) -> None:
+        if self._on_segment_inference_headless_close_requested is not None:
+            self._on_segment_inference_headless_close_requested()
+
     def _emit_stop_inference_requested(self) -> None:
         if self._on_stop_inference_requested is not None:
             self._on_stop_inference_requested()
@@ -1230,6 +1270,10 @@ class LearningPanel(QGroupBox):
     def _emit_train_model_requested(self) -> None:
         if self._on_train_model_requested is not None:
             self._on_train_model_requested()
+
+    def _emit_train_model_headless_close_requested(self) -> None:
+        if self._on_train_model_headless_close_requested is not None:
+            self._on_train_model_headless_close_requested()
 
     def _emit_stop_training_requested(self) -> None:
         if self._on_stop_training_requested is not None:
