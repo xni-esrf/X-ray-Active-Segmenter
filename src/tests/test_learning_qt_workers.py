@@ -258,6 +258,29 @@ class LearningTrainingWorkerTests(unittest.TestCase):
             stop_event=worker._stop_event,
         )
 
+    def test_run_does_not_request_periodic_headless_checkpoints(self) -> None:
+        worker = LearningTrainingWorker()
+        preconditions = object()
+        worker.configure(preconditions=preconditions)
+        result = LearningTrainingLoopResult(
+            completed_epoch_count=4,
+            total_epoch_count=8,
+            stop_reason="early_stop",
+            best_epoch=4,
+            best_weighted_mean_dice=0.87,
+            early_stop_patience=2,
+            mixed_precision_enabled=True,
+        )
+
+        with patch(
+            "src.learning.qt_workers._train_learning_model_with_validation_loop",
+            return_value=result,
+        ) as train_mock:
+            worker.run()
+
+        train_mock.assert_called_once()
+        self.assertNotIn("epoch_completion_callback", train_mock.call_args.kwargs)
+
     def test_configure_rejects_invalid_early_stop_patience(self) -> None:
         worker = LearningTrainingWorker()
 

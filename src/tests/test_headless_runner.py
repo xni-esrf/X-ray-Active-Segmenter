@@ -4,7 +4,7 @@ from pathlib import Path
 from tempfile import TemporaryDirectory
 import unittest
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import numpy as np
 
@@ -16,6 +16,327 @@ import src.headless.runner as runner_module
 
 
 class HeadlessRunnerTests(unittest.TestCase):
+    def test_periodic_checkpoint_path_adds_epoch_before_cp_suffix(self) -> None:
+        self.assertEqual(
+            runner_module._periodic_checkpoint_path("/tmp/model.cp", epoch=5),
+            "/tmp/model_epoch5.cp",
+        )
+
+    def test_periodic_checkpoint_manager_saves_every_interval_and_replaces_previous(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            final_path = root / "trained_model.cp"
+            runtime = SimpleNamespace()
+            saved_paths: list[str] = []
+
+            def _save_checkpoint(*, runtime: object, checkpoint_path: str) -> str:
+                del runtime
+                Path(checkpoint_path).write_text("checkpoint", encoding="utf-8")
+                saved_paths.append(checkpoint_path)
+                return checkpoint_path
+
+            manager = runner_module._HeadlessPeriodicCheckpointManager(
+                runtime=runtime,
+                final_checkpoint_path=str(final_path),
+            )
+
+            with patch.object(
+                runner_module,
+                "save_foundation_model_checkpoint",
+                side_effect=_save_checkpoint,
+            ):
+                manager.on_epoch_completed(SimpleNamespace(completed_epoch_count=4))
+                manager.on_epoch_completed(SimpleNamespace(completed_epoch_count=5))
+                epoch5_path = root / "trained_model_epoch5.cp"
+                self.assertTrue(epoch5_path.exists())
+                self.assertEqual(manager.latest_checkpoint_path, str(epoch5_path))
+
+                manager.on_epoch_completed(SimpleNamespace(completed_epoch_count=10))
+
+            epoch10_path = root / "trained_model_epoch10.cp"
+            self.assertEqual(
+                saved_paths,
+                [
+                    str(epoch5_path),
+                    str(epoch10_path),
+                ],
+            )
+            self.assertFalse(epoch5_path.exists())
+            self.assertTrue(epoch10_path.exists())
+            self.assertEqual(manager.latest_checkpoint_path, str(epoch10_path))
+
+    def test_periodic_checkpoint_manager_cleanup_removes_latest_after_final_save(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            final_path = root / "trained_model.cp"
+            runtime = SimpleNamespace()
+
+            def _save_checkpoint(*, runtime: object, checkpoint_path: str) -> str:
+                del runtime
+                Path(checkpoint_path).write_text("checkpoint", encoding="utf-8")
+                return checkpoint_path
+
+            manager = runner_module._HeadlessPeriodicCheckpointManager(
+                runtime=runtime,
+                final_checkpoint_path=str(final_path),
+            )
+
+            with patch.object(
+                runner_module,
+                "save_foundation_model_checkpoint",
+                side_effect=_save_checkpoint,
+            ):
+                manager.on_epoch_completed(SimpleNamespace(completed_epoch_count=5))
+
+            epoch5_path = root / "trained_model_epoch5.cp"
+            self.assertTrue(epoch5_path.exists())
+
+            manager.cleanup_after_successful_final_save()
+
+            self.assertFalse(epoch5_path.exists())
+            self.assertIsNone(manager.latest_checkpoint_path)
+
+    def test_training_final_save_failure_keeps_latest_periodic_checkpoint(self) -> None:
+        sources = SimpleNamespace(
+            raw_volume=SimpleNamespace(shape=(2, 2, 2), dtype="float16"),
+            segmentation_volume=SimpleNamespace(shape=(2, 2, 2), dtype="uint8"),
+            boxes_by_id={"box-1": object()},
+            close=lambda: None,
+        )
+        context = SimpleNamespace(sources=sources)
+        label_space = SimpleNamespace(
+            label_values=(0, 1),
+            background_label=0,
+            mask_label=-100,
+            source_signature=("semantic", "seg.npy", None),
+        )
+        prepared_state = SimpleNamespace(
+            label_space=label_space,
+            label_coverage_warning=None,
+            train_box_ids=("train-box",),
+            validation_box_ids=("val-box",),
+        )
+        runtime = SimpleNamespace(
+            hyperparameters={},
+            checkpoint_path="input.cp",
+        )
+        preconditions = SimpleNamespace(
+            train_runtime=SimpleNamespace(train_count=3),
+            model_runtime=runtime,
+        )
+        result = SimpleNamespace(
+            stop_reason="early_stop",
+            completed_epoch_count=5,
+            total_epoch_count=6,
+            best_epoch=5,
+            best_weighted_mean_dice=0.75,
+        )
+        spec = HeadlessJobSpec(
+            kind="train",
+            raw_volume_path="raw.npy",
+            segmentation_path="seg.npy",
+            segmentation_kind="semantic",
+            bbox_path="boxes.json",
+            input_checkpoint_path="input.cp",
+            output_checkpoint_path="output.cp",
+        )
+        manager = SimpleNamespace(
+            on_epoch_completed=lambda _progress: None,
+            cleanup_after_successful_final_save=Mock(),
+        )
+
+        with patch.object(
+            runner_module,
+            "prepare_learning_state_from_sources",
+            return_value=prepared_state,
+        ), patch.object(
+            runner_module,
+            "validate_foundation_model_instantiation_preconditions",
+            return_value=SimpleNamespace(num_classes=2, device_ids=(0, 1)),
+        ), patch.object(
+            runner_module,
+            "instantiate_model_runtime_from_checkpoint",
+            return_value=runtime,
+        ), patch.object(
+            runner_module,
+            "validate_training_preconditions_for_session",
+            return_value=preconditions,
+        ), patch.object(
+            runner_module,
+            "_HeadlessPeriodicCheckpointManager",
+            return_value=manager,
+        ), patch.object(
+            runner_module,
+            "train_learning_model_with_validation_loop",
+            return_value=result,
+        ), patch.object(
+            runner_module,
+            "save_foundation_model_checkpoint",
+            side_effect=RuntimeError("final save failed"),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "final save failed"):
+                runner_module._run_training_job(spec, context)
+
+        manager.cleanup_after_successful_final_save.assert_not_called()
+
+    def test_training_user_stop_keeps_latest_periodic_checkpoint_after_final_save(self) -> None:
+        sources = SimpleNamespace(
+            raw_volume=SimpleNamespace(shape=(2, 2, 2), dtype="float16"),
+            segmentation_volume=SimpleNamespace(shape=(2, 2, 2), dtype="uint8"),
+            boxes_by_id={"box-1": object()},
+            close=lambda: None,
+        )
+        context = SimpleNamespace(sources=sources)
+        label_space = SimpleNamespace(
+            label_values=(0, 1),
+            background_label=0,
+            mask_label=-100,
+            source_signature=("semantic", "seg.npy", None),
+        )
+        prepared_state = SimpleNamespace(
+            label_space=label_space,
+            label_coverage_warning=None,
+            train_box_ids=("train-box",),
+            validation_box_ids=("val-box",),
+        )
+        runtime = SimpleNamespace(
+            hyperparameters={},
+            checkpoint_path="input.cp",
+        )
+        preconditions = SimpleNamespace(
+            train_runtime=SimpleNamespace(train_count=3),
+            model_runtime=runtime,
+        )
+        result = SimpleNamespace(
+            stop_reason="user_stop",
+            completed_epoch_count=5,
+            total_epoch_count=6,
+            best_epoch=5,
+            best_weighted_mean_dice=0.75,
+        )
+        spec = HeadlessJobSpec(
+            kind="train",
+            raw_volume_path="raw.npy",
+            segmentation_path="seg.npy",
+            segmentation_kind="semantic",
+            bbox_path="boxes.json",
+            input_checkpoint_path="input.cp",
+            output_checkpoint_path="output.cp",
+        )
+        manager = SimpleNamespace(
+            on_epoch_completed=lambda _progress: None,
+            cleanup_after_successful_final_save=Mock(),
+        )
+
+        with patch.object(
+            runner_module,
+            "prepare_learning_state_from_sources",
+            return_value=prepared_state,
+        ), patch.object(
+            runner_module,
+            "validate_foundation_model_instantiation_preconditions",
+            return_value=SimpleNamespace(num_classes=2, device_ids=(0, 1)),
+        ), patch.object(
+            runner_module,
+            "instantiate_model_runtime_from_checkpoint",
+            return_value=runtime,
+        ), patch.object(
+            runner_module,
+            "validate_training_preconditions_for_session",
+            return_value=preconditions,
+        ), patch.object(
+            runner_module,
+            "_HeadlessPeriodicCheckpointManager",
+            return_value=manager,
+        ), patch.object(
+            runner_module,
+            "train_learning_model_with_validation_loop",
+            return_value=result,
+        ), patch.object(
+            runner_module,
+            "save_foundation_model_checkpoint",
+            return_value="output.cp",
+        ):
+            runner_module._run_training_job(spec, context)
+
+        manager.cleanup_after_successful_final_save.assert_not_called()
+
+    def test_training_exception_keeps_latest_periodic_checkpoint(self) -> None:
+        sources = SimpleNamespace(
+            raw_volume=SimpleNamespace(shape=(2, 2, 2), dtype="float16"),
+            segmentation_volume=SimpleNamespace(shape=(2, 2, 2), dtype="uint8"),
+            boxes_by_id={"box-1": object()},
+            close=lambda: None,
+        )
+        context = SimpleNamespace(sources=sources)
+        label_space = SimpleNamespace(
+            label_values=(0, 1),
+            background_label=0,
+            mask_label=-100,
+            source_signature=("semantic", "seg.npy", None),
+        )
+        prepared_state = SimpleNamespace(
+            label_space=label_space,
+            label_coverage_warning=None,
+            train_box_ids=("train-box",),
+            validation_box_ids=("val-box",),
+        )
+        runtime = SimpleNamespace(
+            hyperparameters={},
+            checkpoint_path="input.cp",
+        )
+        preconditions = SimpleNamespace(
+            train_runtime=SimpleNamespace(train_count=3),
+            model_runtime=runtime,
+        )
+        spec = HeadlessJobSpec(
+            kind="train",
+            raw_volume_path="raw.npy",
+            segmentation_path="seg.npy",
+            segmentation_kind="semantic",
+            bbox_path="boxes.json",
+            input_checkpoint_path="input.cp",
+            output_checkpoint_path="output.cp",
+        )
+        manager = SimpleNamespace(
+            on_epoch_completed=lambda _progress: None,
+            cleanup_after_successful_final_save=Mock(),
+        )
+
+        with patch.object(
+            runner_module,
+            "prepare_learning_state_from_sources",
+            return_value=prepared_state,
+        ), patch.object(
+            runner_module,
+            "validate_foundation_model_instantiation_preconditions",
+            return_value=SimpleNamespace(num_classes=2, device_ids=(0, 1)),
+        ), patch.object(
+            runner_module,
+            "instantiate_model_runtime_from_checkpoint",
+            return_value=runtime,
+        ), patch.object(
+            runner_module,
+            "validate_training_preconditions_for_session",
+            return_value=preconditions,
+        ), patch.object(
+            runner_module,
+            "_HeadlessPeriodicCheckpointManager",
+            return_value=manager,
+        ), patch.object(
+            runner_module,
+            "train_learning_model_with_validation_loop",
+            side_effect=RuntimeError("training failed"),
+        ), patch.object(
+            runner_module,
+            "save_foundation_model_checkpoint",
+        ) as save_mock:
+            with self.assertRaisesRegex(RuntimeError, "training failed"):
+                runner_module._run_training_job(spec, context)
+
+        save_mock.assert_not_called()
+        manager.cleanup_after_successful_final_save.assert_not_called()
+
     def test_validate_only_reopens_inputs(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -246,6 +567,7 @@ class HeadlessRunnerTests(unittest.TestCase):
             train_mock.call_args.kwargs["early_stop_patience"],
             spec.training_parameters.early_stopping_patience,
         )
+        self.assertTrue(callable(train_mock.call_args.kwargs["epoch_completion_callback"]))
         save_mock.assert_called_once_with(runtime=runtime, checkpoint_path="output.cp")
         self.assertEqual(runtime.hyperparameters["label_values"], (0, 1))
         self.assertTrue(runtime.hyperparameters["trained_in_app"])

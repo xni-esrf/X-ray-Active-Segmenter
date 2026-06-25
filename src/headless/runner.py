@@ -29,6 +29,7 @@ from .job_spec import HeadlessJobSpec, load_headless_job_spec
 
 
 LOGGER = logging.getLogger(__name__)
+_PERIODIC_CHECKPOINT_INTERVAL_EPOCHS = 5
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -93,6 +94,86 @@ class _HeadlessInputContext:
                 close()
             except Exception:
                 LOGGER.debug("Failed to close headless sources cleanly", exc_info=True)
+
+
+def _periodic_checkpoint_path(final_checkpoint_path: str, *, epoch: int) -> str:
+    normalized_epoch = int(epoch)
+    if normalized_epoch <= 0:
+        raise ValueError("epoch must be a positive 1-based integer")
+    final_path = Path(str(final_checkpoint_path).strip())
+    if final_path.suffix.lower() != ".cp":
+        raise ValueError("Periodic training checkpoints require a final .cp checkpoint path.")
+    return str(final_path.with_name(f"{final_path.stem}_epoch{normalized_epoch}{final_path.suffix}"))
+
+
+class _HeadlessPeriodicCheckpointManager:
+    def __init__(
+        self,
+        *,
+        runtime: object,
+        final_checkpoint_path: str,
+        interval_epochs: int = _PERIODIC_CHECKPOINT_INTERVAL_EPOCHS,
+    ) -> None:
+        normalized_interval = int(interval_epochs)
+        if normalized_interval <= 0:
+            raise ValueError("interval_epochs must be positive")
+        self._runtime = runtime
+        self._final_checkpoint_path = str(final_checkpoint_path)
+        self._interval_epochs = normalized_interval
+        self._latest_checkpoint_path: Optional[Path] = None
+
+    @property
+    def latest_checkpoint_path(self) -> Optional[str]:
+        if self._latest_checkpoint_path is None:
+            return None
+        return str(self._latest_checkpoint_path)
+
+    def on_epoch_completed(self, progress: object) -> None:
+        completed_epoch_count = int(getattr(progress, "completed_epoch_count"))
+        if completed_epoch_count <= 0:
+            return
+        if completed_epoch_count % self._interval_epochs != 0:
+            return
+
+        checkpoint_path = _periodic_checkpoint_path(
+            self._final_checkpoint_path,
+            epoch=completed_epoch_count,
+        )
+        saved_path = save_foundation_model_checkpoint(
+            runtime=self._runtime,
+            checkpoint_path=checkpoint_path,
+        )
+        previous_path = self._latest_checkpoint_path
+        self._latest_checkpoint_path = Path(saved_path)
+        if previous_path is None or previous_path == self._latest_checkpoint_path:
+            return
+        try:
+            previous_path.unlink()
+        except FileNotFoundError:
+            return
+        except Exception:
+            LOGGER.warning(
+                "Failed to remove previous periodic checkpoint: %s",
+                previous_path,
+                exc_info=True,
+            )
+
+    def cleanup_after_successful_final_save(self) -> None:
+        latest_path = self._latest_checkpoint_path
+        if latest_path is None:
+            return
+        try:
+            latest_path.unlink()
+        except FileNotFoundError:
+            pass
+        except Exception:
+            LOGGER.warning(
+                "Failed to remove periodic checkpoint after final checkpoint save: %s",
+                latest_path,
+                exc_info=True,
+            )
+            return
+        self._latest_checkpoint_path = None
 
 
 def _open_headless_inputs(spec: HeadlessJobSpec) -> _HeadlessInputContext:
@@ -175,11 +256,16 @@ def _run_training_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) -> 
         int(2 * preconditions.train_runtime.train_count),
         int(spec.training_parameters.early_stopping_patience),
     )
+    periodic_checkpoints = _HeadlessPeriodicCheckpointManager(
+        runtime=preconditions.model_runtime,
+        final_checkpoint_path=spec.output_checkpoint_path,
+    )
     result = train_learning_model_with_validation_loop(
         preconditions=preconditions,
         mixed_precision=True,
         early_stop_patience=int(spec.training_parameters.early_stopping_patience),
         progress_callback=_log_training_epoch_progress,
+        epoch_completion_callback=periodic_checkpoints.on_epoch_completed,
         learning_session=session,
     )
     _persist_runtime_label_space_metadata(
@@ -191,6 +277,8 @@ def _run_training_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) -> 
         runtime=preconditions.model_runtime,
         checkpoint_path=spec.output_checkpoint_path,
     )
+    if str(result.stop_reason).strip().lower() in {"early_stop", "max_epoch"}:
+        periodic_checkpoints.cleanup_after_successful_final_save()
     LOGGER.info(
         "Training completed: reason=%s, completed_epochs=%d/%d, best_epoch=%s, "
         "best_weighted_dice=%s, checkpoint=%s",

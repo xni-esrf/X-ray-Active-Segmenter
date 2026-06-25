@@ -166,6 +166,76 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         self.assertAlmostEqual(progress_events[1].best_weighted_mean_dice, 0.50)
         self.assertEqual(progress_events[2].epochs_without_improvement, 1)
 
+    def test_training_loop_calls_epoch_completion_callback_with_current_epoch_state(self) -> None:
+        preconditions = self._make_preconditions(train_box_count=2)
+        model = preconditions.model_runtime.model
+
+        def _train_side_effect(**kwargs):
+            epoch_index = int(kwargs["epoch_index"])
+            with torch.no_grad():
+                model.weight.fill_(float(epoch_index + 1))
+            return (
+                LearningTrainEpochResult(
+                    epoch_index=epoch_index,
+                    total_epoch_count=int(kwargs["total_epoch_count"]),
+                    base_learning_rate=0.001,
+                    num_batches=1,
+                    mean_loss=1.0,
+                    mixed_precision_used=False,
+                ),
+                object(),
+            )
+
+        eval_values = iter((0.10, 0.20, 0.30))
+
+        def _eval_side_effect(**_kwargs):
+            value = float(next(eval_values))
+            return LearningValidationEvalResult(
+                weighted_mean_dice=value,
+                per_box_dice_by_box_id={"bbox_eval_0001": value},
+                valid_voxel_counts_by_box_id={"bbox_eval_0001": 10},
+                total_valid_voxel_count=10,
+                mixed_precision_used=False,
+            )
+
+        completion_events = []
+
+        def _record_completion(progress):
+            completion_events.append(
+                (
+                    int(progress.completed_epoch_count),
+                    int(progress.best_epoch),
+                    float(model.weight.detach().item()),
+                )
+            )
+
+        with patch(
+            "src.learning.model_training.train_learning_model_for_one_epoch",
+            side_effect=_train_side_effect,
+        ), patch(
+            "src.learning.model_training.evaluate_learning_model_on_validation_dataloaders",
+            side_effect=_eval_side_effect,
+        ):
+            result = train_learning_model_with_validation_loop(
+                preconditions=preconditions,
+                mixed_precision=False,
+                early_stop_patience=2,
+                device="cpu",
+                total_epoch_count=3,
+                epoch_completion_callback=_record_completion,
+            )
+
+        self.assertEqual(
+            completion_events,
+            [
+                (1, 1, 1.0),
+                (2, 2, 2.0),
+                (3, 3, 3.0),
+            ],
+        )
+        self.assertEqual(result.completed_epoch_count, 3)
+        self.assertEqual(result.best_epoch, 3)
+
     def test_training_loop_runs_to_max_epoch_and_reports_best_epoch(self) -> None:
         preconditions = self._make_preconditions(train_box_count=2)
         model = preconditions.model_runtime.model

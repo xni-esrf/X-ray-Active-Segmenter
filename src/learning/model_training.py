@@ -1168,6 +1168,7 @@ def train_learning_model_with_validation_loop(
     device: Optional[str] = None,
     stop_event: Optional[object] = None,
     progress_callback: Optional[Callable[[LearningTrainingEpochProgress], None]] = None,
+    epoch_completion_callback: Optional[Callable[[LearningTrainingEpochProgress], None]] = None,
     torch_module: Optional[object] = None,
     learning_session: Optional[LearningSession] = None,
 ) -> LearningTrainingLoopResult:
@@ -1272,23 +1273,24 @@ def train_learning_model_with_validation_loop(
                 epochs_without_improvement += 1
 
             completed_epoch_count += 1
+            epoch_progress = LearningTrainingEpochProgress(
+                epoch_index=int(epoch_index),
+                completed_epoch_count=int(completed_epoch_count),
+                total_epoch_count=int(resolved_total_epoch_count),
+                mean_loss=float(train_result.mean_loss),
+                weighted_mean_dice=float(weighted_mean_dice),
+                best_epoch=best_epoch,
+                best_weighted_mean_dice=(
+                    None
+                    if best_epoch is None
+                    else float(best_weighted_mean_dice)
+                ),
+                epochs_without_improvement=int(epochs_without_improvement),
+            )
             if progress_callback is not None:
-                progress_callback(
-                    LearningTrainingEpochProgress(
-                        epoch_index=int(epoch_index),
-                        completed_epoch_count=int(completed_epoch_count),
-                        total_epoch_count=int(resolved_total_epoch_count),
-                        mean_loss=float(train_result.mean_loss),
-                        weighted_mean_dice=float(weighted_mean_dice),
-                        best_epoch=best_epoch,
-                        best_weighted_mean_dice=(
-                            None
-                            if best_epoch is None
-                            else float(best_weighted_mean_dice)
-                        ),
-                        epochs_without_improvement=int(epochs_without_improvement),
-                    )
-                )
+                progress_callback(epoch_progress)
+            if epoch_completion_callback is not None:
+                epoch_completion_callback(epoch_progress)
             if epochs_without_improvement >= normalized_patience:
                 stop_reason = "early_stop"
                 break
