@@ -685,9 +685,7 @@ class MainWindow(QMainWindow):
         if app_instance is not None:
             app_instance.installEventFilter(self)
             self._app_event_filter_installed = True
-        set_view_layout_mode = getattr(self.bottom_panel, "set_view_layout_mode", None)
-        if callable(set_view_layout_mode):
-            set_view_layout_mode(self.state.view_layout_mode)
+        self.bottom_panel.set_view_layout_mode(self.state.view_layout_mode)
         self._apply_view_layout_mode()
         self.sync_manager.on_state_changed(self._on_sync_state_changed)
         self._handle_segmentation_opacity_changed(self.bottom_panel.segmentation_opacity())
@@ -1195,9 +1193,7 @@ class MainWindow(QMainWindow):
         self.state.volume_loaded = True
         # New raw volumes always start in the default 3-view layout.
         self.state.view_layout_mode = "all"
-        set_view_layout_mode = getattr(self.bottom_panel, "set_view_layout_mode", None)
-        if callable(set_view_layout_mode):
-            set_view_layout_mode("all")
+        self.bottom_panel.set_view_layout_mode("all")
         apply_layout_mode = getattr(self, "_apply_view_layout_mode", None)
         if callable(apply_layout_mode):
             apply_layout_mode()
@@ -1331,12 +1327,10 @@ class MainWindow(QMainWindow):
         self.bottom_panel.set_bounding_boxes(self._bbox_manager.boxes())
         selected_id = self._bbox_manager.selected_id
         if selected_id is None:
-            selected_ids_getter = getattr(self.bottom_panel, "selected_bounding_boxes", None)
-            if callable(selected_ids_getter):
-                selected_ids = tuple(selected_ids_getter())
-                if len(selected_ids) > 1:
-                    self.bottom_panel.set_selected_bounding_boxes(selected_ids)
-                    return
+            selected_ids = tuple(self.bottom_panel.selected_bounding_boxes())
+            if len(selected_ids) > 1:
+                self.bottom_panel.set_selected_bounding_boxes(selected_ids)
+                return
         self.bottom_panel.set_selected_bounding_box(selected_id)
 
     def _handle_bounding_boxes_selected(self, box_ids: Tuple[str, ...]) -> None:
@@ -1578,12 +1572,10 @@ class MainWindow(QMainWindow):
         if MainWindow._inference_navigation_lock_active(self):
             return
         selected_ids: Tuple[str, ...] = tuple()
-        selected_ids_getter = getattr(self.bottom_panel, "selected_bounding_boxes", None)
-        if callable(selected_ids_getter):
-            try:
-                selected_ids = tuple(selected_ids_getter())
-            except Exception:
-                selected_ids = tuple()
+        try:
+            selected_ids = tuple(self.bottom_panel.selected_bounding_boxes())
+        except Exception:
+            selected_ids = tuple()
         if not selected_ids:
             selected_id = self._bbox_manager.selected_id
             if selected_id:

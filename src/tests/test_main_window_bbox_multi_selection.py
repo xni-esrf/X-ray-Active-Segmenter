@@ -157,24 +157,6 @@ class MainWindowBoundingBoxMultiSelectionTests(unittest.TestCase):
         self.assertEqual(calls[1], ("single", "bbox_0001"))
         self.assertEqual(len(calls), 2)
 
-    def test_sync_bounding_boxes_ui_falls_back_to_single_setter_without_plural_getter(self) -> None:
-        calls = []
-        bottom_panel = SimpleNamespace(
-            set_bounding_boxes=lambda boxes: calls.append(("boxes", tuple(boxes))),
-            set_selected_bounding_box=lambda box_id: calls.append(("single", box_id)),
-        )
-        window_like = SimpleNamespace(
-            _bbox_manager=SimpleNamespace(
-                boxes=lambda: tuple(),
-                selected_id=None,
-            ),
-            bottom_panel=bottom_panel,
-        )
-
-        MainWindow._sync_bounding_boxes_ui(window_like)
-
-        self.assertEqual(calls, [("boxes", tuple()), ("single", None)])
-
     def test_handle_bounding_boxes_delete_requested_deletes_all_in_one_transaction(self) -> None:
         box1 = BoundingBox.from_bounds(
             box_id="bbox_0001",
