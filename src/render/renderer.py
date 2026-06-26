@@ -42,7 +42,7 @@ class RenderResult:
 class Renderer:
     _LEVEL_THRESHOLDS = (1000, 2000, 4000)
 
-    def __init__(self, *, eager_statistics: bool = True) -> None:
+    def __init__(self) -> None:
         self._volume: Optional[VolumeData] = None
         self._volume_levels: Tuple[VolumeData, ...] = tuple()
         self._segmentation: Optional[VolumeData] = None
@@ -55,7 +55,6 @@ class Renderer:
         self._seg_labels: Optional[np.ndarray] = None
         self._auto_level_enabled = True
         self._manual_level = 0
-        self._eager_statistics = eager_statistics
 
     def attach_volume(self, volume: VolumeData, levels: Optional[Tuple[VolumeData, ...]] = None) -> None:
         volume_levels = self._normalize_levels(volume, levels)
@@ -88,15 +87,8 @@ class Renderer:
             self._seg_range = None
             self._seg_labels = None
             return
-        if self._eager_statistics:
-            self._seg_labels = self._compute_segmentation_labels(volume)
-            if self._seg_labels is None or self._seg_labels.size == 0:
-                self._seg_range = None
-            else:
-                self._seg_range = (int(self._seg_labels[0]), int(self._seg_labels[-1]))
-        else:
-            self._seg_labels = None
-            self._seg_range = None
+        self._seg_labels = None
+        self._seg_range = None
 
     def detach_segmentation(self) -> None:
         self._segmentation = None
@@ -514,16 +506,6 @@ class Renderer:
             return np.zeros_like(image, dtype=np.float32)
         scaled = (image.astype(np.float32) - vmin) / (vmax - vmin)
         return np.clip(scaled, 0.0, 1.0)
-
-    def _compute_segmentation_labels(self, volume: VolumeData) -> Optional[np.ndarray]:
-        data = volume.loader.get_chunk((slice(None), slice(None), slice(None)))
-        array = np.asarray(data)
-        if array.size == 0:
-            return None
-        labels = np.unique(array)
-        if labels.size == 0:
-            return None
-        return labels.astype(np.int64, copy=False)
 
     def _compute_slice_segmentation_labels(self, segmentation: np.ndarray) -> Optional[np.ndarray]:
         array = np.asarray(segmentation)

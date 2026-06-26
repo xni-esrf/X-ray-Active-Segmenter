@@ -102,8 +102,6 @@ class BottomPanelState:
     view_layout_mode: str = "all"
     bbox_rows: Tuple[BoundingBoxRow, ...] = tuple()
     bbox_selected_ids: Tuple[str, ...] = tuple()
-    # Backward-compatible mirror of the first selected id.
-    bbox_selected_id: Optional[str] = None
     bbox_selected_label: Optional[BoundingBoxLabel] = None
     learning_training_running: bool = False
     learning_inference_navigation_only: bool = False
@@ -169,10 +167,6 @@ class BottomPanel(QWidget):
         self._on_bounding_boxes_label_changed: Optional[
             Callable[[Tuple[str, ...], BoundingBoxLabel], None]
         ] = None
-        # Backward-compatible single-id callbacks kept until main-window migration.
-        self._on_bounding_box_selected: Optional[Callable[[Optional[str]], None]] = None
-        self._on_bounding_box_delete_requested: Optional[Callable[[str], None]] = None
-        self._on_bounding_box_label_changed: Optional[Callable[[str, BoundingBoxLabel], None]] = None
         self._interaction_tools_enabled = False
         self._level_controls_enabled = True
         self._inference_navigation_only_mode = False
@@ -778,7 +772,6 @@ class BottomPanel(QWidget):
         self.state.bbox_selected_ids = tuple(
             box_id for box_id in self.state.bbox_selected_ids if box_id in valid_ids
         )
-        self.state.bbox_selected_id = _primary_selected_bbox_id(self.state.bbox_selected_ids)
 
         table_rows = tuple(
             (
@@ -813,7 +806,6 @@ class BottomPanel(QWidget):
             selected_ids.append(row.box_id)
 
         self.state.bbox_selected_ids = tuple(selected_ids)
-        self.state.bbox_selected_id = _primary_selected_bbox_id(self.state.bbox_selected_ids)
         self.state.bbox_selected_label = self._shared_bbox_label_for_ids(self.state.bbox_selected_ids)
         self._bounding_boxes_panel.set_selected_rows(tuple(row_indices))
         self._set_selected_bbox_label_value(self.state.bbox_selected_label)
@@ -936,12 +928,6 @@ class BottomPanel(QWidget):
     ) -> None:
         self._on_bounding_boxes_selected = callback
 
-    def on_bounding_box_selected(
-        self,
-        callback: Callable[[Optional[str]], None],
-    ) -> None:
-        self._on_bounding_box_selected = callback
-
     def on_bounding_box_double_clicked(self, callback: Callable[[str], None]) -> None:
         self._on_bounding_box_double_clicked = callback
 
@@ -1002,20 +988,11 @@ class BottomPanel(QWidget):
     ) -> None:
         self._on_bounding_boxes_delete_requested = callback
 
-    def on_bounding_box_delete_requested(self, callback: Callable[[str], None]) -> None:
-        self._on_bounding_box_delete_requested = callback
-
     def on_bounding_boxes_label_changed(
         self,
         callback: Callable[[Tuple[str, ...], BoundingBoxLabel], None],
     ) -> None:
         self._on_bounding_boxes_label_changed = callback
-
-    def on_bounding_box_label_changed(
-        self,
-        callback: Callable[[str, BoundingBoxLabel], None],
-    ) -> None:
-        self._on_bounding_box_label_changed = callback
 
     def _handle_open(self) -> None:
         if self._on_open:
@@ -1168,15 +1145,11 @@ class BottomPanel(QWidget):
     def _handle_bounding_box_selection_changed(self) -> None:
         selected_ids = self._selected_bbox_ids_from_table_selection()
         self.state.bbox_selected_ids = selected_ids
-        selected_id = _primary_selected_bbox_id(selected_ids)
-        self.state.bbox_selected_id = selected_id
         self.state.bbox_selected_label = self._shared_bbox_label_for_ids(selected_ids)
         self._set_selected_bbox_label_value(self.state.bbox_selected_label)
         self._update_bounding_box_controls_state()
         if self._on_bounding_boxes_selected:
             self._on_bounding_boxes_selected(selected_ids)
-        if self._on_bounding_box_selected:
-            self._on_bounding_box_selected(selected_id)
 
     def _handle_bounding_box_double_clicked(self, item: QTableWidgetItem) -> None:
         if self._on_bounding_box_double_clicked is None:
@@ -1199,9 +1172,6 @@ class BottomPanel(QWidget):
             return
         if self._on_bounding_boxes_delete_requested:
             self._on_bounding_boxes_delete_requested(selected_ids)
-        selected_id = _primary_selected_bbox_id(selected_ids)
-        if self._on_bounding_box_delete_requested and selected_id is not None:
-            self._on_bounding_box_delete_requested(selected_id)
 
     def _handle_open_bounding_boxes_requested(self) -> None:
         if self._on_open_bounding_boxes_requested:
@@ -1275,9 +1245,6 @@ class BottomPanel(QWidget):
         self.state.bbox_selected_label = selected_label
         if self._on_bounding_boxes_label_changed:
             self._on_bounding_boxes_label_changed(selected_ids, selected_label)
-        selected_id = _primary_selected_bbox_id(selected_ids)
-        if self._on_bounding_box_label_changed and selected_id is not None:
-            self._on_bounding_box_label_changed(selected_id, selected_label)
 
     def _update_eraser_controls_state(self) -> None:
         tool_label_active = (

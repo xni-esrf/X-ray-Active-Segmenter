@@ -320,6 +320,28 @@ class RendererContrastWindowTests(unittest.TestCase):
         renderer.detach_segmentation()
         self.assertEqual(renderer.available_level_count(), 4)
 
+    def test_attach_segmentation_defers_label_scan_until_render(self) -> None:
+        raw_array = np.arange(8, dtype=np.float32).reshape((2, 2, 2))
+        seg_array = np.asarray(
+            [[[0, 1], [0, 2]], [[3, 3], [0, 2]]],
+            dtype=np.uint8,
+        )
+        raw_volume = open_volume(
+            _ArrayLoader(raw_array),
+            cache=None,
+            data_range=_array_data_range(raw_array),
+        )
+        seg_loader = _ArrayLoader(seg_array)
+        seg_volume = open_volume(seg_loader, cache=None)
+        renderer = Renderer()
+        renderer.attach_volume(raw_volume)
+
+        renderer.attach_segmentation(seg_volume)
+
+        self.assertEqual(seg_loader.calls, 0)
+        result = renderer.render_slice("axial", axis=0, slice_index=0)
+        np.testing.assert_array_equal(result.segmentation_labels, np.asarray([0, 1, 2]))
+
     def test_attach_segmentation_clamps_existing_manual_level_immediately(self) -> None:
         raw_array = np.arange(4001, dtype=np.float32).reshape((4001, 1, 1))
         seg_array = np.zeros((4001, 1, 1), dtype=np.uint8)

@@ -253,29 +253,22 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
             QAbstractItemView.SelectRows,
         )
 
-    def test_row_selection_emits_callback_and_delete_requests_selected_id(self) -> None:
+    def test_row_selection_emits_callback_and_delete_requests_selected_ids(self) -> None:
         box1, box2 = self._boxes()
-        selected_events = []
         selected_many_events = []
-        delete_events = []
         delete_many_events = []
-        self.panel.on_bounding_box_selected(selected_events.append)
         self.panel.on_bounding_boxes_selected(selected_many_events.append)
-        self.panel.on_bounding_box_delete_requested(delete_events.append)
         self.panel.on_bounding_boxes_delete_requested(delete_many_events.append)
         self.panel.set_bounding_boxes((box1, box2))
 
         self.panel._bbox_table.selectRow(1)
         QApplication.processEvents()
-        self.assertEqual(self.panel.state.bbox_selected_id, "bbox_0002")
         self.assertEqual(self.panel.state.bbox_selected_ids, ("bbox_0002",))
-        self.assertEqual(selected_events[-1], "bbox_0002")
         self.assertEqual(selected_many_events[-1], ("bbox_0002",))
         self.assertTrue(self.panel._delete_bbox_button.isEnabled())
 
         self.panel._delete_bbox_button.click()
         QApplication.processEvents()
-        self.assertEqual(delete_events, ["bbox_0002"])
         self.assertEqual(delete_many_events, [("bbox_0002",)])
 
     def test_selection_is_cleared_when_selected_box_disappears(self) -> None:
@@ -299,15 +292,12 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
             self.panel.selected_bounding_boxes(),
             ("bbox_0001", "bbox_0002"),
         )
-        self.assertIsNone(self.panel.state.bbox_selected_id)
         self.assertIsNone(self.panel.selected_bounding_box())
         self.assertEqual(self.panel.selected_bounding_box_label(), "train")
 
-    def test_multi_selection_emits_plural_callback_and_no_single_primary(self) -> None:
+    def test_multi_selection_emits_plural_callback(self) -> None:
         box1, box2 = self._boxes()
-        selected_events = []
         selected_many_events = []
-        self.panel.on_bounding_box_selected(selected_events.append)
         self.panel.on_bounding_boxes_selected(selected_many_events.append)
         self.panel.set_bounding_boxes((box1, box2))
         self.panel.set_selected_bounding_boxes(("bbox_0001", "bbox_0002"))
@@ -315,7 +305,6 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel._handle_bounding_box_selection_changed()
 
         self.assertEqual(selected_many_events[-1], ("bbox_0001", "bbox_0002"))
-        self.assertIsNone(selected_events[-1])
 
     def test_bbox_table_item_double_click_emits_clicked_row_id(self) -> None:
         box1, box2 = self._boxes()
@@ -388,13 +377,9 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
             volume_shape=(20, 30, 40),
         )
         label_many_events = []
-        label_single_events = []
         self.panel.set_bounding_boxes((box1, box2))
         self.panel.on_bounding_boxes_label_changed(
             lambda box_ids, label: label_many_events.append((box_ids, label))
-        )
-        self.panel.on_bounding_box_label_changed(
-            lambda box_id, label: label_single_events.append((box_id, label))
         )
         self.panel.set_selected_bounding_boxes(("bbox_0001", "bbox_0002"))
 
@@ -407,22 +392,18 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
             label_many_events,
             [(("bbox_0001", "bbox_0002"), "inference")],
         )
-        self.assertEqual(label_single_events, [])
 
-    def test_delete_button_emits_plural_callback_for_multi_selection_only(self) -> None:
+    def test_delete_button_emits_plural_callback_for_multi_selection(self) -> None:
         box1, box2 = self._boxes()
         delete_many_events = []
-        delete_single_events = []
         self.panel.set_bounding_boxes((box1, box2))
         self.panel.on_bounding_boxes_delete_requested(delete_many_events.append)
-        self.panel.on_bounding_box_delete_requested(delete_single_events.append)
         self.panel.set_selected_bounding_boxes(("bbox_0001", "bbox_0002"))
 
         self.panel._delete_bbox_button.click()
         QApplication.processEvents()
 
         self.assertEqual(delete_many_events, [(("bbox_0001", "bbox_0002"))])
-        self.assertEqual(delete_single_events, [])
 
     def test_metadata_updates_after_geometry_change(self) -> None:
         box1, _ = self._boxes()
@@ -434,14 +415,10 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertEqual(self.panel._bbox_table.item(0, 3).text(), "3 x 4 x 9")
         self.assertEqual(self.panel._bbox_table.item(0, 4).text(), "(2.00, 3.50, 7.00)")
 
-    def test_label_editor_emits_callback_for_selected_box(self) -> None:
-        label_events = []
+    def test_label_editor_emits_plural_callback_for_selected_box(self) -> None:
         label_many_events = []
         box1, _ = self._boxes()
         self.panel.set_bounding_boxes((box1,))
-        self.panel.on_bounding_box_label_changed(
-            lambda box_id, label: label_events.append((box_id, label))
-        )
         self.panel.on_bounding_boxes_label_changed(
             lambda box_ids, label: label_many_events.append((box_ids, label))
         )
@@ -452,7 +429,6 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel._bbox_label_combo.setCurrentIndex(validation_index)
         QApplication.processEvents()
 
-        self.assertEqual(label_events, [("bbox_0001", "validation")])
         self.assertEqual(label_many_events, [(("bbox_0001",), "validation")])
         self.assertEqual(self.panel.selected_bounding_box_label(), "validation")
 

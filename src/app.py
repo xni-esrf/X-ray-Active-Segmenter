@@ -142,7 +142,7 @@ def run(
     app = QApplication.instance() or QApplication([])
     _apply_forced_cursor_size(app, forced_cursor_size, logger=logger)
 
-    renderer = Renderer(eager_statistics=(config.load_mode == "ram"))
+    renderer = Renderer()
     sync_manager = SyncManager()
     input_handlers = InputHandlers(sync_manager=sync_manager)
     main_window = MainWindow(

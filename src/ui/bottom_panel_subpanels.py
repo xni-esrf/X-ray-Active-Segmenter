@@ -125,7 +125,6 @@ BOTTOM_PANEL_SUBPANEL_SPECS: Tuple[BottomPanelSubpanelSpec, ...] = (
             "selected_bounding_box_label",
             "on_bounding_box_mode_changed",
             "on_bounding_boxes_selected",
-            "on_bounding_box_selected",
             "on_bounding_box_double_clicked",
             "on_open_bounding_boxes_requested",
             "on_save_bounding_boxes_requested",
@@ -134,9 +133,7 @@ BOTTOM_PANEL_SUBPANEL_SPECS: Tuple[BottomPanelSubpanelSpec, ...] = (
             "on_dilation_selected_requested",
             "on_erase_bbox_segmentation_requested",
             "on_bounding_boxes_delete_requested",
-            "on_bounding_box_delete_requested",
             "on_bounding_boxes_label_changed",
-            "on_bounding_box_label_changed",
         ),
     ),
     BottomPanelSubpanelSpec(
