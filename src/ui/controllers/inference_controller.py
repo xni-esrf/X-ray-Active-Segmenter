@@ -36,6 +36,73 @@ class InferenceControllerContext(Protocol):
     _bbox_manager: object
     bottom_panel: object
 
+    def _abort_if_learning_training_running(self) -> bool: ...
+
+    def _ensure_learning_state_for_action(self, action: str) -> bool: ...
+
+    def _segment_inference_bboxes_with_dialog(self) -> bool: ...
+
+    def _request_learning_inference_stop(self) -> None: ...
+
+    def _active_segmentation_volume(self) -> Optional[Tuple[str, object]]: ...
+
+    def _ensure_editable_segmentation_for_annotation(self) -> bool: ...
+
+    def _show_inference_navigation_only_notice(self) -> None: ...
+
+    def _start_learning_inference_background(
+        self,
+        *,
+        model_runtime: object,
+        inference_boxes: Sequence[object],
+        raw_array: np.ndarray,
+        label_values: Sequence[int],
+        volume_shape: Sequence[int],
+    ) -> None: ...
+
+    def _enter_learning_inference_running_state(
+        self,
+        *,
+        worker: object,
+        thread: object,
+    ) -> None: ...
+
+    def _exit_learning_inference_running_state(self) -> None: ...
+
+    def _inference_is_running(self) -> bool: ...
+
+    def _training_is_running(self) -> bool: ...
+
+    def _refresh_learning_inference_ui_state(self) -> None: ...
+
+    def _refresh_undo_ui_state(self) -> None: ...
+
+    def _clear_deferred_close_inference_state(self) -> None: ...
+
+    def _apply_inference_predictions_in_single_commit(
+        self,
+        *,
+        editor: object,
+        predictions: Sequence[object],
+        initial_failure_by_box_id: Optional[Mapping[str, str]] = None,
+    ) -> Tuple[int, Tuple[str, ...], Dict[str, str]]: ...
+
+    def _on_learning_inference_canceled(self, message: str) -> None: ...
+
+    def _end_annotation_modification(self) -> None: ...
+
+    def _sync_renderer_segmentation_labels(self) -> None: ...
+
+    def _request_hover_readout(self) -> None: ...
+
+    def _request_picked_readout(self) -> None: ...
+
+    def _record_global_history_for_segmentation_operation(self, operation: object) -> None: ...
+
+    def _refresh_annotation_ui_state(self) -> None: ...
+
+    def render_all(self) -> None: ...
+
 
 @dataclass(frozen=True)
 class InferenceControllerOperations:
@@ -76,33 +143,14 @@ class InferenceController:
     def handle_segment_inference_request(self) -> None:
         if self.operations.inference_navigation_lock_active(self.context):
             return
-        abort_if_training_running = getattr(
-            self.context,
-            "_abort_if_learning_training_running",
-            None,
-        )
-        if callable(abort_if_training_running) and abort_if_training_running():
+        if self.context._abort_if_learning_training_running():
             return
-        ensure_learning_state = getattr(self.context, "_ensure_learning_state_for_action", None)
-        if callable(ensure_learning_state):
-            if not bool(ensure_learning_state("inference")):
-                return
-        segment_with_dialog = getattr(
-            self.context,
-            "_segment_inference_bboxes_with_dialog",
-            None,
-        )
-        if callable(segment_with_dialog):
-            segment_with_dialog()
-        else:
-            self.segment_inference_bboxes_with_dialog()
+        if not bool(self.context._ensure_learning_state_for_action("inference")):
+            return
+        self.context._segment_inference_bboxes_with_dialog()
 
     def handle_stop_inference_request(self) -> None:
-        request_stop = getattr(self.context, "_request_learning_inference_stop", None)
-        if callable(request_stop):
-            request_stop()
-            return
-        self.request_learning_inference_stop()
+        self.context._request_learning_inference_stop()
 
     def segment_inference_bboxes_with_dialog(self) -> bool:
         model_runtime = self.operations.get_learning_model_runtime(self.context)
@@ -245,50 +293,23 @@ class InferenceController:
             )
             return False
 
-        start_background = getattr(
-            self.context,
-            "_start_learning_inference_background",
-            None,
-        )
-        if callable(start_background):
-            show_navigation_only_notice = getattr(
-                self.context,
-                "_show_inference_navigation_only_notice",
-                None,
+        self.context._show_inference_navigation_only_notice()
+        try:
+            self.context._start_learning_inference_background(
+                model_runtime=model_runtime,
+                inference_boxes=inference_boxes,
+                raw_array=raw_array,
+                label_values=label_values,
+                volume_shape=self.context._bbox_manager.volume_shape,
             )
-            if callable(show_navigation_only_notice):
-                show_navigation_only_notice()
-            else:
-                self.show_inference_navigation_only_notice()
-            try:
-                start_background(
-                    model_runtime=model_runtime,
-                    inference_boxes=inference_boxes,
-                    raw_array=raw_array,
-                    label_values=label_values,
-                    volume_shape=self.context._bbox_manager.volume_shape,
-                )
-            except Exception as exc:
-                exit_running_state = getattr(
-                    self.context,
-                    "_exit_learning_inference_running_state",
-                    None,
-                )
-                if callable(exit_running_state):
-                    exit_running_state()
-                self.operations.show_warning(
-                    self.operations.exception_message(exc),
-                    parent=self.context,
-                )
-                return False
-            return True
-        return self.run_learning_inference_inline_compat(
-            model_runtime=model_runtime,
-            inference_boxes=inference_boxes,
-            raw_array=raw_array,
-            label_values=label_values,
-            volume_shape=self.context._bbox_manager.volume_shape,
-        )
+        except Exception as exc:
+            self.context._exit_learning_inference_running_state()
+            self.operations.show_warning(
+                self.operations.exception_message(exc),
+                parent=self.context,
+            )
+            return False
+        return True
 
     def run_learning_inference_inline_compat(
         self,
@@ -322,7 +343,7 @@ class InferenceController:
             )
             return False
 
-        editor = getattr(self.context, "_segmentation_editor", None)
+        editor = self.context._segmentation_editor
         if editor is None or getattr(editor, "kind", None) != "semantic":
             self.operations.show_warning(
                 "A semantic map is required to run Segment Inference BBox.",
@@ -341,11 +362,6 @@ class InferenceController:
         begin_modification = getattr(editor, "begin_modification", None)
         commit_modification = getattr(editor, "commit_modification", None)
         cancel_modification = getattr(editor, "cancel_modification", None)
-        record_history = getattr(
-            self.context,
-            "_record_global_history_for_segmentation_operation",
-            None,
-        )
         in_modification = False
         try:
             if callable(begin_modification):
@@ -366,8 +382,9 @@ class InferenceController:
             if callable(commit_modification):
                 committed = commit_modification()
                 in_modification = False
-                if callable(record_history):
-                    record_history(committed)
+                self.context._record_global_history_for_segmentation_operation(
+                    committed
+                )
         except Exception as exc:
             if in_modification and callable(cancel_modification):
                 try:
@@ -382,22 +399,11 @@ class InferenceController:
 
         if changed_voxel_count_total > 0:
             self.context._annotation_labels_dirty = True
-            for method_name in (
-                "_sync_renderer_segmentation_labels",
-                "_request_hover_readout",
-                "_request_picked_readout",
-                "render_all",
-            ):
-                method = getattr(self.context, method_name, None)
-                if callable(method):
-                    method()
-        refresh_annotation_ui_state = getattr(
-            self.context,
-            "_refresh_annotation_ui_state",
-            None,
-        )
-        if callable(refresh_annotation_ui_state):
-            refresh_annotation_ui_state()
+            self.context._sync_renderer_segmentation_labels()
+            self.context._request_hover_readout()
+            self.context._request_picked_readout()
+            self.context.render_all()
+        self.context._refresh_annotation_ui_state()
 
         return self._show_inference_summary(
             total_count=int(result.total_count),
@@ -452,15 +458,10 @@ class InferenceController:
         thread.finished.connect(thread.deleteLater)
 
         try:
-            enter_running = getattr(
-                self.context,
-                "_enter_learning_inference_running_state",
-                None,
+            self.context._enter_learning_inference_running_state(
+                worker=worker,
+                thread=thread,
             )
-            if callable(enter_running):
-                enter_running(worker=worker, thread=thread)
-            else:
-                self.enter_learning_inference_running_state(worker=worker, thread=thread)
             thread.start()
         except Exception:
             try:
@@ -549,13 +550,9 @@ class InferenceController:
                 )
                 return
             if self.operations.inference_stop_already_requested(self.context):
-                cancel = getattr(self.context, "_on_learning_inference_canceled", None)
-                if callable(cancel):
-                    cancel("Inference canceled by user before applying predictions.")
-                else:
-                    self.on_learning_inference_canceled(
-                        "Inference canceled by user before applying predictions."
-                    )
+                self.context._on_learning_inference_canceled(
+                    "Inference canceled by user before applying predictions."
+                )
                 return
 
             editor = self.context._segmentation_editor
@@ -574,37 +571,17 @@ class InferenceController:
                 str(box_id): tuple(errors)
                 for box_id, errors in tuple(result.cleanup_errors_by_box_id.items())
             }
-            apply_predictions = getattr(
-                self.context,
-                "_apply_inference_predictions_in_single_commit",
-                None,
+            (
+                changed_voxel_count_total,
+                succeeded_box_ids,
+                failure_by_box_id,
+            ) = self.context._apply_inference_predictions_in_single_commit(
+                editor=editor,
+                predictions=result.predictions,
+                initial_failure_by_box_id=failure_by_box_id,
             )
-            if callable(apply_predictions):
-                (
-                    changed_voxel_count_total,
-                    succeeded_box_ids,
-                    failure_by_box_id,
-                ) = apply_predictions(
-                    editor=editor,
-                    predictions=result.predictions,
-                    initial_failure_by_box_id=failure_by_box_id,
-                )
-            else:
-                (
-                    changed_voxel_count_total,
-                    succeeded_box_ids,
-                    failure_by_box_id,
-                ) = self.apply_inference_predictions_in_single_commit(
-                    editor=editor,
-                    predictions=result.predictions,
-                    initial_failure_by_box_id=failure_by_box_id,
-                )
         except LearningInferenceStopRequested as exc:
-            cancel = getattr(self.context, "_on_learning_inference_canceled", None)
-            if callable(cancel):
-                cancel(str(exc))
-            else:
-                self.on_learning_inference_canceled(str(exc))
+            self.context._on_learning_inference_canceled(str(exc))
             return
         finally:
             self.clear_learning_inference_stop_request_state()
@@ -650,18 +627,10 @@ class InferenceController:
             self.clear_learning_inference_stop_request_state()
 
     def on_learning_inference_thread_finished(self) -> None:
-        exit_running = getattr(self.context, "_exit_learning_inference_running_state", None)
-        if callable(exit_running):
-            exit_running()
-        else:
-            self.exit_learning_inference_running_state()
-        if not bool(getattr(self.context, "_deferred_close_after_inference", False)):
+        self.context._exit_learning_inference_running_state()
+        if not self.context._deferred_close_after_inference:
             return
-        clear_state = getattr(self.context, "_clear_deferred_close_inference_state", None)
-        if callable(clear_state):
-            clear_state()
-        else:
-            self.clear_deferred_close_inference_state()
+        self.context._clear_deferred_close_inference_state()
 
         app_instance = self.operations.qapplication_instance()
         if app_instance is None:
@@ -677,13 +646,7 @@ class InferenceController:
             quit_method()
 
     def request_learning_inference_stop(self) -> None:
-        inference_is_running = getattr(self.context, "_inference_is_running", None)
-        is_running = (
-            bool(inference_is_running())
-            if callable(inference_is_running)
-            else self.inference_is_running()
-        )
-        if not is_running:
+        if not self.context._inference_is_running():
             return
         if self.operations.inference_stop_already_requested(self.context):
             return
@@ -691,11 +654,7 @@ class InferenceController:
         request_stop = getattr(worker, "request_stop", None)
         if callable(request_stop):
             self.context._inference_stop_requested = True
-            refresh = getattr(self.context, "_refresh_learning_inference_ui_state", None)
-            if callable(refresh):
-                refresh()
-            else:
-                self.refresh_learning_inference_ui_state()
+            self.context._refresh_learning_inference_ui_state()
             request_stop()
 
     def clear_learning_inference_stop_request_state(self) -> None:
@@ -710,11 +669,7 @@ class InferenceController:
         self.context._deferred_close_inference_mode = "stop_and_close"
 
     def finalize_deferred_close_inference_and_quit(self) -> None:
-        clear_state = getattr(self.context, "_clear_deferred_close_inference_state", None)
-        if callable(clear_state):
-            clear_state()
-        else:
-            self.clear_deferred_close_inference_state()
+        self.context._clear_deferred_close_inference_state()
 
         app_instance = self.operations.qapplication_instance()
         if app_instance is None:
@@ -731,12 +686,7 @@ class InferenceController:
 
     def refresh_learning_inference_ui_state(self) -> None:
         inference_running = self.operations.inference_navigation_lock_active(self.context)
-        training_is_running = getattr(self.context, "_training_is_running", None)
-        training_running = (
-            bool(training_is_running())
-            if callable(training_is_running)
-            else bool(getattr(self.context, "_training_running", False))
-        )
+        training_running = bool(self.context._training_is_running())
         learning_actions_enabled = not training_running and not inference_running
         self.context.bottom_panel.set_segment_inference_enabled(learning_actions_enabled)
         self.context.bottom_panel.set_train_model_enabled(learning_actions_enabled)
@@ -758,9 +708,7 @@ class InferenceController:
         )
         if callable(set_navigation_only_mode):
             set_navigation_only_mode(inference_running)
-        refresh_undo = getattr(self.context, "_refresh_undo_ui_state", None)
-        if callable(refresh_undo):
-            refresh_undo()
+        self.context._refresh_undo_ui_state()
 
     def enter_learning_inference_running_state(
         self,
@@ -772,21 +720,13 @@ class InferenceController:
         self.context._inference_stop_requested = False
         self.context._inference_worker = worker
         self.context._inference_thread = thread
-        refresh = getattr(self.context, "_refresh_learning_inference_ui_state", None)
-        if callable(refresh):
-            refresh()
-        else:
-            self.refresh_learning_inference_ui_state()
+        self.context._refresh_learning_inference_ui_state()
 
     def exit_learning_inference_running_state(self) -> None:
         self.context._inference_running = False
         self.context._inference_worker = None
         self.context._inference_thread = None
-        refresh = getattr(self.context, "_refresh_learning_inference_ui_state", None)
-        if callable(refresh):
-            refresh()
-        else:
-            self.refresh_learning_inference_ui_state()
+        self.context._refresh_learning_inference_ui_state()
 
     def _show_inference_summary(
         self,

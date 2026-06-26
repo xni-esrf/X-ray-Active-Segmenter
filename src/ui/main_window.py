@@ -871,17 +871,6 @@ class MainWindow(QMainWindow):
                 inference_navigation_lock_active=(
                     MainWindow._inference_navigation_lock_active
                 ),
-                mark_current_model_runtime_as_trained=(
-                    lambda owner, *, completed_epoch_count: (
-                        MainWindow._mark_current_model_runtime_as_trained(
-                            owner,
-                            completed_epoch_count=completed_epoch_count,
-                        )
-                    )
-                ),
-                refresh_learning_inference_ui_state=(
-                    MainWindow._refresh_learning_inference_ui_state
-                ),
                 logger=_LOGGER,
             ),
         )

@@ -413,7 +413,9 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
             early_stop_patience=2,
             mixed_precision_enabled=True,
         )
-        window_like = SimpleNamespace()
+        window_like = SimpleNamespace(
+            _mark_current_model_runtime_as_trained=lambda **_kwargs: None,
+        )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
             "src.ui.main_window.show_warning"
@@ -451,7 +453,14 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
             },
             checkpoint_path="foundation_model/weights_epoch_190.cp",
         )
-        window_like = SimpleNamespace()
+        window_like = SimpleNamespace(
+            _mark_current_model_runtime_as_trained=(
+                lambda **kwargs: MainWindow._mark_current_model_runtime_as_trained(
+                    window_like,
+                    **kwargs,
+                )
+            ),
+        )
 
         with patch(
             "src.ui.main_window.get_current_learning_model_runtime",
@@ -480,7 +489,9 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
             early_stop_patience=2,
             mixed_precision_enabled=True,
         )
-        window_like = SimpleNamespace()
+        window_like = SimpleNamespace(
+            _mark_current_model_runtime_as_trained=lambda **_kwargs: None,
+        )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
             "src.ui.main_window.show_warning"
@@ -550,6 +561,7 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
     def test_on_learning_training_thread_finished_exits_running_state(self) -> None:
         exits = []
         window_like = SimpleNamespace(
+            _deferred_close_after_training=False,
             _exit_learning_training_running_state=lambda: exits.append("exit"),
         )
 

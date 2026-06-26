@@ -347,6 +347,9 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
             _training_running=False,
             bottom_panel=bottom_panel,
             _training_is_running=lambda: False,
+            _refresh_learning_inference_ui_state=lambda: MainWindow._refresh_learning_inference_ui_state(
+                window_like
+            ),
         )
 
         MainWindow._refresh_learning_training_ui_state(window_like)
@@ -378,6 +381,9 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
             bottom_panel=bottom_panel,
         )
         window_like._training_is_running = lambda: bool(window_like._training_running)
+        window_like._refresh_learning_inference_ui_state = (
+            lambda: MainWindow._refresh_learning_inference_ui_state(window_like)
+        )
         window_like._refresh_learning_training_ui_state = (
             lambda: MainWindow._refresh_learning_training_ui_state(window_like)
         )

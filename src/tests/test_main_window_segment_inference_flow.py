@@ -207,6 +207,16 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
                 window_like._segmentation_editor = editor
             return bool(ensure_semantic_result)
 
+        def _start_background_inline_compat(**kwargs: object) -> bool:
+            return MainWindow._run_learning_inference_inline_compat(
+                window_like,
+                model_runtime=kwargs["model_runtime"],
+                inference_boxes=kwargs["inference_boxes"],
+                raw_array=kwargs["raw_array"],
+                label_values=kwargs["label_values"],
+                volume_shape=kwargs["volume_shape"],
+            )
+
         window_like = SimpleNamespace(
             bottom_panel=SimpleNamespace(state=SimpleNamespace(bbox_rows=ordered_rows)),
             _bbox_manager=_FakeBBoxManager(boxes),
@@ -224,6 +234,9 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
             _request_picked_readout=lambda: None,
             render_all=lambda: None,
             _refresh_annotation_ui_state=lambda: None,
+            _show_inference_navigation_only_notice=lambda: None,
+            _start_learning_inference_background=_start_background_inline_compat,
+            _exit_learning_inference_running_state=lambda: None,
             _ensure_calls=ensure_calls,
         )
         return window_like

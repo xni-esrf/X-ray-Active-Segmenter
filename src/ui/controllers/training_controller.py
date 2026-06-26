@@ -7,7 +7,6 @@ from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication
 
 from ...learning import (
-    DEFAULT_TRAINING_PARAMETERS,
     LearningTrainingLoopResult,
     validate_training_parameters,
     validate_learning_model_training_preconditions,
@@ -26,7 +25,43 @@ class TrainingControllerContext(Protocol):
     _training_thread: Optional[object]
     _deferred_close_after_training: bool
     _deferred_close_training_mode: str
+    _training_parameters: object
     bottom_panel: object
+
+    def _abort_if_learning_training_running(self) -> bool: ...
+
+    def _ensure_learning_state_for_action(self, action: str) -> bool: ...
+
+    def _train_model_on_dataset_with_dialog(self) -> bool: ...
+
+    def _request_learning_training_stop(self) -> None: ...
+
+    def _training_is_running(self) -> bool: ...
+
+    def _ensure_training_runtime_for_new_training(self) -> bool: ...
+
+    def _start_learning_training_background(self, *, preconditions: object) -> None: ...
+
+    def _enter_learning_training_running_state(
+        self,
+        *,
+        worker: object,
+        thread: object,
+    ) -> None: ...
+
+    def _exit_learning_training_running_state(self) -> None: ...
+
+    def _mark_current_model_runtime_as_trained(
+        self,
+        *,
+        completed_epoch_count: int,
+    ) -> None: ...
+
+    def _clear_deferred_close_training_state(self) -> None: ...
+
+    def _refresh_learning_training_ui_state(self) -> None: ...
+
+    def _refresh_learning_inference_ui_state(self) -> None: ...
 
 
 @dataclass(frozen=True)
@@ -41,12 +76,6 @@ class TrainingControllerOperations:
     qapplication_instance: Callable[[], object] = QApplication.instance
     learning_session_kwargs: Callable[[object], dict[str, object]] = lambda _context: {}
     inference_navigation_lock_active: Callable[[object], bool] = lambda _context: False
-    mark_current_model_runtime_as_trained: Callable[..., object] = (
-        lambda _context, **_kwargs: None
-    )
-    refresh_learning_inference_ui_state: Callable[[object], object] = (
-        lambda _context: None
-    )
     logger: object = _LOGGER
 
 
@@ -59,48 +88,22 @@ class TrainingController:
         return bool(self.context._training_running)
 
     def training_parameters(self):
-        parameters = getattr(
-            self.context,
-            "_training_parameters",
-            DEFAULT_TRAINING_PARAMETERS,
-        )
-        return validate_training_parameters(parameters)
+        return validate_training_parameters(self.context._training_parameters)
 
     def handle_train_model_request(self) -> None:
         if self.operations.inference_navigation_lock_active(self.context):
             return
-        abort_if_training_running = getattr(
-            self.context,
-            "_abort_if_learning_training_running",
-            None,
-        )
-        if callable(abort_if_training_running) and abort_if_training_running():
+        if self.context._abort_if_learning_training_running():
             return
-        ensure_learning_state = getattr(self.context, "_ensure_learning_state_for_action", None)
-        if callable(ensure_learning_state):
-            if not bool(ensure_learning_state("train")):
-                return
-        train_with_dialog = getattr(self.context, "_train_model_on_dataset_with_dialog", None)
-        if callable(train_with_dialog):
-            train_with_dialog()
-        else:
-            self.train_model_on_dataset_with_dialog()
+        if not bool(self.context._ensure_learning_state_for_action("train")):
+            return
+        self.context._train_model_on_dataset_with_dialog()
 
     def handle_stop_training_request(self) -> None:
-        request_stop = getattr(self.context, "_request_learning_training_stop", None)
-        if callable(request_stop):
-            request_stop()
-            return
-        self.request_learning_training_stop()
+        self.context._request_learning_training_stop()
 
     def request_learning_training_stop(self) -> None:
-        training_is_running = getattr(self.context, "_training_is_running", None)
-        is_running = (
-            bool(training_is_running())
-            if callable(training_is_running)
-            else self.training_is_running()
-        )
-        if not is_running:
+        if not self.context._training_is_running():
             return
         worker = self.context._training_worker
         request_stop = getattr(worker, "request_stop", None)
@@ -108,14 +111,8 @@ class TrainingController:
             request_stop()
 
     def train_model_on_dataset_with_dialog(self) -> bool:
-        ensure_training_runtime = getattr(
-            self.context,
-            "_ensure_training_runtime_for_new_training",
-            None,
-        )
-        if callable(ensure_training_runtime):
-            if not bool(ensure_training_runtime()):
-                return False
+        if not bool(self.context._ensure_training_runtime_for_new_training()):
+            return False
 
         try:
             preconditions = self.operations.validate_learning_model_training_preconditions(
@@ -127,25 +124,11 @@ class TrainingController:
             return False
 
         try:
-            start_background = getattr(
-                self.context,
-                "_start_learning_training_background",
-                None,
+            self.context._start_learning_training_background(
+                preconditions=preconditions
             )
-            if callable(start_background):
-                start_background(preconditions=preconditions)
-            else:
-                self.start_learning_training_background(preconditions=preconditions)
         except Exception as exc:
-            exit_running = getattr(
-                self.context,
-                "_exit_learning_training_running_state",
-                None,
-            )
-            if callable(exit_running):
-                exit_running()
-            else:
-                self.exit_learning_training_running_state()
+            self.context._exit_learning_training_running_state()
             self.operations.show_warning(str(exc), parent=self.context)
             return False
         return True
@@ -169,15 +152,10 @@ class TrainingController:
         thread.finished.connect(thread.deleteLater)
 
         try:
-            enter_running = getattr(
-                self.context,
-                "_enter_learning_training_running_state",
-                None,
+            self.context._enter_learning_training_running_state(
+                worker=worker,
+                thread=thread,
             )
-            if callable(enter_running):
-                enter_running(worker=worker, thread=thread)
-            else:
-                self.enter_learning_training_running_state(worker=worker, thread=thread)
             thread.start()
         except Exception:
             try:
@@ -224,14 +202,9 @@ class TrainingController:
             if result.best_weighted_mean_dice is None
             else f"{float(result.best_weighted_mean_dice):.6g}"
         )
-        marker = getattr(self.context, "_mark_current_model_runtime_as_trained", None)
-        if callable(marker):
-            marker(completed_epoch_count=int(result.completed_epoch_count))
-        else:
-            self.operations.mark_current_model_runtime_as_trained(
-                self.context,
-                completed_epoch_count=int(result.completed_epoch_count),
-            )
+        self.context._mark_current_model_runtime_as_trained(
+            completed_epoch_count=int(result.completed_epoch_count)
+        )
         self.operations.show_info(
             (
                 "Training is over.\n"
@@ -252,18 +225,10 @@ class TrainingController:
         )
 
     def on_learning_training_thread_finished(self) -> None:
-        exit_running = getattr(self.context, "_exit_learning_training_running_state", None)
-        if callable(exit_running):
-            exit_running()
-        else:
-            self.exit_learning_training_running_state()
-        if not bool(getattr(self.context, "_deferred_close_after_training", False)):
+        self.context._exit_learning_training_running_state()
+        if not self.context._deferred_close_after_training:
             return
-        clear_state = getattr(self.context, "_clear_deferred_close_training_state", None)
-        if callable(clear_state):
-            clear_state()
-        else:
-            self.clear_deferred_close_training_state()
+        self.context._clear_deferred_close_training_state()
 
         app_instance = self.operations.qapplication_instance()
         if app_instance is None:
@@ -287,40 +252,19 @@ class TrainingController:
         self.context._deferred_close_training_mode = "stop_and_close"
 
     def refresh_learning_training_ui_state(self) -> None:
-        training_is_running = getattr(self.context, "_training_is_running", None)
-        training_running = (
-            bool(training_is_running())
-            if callable(training_is_running)
-            else self.training_is_running()
-        )
+        training_running = bool(self.context._training_is_running())
         self.context.bottom_panel.set_learning_training_running(training_running)
-        refresh_inference = getattr(
-            self.context,
-            "_refresh_learning_inference_ui_state",
-            None,
-        )
-        if callable(refresh_inference):
-            refresh_inference()
-        else:
-            self.operations.refresh_learning_inference_ui_state(self.context)
+        self.context._refresh_learning_inference_ui_state()
         self.context.bottom_panel.set_stop_training_enabled(training_running)
 
     def enter_learning_training_running_state(self, *, worker: object, thread: object) -> None:
         self.context._training_running = True
         self.context._training_worker = worker
         self.context._training_thread = thread
-        refresh = getattr(self.context, "_refresh_learning_training_ui_state", None)
-        if callable(refresh):
-            refresh()
-        else:
-            self.refresh_learning_training_ui_state()
+        self.context._refresh_learning_training_ui_state()
 
     def exit_learning_training_running_state(self) -> None:
         self.context._training_running = False
         self.context._training_worker = None
         self.context._training_thread = None
-        refresh = getattr(self.context, "_refresh_learning_training_ui_state", None)
-        if callable(refresh):
-            refresh()
-        else:
-            self.refresh_learning_training_ui_state()
+        self.context._refresh_learning_training_ui_state()
