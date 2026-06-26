@@ -1337,10 +1337,6 @@ class _VispyCompatibilityLayer:
 
         x_canvas = float(x)
         y_canvas = float(y)
-        if _VispyCompatibilityLayer.use_legacy_pointer_scale():
-            scale = float(getattr(canvas, "pixel_scale", 1.0) or 1.0)
-            x_canvas *= scale
-            y_canvas *= scale
 
         try:
             transform = image_node.get_transform(map_from="canvas", map_to="visual")
@@ -1367,13 +1363,6 @@ class _VispyCompatibilityLayer:
         if mapped is None or mapped.size == 0:
             return None
         return float(mapped[0][0]), float(mapped[0][1])
-
-    @staticmethod
-    def use_legacy_pointer_scale() -> bool:
-        value = os.environ.get("XRA_USE_LEGACY_POINTER_SCALE")
-        if value is None:
-            return False
-        return value.strip().lower() in {"1", "true", "yes", "on"}
 
     def log_gl_context_info(self, canvas: object) -> None:
         if self.gl_info_logged:
@@ -1442,7 +1431,6 @@ class _VispyCompatibilityLayer:
         return text or None
 
     def log_pointer_mapping_diagnostics(self, canvas: object) -> None:
-        mode = "legacy_pixel_scale" if self.use_legacy_pointer_scale() else "logical_canvas"
         vispy_pixel_scale = self.safe_float(getattr(canvas, "pixel_scale", None))
         native = getattr(canvas, "native", None)
         qt_widget_dpr = self.safe_call_float(native, "devicePixelRatioF")
@@ -1456,17 +1444,14 @@ class _VispyCompatibilityLayer:
         qt_screen_dpr = self.safe_call_float(screen, "devicePixelRatio")
 
         logger.info(
-            "Pointer mapping: mode=%s | vispy_pixel_scale=%s | qt_widget_dpr=%s | qt_screen_dpr=%s | "
-            "env_QT_SCALE_FACTOR=%s | env_QT_AUTO_SCREEN_SCALE_FACTOR=%s | env_QT_SCREEN_SCALE_FACTORS=%s | "
-            "env_XRA_USE_LEGACY_POINTER_SCALE=%s",
-            mode,
+            "Pointer mapping: vispy_pixel_scale=%s | qt_widget_dpr=%s | qt_screen_dpr=%s | "
+            "env_QT_SCALE_FACTOR=%s | env_QT_AUTO_SCREEN_SCALE_FACTOR=%s | env_QT_SCREEN_SCALE_FACTORS=%s",
             self.fmt_optional_float(vispy_pixel_scale),
             self.fmt_optional_float(qt_widget_dpr),
             self.fmt_optional_float(qt_screen_dpr),
             os.environ.get("QT_SCALE_FACTOR", ""),
             os.environ.get("QT_AUTO_SCREEN_SCALE_FACTOR", ""),
             os.environ.get("QT_SCREEN_SCALE_FACTORS", ""),
-            os.environ.get("XRA_USE_LEGACY_POINTER_SCALE", ""),
         )
 
     @staticmethod
@@ -2117,12 +2102,6 @@ class GLBackend:
             x=x,
             y=y,
         )
-
-    @staticmethod
-    def _use_legacy_pointer_scale() -> bool:
-        # Temporary compatibility switch kept as a safety valve while validating
-        # pointer mapping behavior across heterogeneous client displays.
-        return _VispyCompatibilityLayer.use_legacy_pointer_scale()
 
     def _log_gl_context_info(self) -> None:
         self._sync_vispy_from_aliases()

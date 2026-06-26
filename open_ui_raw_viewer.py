@@ -22,15 +22,6 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--max-cache-mb", type=int, default=None, help="Chunk cache size in MB")
     parser.add_argument("--log-level", type=str, default=None, help="Logging level (e.g., INFO, DEBUG)")
-    parser.add_argument(
-        "--cursor-size",
-        type=int,
-        default=None,
-        help=(
-            "Force an application cursor size in pixels (safe fallback for remote/display cursor scaling issues). "
-            "If omitted, env var XRA_CURSOR_SIZE is used when set."
-        ),
-    )
     return parser.parse_args()
 
 
@@ -54,7 +45,6 @@ def main() -> None:
         semantic_path=semantic_path,
         instance_path=instance_path,
         bbox_path=bbox_path,
-        forced_cursor_size=args.cursor_size,
     )
 
 
