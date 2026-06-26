@@ -1027,14 +1027,11 @@ class MainWindowAnnotationToolShortcutPolicyTests(unittest.TestCase):
     def test_training_deferred_setters_clear_inference_deferred_state_first(self) -> None:
         actions: list[str] = []
         window_like = SimpleNamespace(
-            _set_running_training_worker_completion_checkpoint_path=lambda checkpoint_path: actions.append(
-                f"sync:{checkpoint_path}"
-            ),
             _clear_deferred_close_inference_state=lambda: actions.append("clear_inference"),
         )
 
         MainWindow._set_deferred_close_after_stop_training(window_like)
-        self.assertEqual(actions, ["clear_inference", "sync:None"])
+        self.assertEqual(actions, ["clear_inference"])
         self.assertTrue(window_like._deferred_close_after_training)
         self.assertEqual(window_like._deferred_close_training_mode, "stop_and_close")
 

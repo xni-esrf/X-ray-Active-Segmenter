@@ -162,7 +162,6 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
             _training_thread=None,
             _deferred_close_after_training=False,
             _deferred_close_training_mode="none",
-            _deferred_close_checkpoint_path=None,
             _on_learning_training_completed=lambda _result: None,
             _on_learning_training_failed=lambda _message: None,
             _on_learning_training_thread_finished=lambda: None,

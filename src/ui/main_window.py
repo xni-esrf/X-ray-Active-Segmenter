@@ -468,7 +468,6 @@ class MainWindow(QMainWindow):
         self._learning_state_stale = True
         self._deferred_close_after_training = False
         self._deferred_close_training_mode: DeferredTrainingCloseMode = "none"
-        self._deferred_close_checkpoint_path: Optional[str] = None
         self._deferred_close_after_inference = False
         self._deferred_close_inference_mode: DeferredInferenceCloseMode = "none"
         self._headless_close_requested = False
@@ -3297,15 +3296,6 @@ class MainWindow(QMainWindow):
         MainWindow._inference_controller_for(
             self
         ).finalize_deferred_close_inference_and_quit()
-
-    def _set_running_training_worker_completion_checkpoint_path(
-        self,
-        *,
-        checkpoint_path: Optional[str],
-    ) -> None:
-        MainWindow._training_controller_for(
-            self
-        ).set_running_training_worker_completion_checkpoint_path(checkpoint_path)
 
     def _clear_deferred_close_training_state(self) -> None:
         MainWindow._training_controller_for(

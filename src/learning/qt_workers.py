@@ -7,31 +7,19 @@ thread wiring, volume loading, and applying predictions remain in MainWindow.
 from __future__ import annotations
 
 from numbers import Integral
-from threading import Event, Lock
+from threading import Event
 from typing import Optional, Sequence, Tuple
 
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
 from ..bbox import BoundingBox
-from .session_store import (
-    get_current_learning_model_runtime,
-)
 from .inference import (
     LearningInferenceBackgroundResult,
     LearningInferencePrediction,
     LearningInferenceStopRequested,
     run_learning_inference,
 )
-
-
-def _save_foundation_model_checkpoint(*, runtime: object, checkpoint_path: str) -> None:
-    from .model_instantiation import save_foundation_model_checkpoint
-
-    save_foundation_model_checkpoint(
-        runtime=runtime,
-        checkpoint_path=checkpoint_path,
-    )
 
 
 def _train_learning_model_with_validation_loop(
@@ -49,12 +37,6 @@ def _train_learning_model_with_validation_loop(
         early_stop_patience=early_stop_patience,
         stop_event=stop_event,
     )
-
-
-def _is_completion_checkpoint_result(result: object) -> bool:
-    from .model_training import LearningTrainingLoopResult
-
-    return isinstance(result, LearningTrainingLoopResult)
 
 
 def _extract_bbox_context_from_array(*args, **kwargs) -> np.ndarray:
@@ -91,24 +73,17 @@ class LearningTrainingWorker(QObject):
         self._preconditions = None
         self._stop_event = Event()
         self._early_stop_patience = 2
-        self._completion_checkpoint_path: Optional[str] = None
-        self._completion_checkpoint_path_lock = Lock()
 
     def configure(
         self,
         *,
         preconditions: object,
         early_stop_patience: int = 2,
-        completion_checkpoint_path: Optional[str] = None,
     ) -> None:
         self._preconditions = preconditions
         self._early_stop_patience = self._coerce_early_stop_patience(
             early_stop_patience
         )
-        if completion_checkpoint_path is None:
-            self.clear_completion_checkpoint_save_request()
-        else:
-            self.request_completion_checkpoint_save(completion_checkpoint_path)
 
     @staticmethod
     def _coerce_early_stop_patience(value: object) -> int:
@@ -128,54 +103,6 @@ class LearningTrainingWorker(QObject):
     def stop_requested(self) -> bool:
         return bool(self._stop_event.is_set())
 
-    def request_completion_checkpoint_save(self, checkpoint_path: str) -> None:
-        normalized_path = str(checkpoint_path).strip()
-        if not normalized_path:
-            raise ValueError("checkpoint_path must be a non-empty string")
-        with self._completion_checkpoint_path_lock:
-            self._completion_checkpoint_path = normalized_path
-
-    def clear_completion_checkpoint_save_request(self) -> None:
-        with self._completion_checkpoint_path_lock:
-            self._completion_checkpoint_path = None
-
-    def _completion_checkpoint_save_path(self) -> Optional[str]:
-        with self._completion_checkpoint_path_lock:
-            return self._completion_checkpoint_path
-
-    def _completion_checkpoint_model_runtime(self) -> Optional[object]:
-        runtime = getattr(self._preconditions, "model_runtime", None)
-        if runtime is not None:
-            return runtime
-        return get_current_learning_model_runtime()
-
-    def _maybe_save_completion_checkpoint(self, *, result: object) -> None:
-        checkpoint_path = self._completion_checkpoint_save_path()
-        if checkpoint_path is None:
-            return
-        if not _is_completion_checkpoint_result(result):
-            return
-
-        normalized_reason = str(result.stop_reason).strip().lower()
-        if normalized_reason not in {"early_stop", "max_epoch"}:
-            return
-
-        runtime = self._completion_checkpoint_model_runtime()
-        if runtime is None:
-            raise RuntimeError(
-                "No learning model runtime is available to save the completion checkpoint."
-            )
-        try:
-            _save_foundation_model_checkpoint(
-                runtime=runtime,
-                checkpoint_path=checkpoint_path,
-            )
-        except Exception as exc:
-            raise RuntimeError(
-                "Failed to save training completion checkpoint to "
-                f"{checkpoint_path}: {exc}"
-            ) from exc
-
     @Slot()
     def run(self) -> None:
         try:
@@ -185,7 +112,6 @@ class LearningTrainingWorker(QObject):
                 early_stop_patience=int(self._early_stop_patience),
                 stop_event=self._stop_event,
             )
-            self._maybe_save_completion_checkpoint(result=result)
             self.completed.emit(result)
         except Exception as exc:
             self.failed.emit(str(exc))

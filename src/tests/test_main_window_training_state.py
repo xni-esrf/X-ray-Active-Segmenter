@@ -421,85 +421,26 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         )
 
     def test_clear_deferred_close_training_state_resets_flags(self) -> None:
-        worker_calls: list[tuple[str, object]] = []
-        worker = SimpleNamespace(
-            clear_completion_checkpoint_save_request=lambda: worker_calls.append(
-                ("clear", None)
-            ),
-            request_completion_checkpoint_save=lambda path: worker_calls.append(
-                ("set", str(path))
-            ),
-        )
         window_like = SimpleNamespace(
             _deferred_close_after_training=True,
             _deferred_close_training_mode="stop_and_close",
-            _deferred_close_checkpoint_path="/tmp/model.cp",
-            _training_worker=worker,
         )
 
         MainWindow._clear_deferred_close_training_state(window_like)
 
         self.assertFalse(window_like._deferred_close_after_training)
         self.assertEqual(window_like._deferred_close_training_mode, "none")
-        self.assertIsNone(window_like._deferred_close_checkpoint_path)
-        self.assertEqual(worker_calls, [("clear", None)])
 
     def test_set_deferred_close_after_stop_training_sets_stop_mode(self) -> None:
-        worker_calls: list[tuple[str, object]] = []
-        worker = SimpleNamespace(
-            clear_completion_checkpoint_save_request=lambda: worker_calls.append(
-                ("clear", None)
-            ),
-            request_completion_checkpoint_save=lambda path: worker_calls.append(
-                ("set", str(path))
-            ),
-        )
         window_like = SimpleNamespace(
             _deferred_close_after_training=False,
             _deferred_close_training_mode="none",
-            _deferred_close_checkpoint_path=None,
-            _training_worker=worker,
         )
 
         MainWindow._set_deferred_close_after_stop_training(window_like)
 
         self.assertTrue(window_like._deferred_close_after_training)
         self.assertEqual(window_like._deferred_close_training_mode, "stop_and_close")
-        self.assertIsNone(window_like._deferred_close_checkpoint_path)
-        self.assertEqual(worker_calls, [("clear", None)])
-
-    def test_set_running_training_worker_completion_checkpoint_path_handles_missing_worker(self) -> None:
-        window_like = SimpleNamespace(_training_worker=None)
-        MainWindow._set_running_training_worker_completion_checkpoint_path(
-            window_like,
-            checkpoint_path="/tmp/bg-best.cp",
-        )
-
-    def test_set_running_training_worker_completion_checkpoint_path_requests_worker_save(self) -> None:
-        calls: list[tuple[str, object]] = []
-        worker = SimpleNamespace(
-            request_completion_checkpoint_save=lambda path: calls.append(("set", str(path))),
-            clear_completion_checkpoint_save_request=lambda: calls.append(("clear", None)),
-        )
-        window_like = SimpleNamespace(_training_worker=worker)
-        MainWindow._set_running_training_worker_completion_checkpoint_path(
-            window_like,
-            checkpoint_path="/tmp/bg-best.cp",
-        )
-        self.assertEqual(calls, [("set", "/tmp/bg-best.cp")])
-
-    def test_set_running_training_worker_completion_checkpoint_path_clears_worker_save_request(self) -> None:
-        calls: list[tuple[str, object]] = []
-        worker = SimpleNamespace(
-            request_completion_checkpoint_save=lambda path: calls.append(("set", str(path))),
-            clear_completion_checkpoint_save_request=lambda: calls.append(("clear", None)),
-        )
-        window_like = SimpleNamespace(_training_worker=worker)
-        MainWindow._set_running_training_worker_completion_checkpoint_path(
-            window_like,
-            checkpoint_path=None,
-        )
-        self.assertEqual(calls, [("clear", None)])
 
     def test_handle_load_model_request_warns_and_aborts_when_training_running(self) -> None:
         called = []
@@ -1159,26 +1100,8 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
     def test_handle_stop_training_request_calls_worker_request_stop_when_running(self) -> None:
         calls = []
         worker = SimpleNamespace(
-            clear_completion_checkpoint_save_request=lambda: calls.append("clear"),
             request_stop=lambda: calls.append("stop"),
         )
-        window_like = SimpleNamespace(
-            _training_is_running=lambda: True,
-            _training_worker=worker,
-            _request_learning_training_stop=lambda: MainWindow._request_learning_training_stop(
-                window_like
-            ),
-        )
-
-        with patch("src.ui.main_window.show_warning") as warning_mock:
-            MainWindow._handle_stop_training_request(window_like)
-
-        self.assertEqual(calls, ["clear", "stop"])
-        warning_mock.assert_not_called()
-
-    def test_handle_stop_training_request_stops_worker_when_clear_method_is_missing(self) -> None:
-        calls = []
-        worker = SimpleNamespace(request_stop=lambda: calls.append("stop"))
         window_like = SimpleNamespace(
             _training_is_running=lambda: True,
             _training_worker=worker,

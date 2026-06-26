@@ -103,13 +103,6 @@ class TrainingController:
         if not is_running:
             return
         worker = self.context._training_worker
-        clear_completion_checkpoint_save_request = getattr(
-            worker,
-            "clear_completion_checkpoint_save_request",
-            None,
-        )
-        if callable(clear_completion_checkpoint_save_request):
-            clear_completion_checkpoint_save_request()
         request_stop = getattr(worker, "request_stop", None)
         if callable(request_stop):
             request_stop()
@@ -285,49 +278,13 @@ class TrainingController:
         if callable(quit_method):
             quit_method()
 
-    def set_running_training_worker_completion_checkpoint_path(
-        self,
-        checkpoint_path: Optional[str],
-    ) -> None:
-        worker = getattr(self.context, "_training_worker", None)
-        if worker is None:
-            return
-        if checkpoint_path is None:
-            clear_request = getattr(worker, "clear_completion_checkpoint_save_request", None)
-            if callable(clear_request):
-                clear_request()
-            return
-        request_save = getattr(worker, "request_completion_checkpoint_save", None)
-        if callable(request_save):
-            request_save(str(checkpoint_path))
-
     def clear_deferred_close_training_state(self) -> None:
         self.context._deferred_close_after_training = False
         self.context._deferred_close_training_mode = "none"
-        self.context._deferred_close_checkpoint_path = None
-        sync_method = getattr(
-            self.context,
-            "_set_running_training_worker_completion_checkpoint_path",
-            None,
-        )
-        if callable(sync_method):
-            sync_method(checkpoint_path=None)
-        else:
-            self.set_running_training_worker_completion_checkpoint_path(None)
 
     def set_deferred_close_after_stop_training(self) -> None:
         self.context._deferred_close_after_training = True
         self.context._deferred_close_training_mode = "stop_and_close"
-        self.context._deferred_close_checkpoint_path = None
-        sync_method = getattr(
-            self.context,
-            "_set_running_training_worker_completion_checkpoint_path",
-            None,
-        )
-        if callable(sync_method):
-            sync_method(checkpoint_path=None)
-        else:
-            self.set_running_training_worker_completion_checkpoint_path(None)
 
     def refresh_learning_training_ui_state(self) -> None:
         training_is_running = getattr(self.context, "_training_is_running", None)
