@@ -398,20 +398,24 @@ class GLBackendBackspaceGuardTests(unittest.TestCase):
     def test_set_segmentation_opacity_clamps_and_updates_node_and_canvas(self) -> None:
         updates: list[str] = []
         backend = GLBackend()
-        backend._seg_node = SimpleNamespace(opacity=None)
+        backend._segmentation_overlay.seg_node = SimpleNamespace(opacity=None)
         backend._canvas = SimpleNamespace(update=lambda: updates.append("update"))
 
         backend.set_segmentation_opacity(1.5)
         self.assertEqual(backend.segmentation_opacity(), 1.0)
-        self.assertEqual(backend._seg_node.opacity, 1.0)
+        self.assertEqual(backend._segmentation_overlay.seg_node.opacity, 1.0)
 
         backend.set_segmentation_opacity(-0.2)
         self.assertEqual(backend.segmentation_opacity(), 0.0)
-        self.assertEqual(backend._seg_node.opacity, 0.0)
+        self.assertEqual(backend._segmentation_overlay.seg_node.opacity, 0.0)
 
         backend.set_segmentation_opacity(0.35)
         self.assertAlmostEqual(backend.segmentation_opacity(), 0.35, places=6)
-        self.assertAlmostEqual(backend._seg_node.opacity, 0.35, places=6)
+        self.assertAlmostEqual(
+            backend._segmentation_overlay.seg_node.opacity,
+            0.35,
+            places=6,
+        )
         self.assertEqual(updates, ["update", "update", "update"])
 
 

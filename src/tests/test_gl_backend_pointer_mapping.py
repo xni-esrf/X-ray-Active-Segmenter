@@ -51,7 +51,7 @@ class GLBackendPointerMappingTests(unittest.TestCase):
         backend = GLBackend()
         backend._ready = True
         backend._canvas = SimpleNamespace(pixel_scale=2.0)
-        backend._image_node = _ImageNode()
+        backend._image_texture.image_node = _ImageNode()
 
         mapped = backend.map_canvas_to_image(11.0, 17.0)
 

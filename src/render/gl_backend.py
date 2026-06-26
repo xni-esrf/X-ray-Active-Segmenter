@@ -1502,147 +1502,6 @@ class GLBackend:
         self._bbox_overlay = _BoundingBoxOverlayLayer()
         self._camera_view = _CameraViewLayer()
         self._vispy = _VispyCompatibilityLayer()
-        self._image_node = self._image_texture.image_node
-        self._seg_node = self._segmentation_overlay.seg_node
-        self._selection_marker_node = self._marker_overlay.selection_marker_node
-        self._bbox_line_node = self._bbox_overlay.line_node
-        self._bbox_selected_line_node = self._bbox_overlay.selected_line_node
-        self._bbox_hover_handle_node = self._bbox_overlay.hover_handle_node
-        self._bbox_active_handle_node = self._bbox_overlay.active_handle_node
-        self._image_dtype = self._image_texture.image_dtype
-        self._crosshair_h = self._marker_overlay.crosshair_h
-        self._crosshair_v = self._marker_overlay.crosshair_v
-        self._zoom = self._camera_view.zoom
-        self._pan = self._camera_view.pan
-        self._seg_range = self._segmentation_overlay.seg_range
-        self._seg_labels = self._segmentation_overlay.seg_labels
-        self._seg_palette = self._segmentation_overlay.seg_palette
-        self._seg_rgba_cache = self._segmentation_overlay.seg_rgba_cache
-        self._segmentation_opacity = self._segmentation_overlay.segmentation_opacity
-        self._seg_texture = self._segmentation_overlay.seg_texture
-        self._seg_subupload_supported = self._segmentation_overlay.seg_subupload_supported
-        self._seg_subupload_mode = self._segmentation_overlay.seg_subupload_mode
-        self._seg_subupload_mapping_verified = (
-            self._segmentation_overlay.seg_subupload_mapping_verified
-        )
-        self._seg_roi_upload_attempts = self._segmentation_overlay.seg_roi_upload_attempts
-        self._seg_roi_subupload_success = self._segmentation_overlay.seg_roi_subupload_success
-        self._seg_roi_full_fallback = self._segmentation_overlay.seg_roi_full_fallback
-        self._seg_roi_fallback_reasons = self._segmentation_overlay.seg_roi_fallback_reasons
-        self._seg_roi_stats_log_every = self._segmentation_overlay.seg_roi_stats_log_every
-        self._label_rgba_cache = self._segmentation_overlay.label_rgba_cache
-        self._label_rgba_cache_limit = self._segmentation_overlay.label_rgba_cache_limit
-        self._selection_marker_visible = self._marker_overlay.selection_marker_visible
-        self._selection_marker_xy = self._marker_overlay.selection_marker_xy
-        self._bbox_label_colors = self._bbox_overlay.label_colors
-        self._bbox_default_color = self._bbox_overlay.default_color
-        self._bbox_selected_color = self._bbox_overlay.selected_color
-        self._bbox_hover_color = self._bbox_overlay.hover_color
-        self._bbox_active_color = self._bbox_overlay.active_color
-        self._fit_done = self._camera_view.fit_done
-        self._gl_info_logged = self._vispy.gl_info_logged
-
-    def _sync_image_texture_aliases(self) -> None:
-        self._image_node = self._image_texture.image_node
-        self._image_dtype = self._image_texture.image_dtype
-
-    def _sync_image_texture_from_aliases(self) -> None:
-        self._image_texture.image_node = self._image_node
-        self._image_texture.image_dtype = self._image_dtype
-
-    def _sync_segmentation_overlay_aliases(self) -> None:
-        self._seg_node = self._segmentation_overlay.seg_node
-        self._seg_range = self._segmentation_overlay.seg_range
-        self._seg_labels = self._segmentation_overlay.seg_labels
-        self._seg_palette = self._segmentation_overlay.seg_palette
-        self._seg_rgba_cache = self._segmentation_overlay.seg_rgba_cache
-        self._segmentation_opacity = self._segmentation_overlay.segmentation_opacity
-        self._seg_texture = self._segmentation_overlay.seg_texture
-        self._seg_subupload_supported = self._segmentation_overlay.seg_subupload_supported
-        self._seg_subupload_mode = self._segmentation_overlay.seg_subupload_mode
-        self._seg_subupload_mapping_verified = (
-            self._segmentation_overlay.seg_subupload_mapping_verified
-        )
-        self._seg_roi_upload_attempts = self._segmentation_overlay.seg_roi_upload_attempts
-        self._seg_roi_subupload_success = self._segmentation_overlay.seg_roi_subupload_success
-        self._seg_roi_full_fallback = self._segmentation_overlay.seg_roi_full_fallback
-        self._seg_roi_fallback_reasons = self._segmentation_overlay.seg_roi_fallback_reasons
-        self._seg_roi_stats_log_every = self._segmentation_overlay.seg_roi_stats_log_every
-        self._label_rgba_cache = self._segmentation_overlay.label_rgba_cache
-        self._label_rgba_cache_limit = self._segmentation_overlay.label_rgba_cache_limit
-
-    def _sync_segmentation_overlay_from_aliases(self) -> None:
-        self._segmentation_overlay.seg_node = self._seg_node
-        self._segmentation_overlay.seg_range = self._seg_range
-        self._segmentation_overlay.seg_labels = self._seg_labels
-        self._segmentation_overlay.seg_palette = self._seg_palette
-        self._segmentation_overlay.seg_rgba_cache = self._seg_rgba_cache
-        self._segmentation_overlay.segmentation_opacity = self._segmentation_opacity
-        self._segmentation_overlay.seg_texture = self._seg_texture
-        self._segmentation_overlay.seg_subupload_supported = self._seg_subupload_supported
-        self._segmentation_overlay.seg_subupload_mode = self._seg_subupload_mode
-        self._segmentation_overlay.seg_subupload_mapping_verified = (
-            self._seg_subupload_mapping_verified
-        )
-        self._segmentation_overlay.seg_roi_upload_attempts = self._seg_roi_upload_attempts
-        self._segmentation_overlay.seg_roi_subupload_success = self._seg_roi_subupload_success
-        self._segmentation_overlay.seg_roi_full_fallback = self._seg_roi_full_fallback
-        self._segmentation_overlay.seg_roi_fallback_reasons = self._seg_roi_fallback_reasons
-        self._segmentation_overlay.seg_roi_stats_log_every = self._seg_roi_stats_log_every
-        self._segmentation_overlay.label_rgba_cache = self._label_rgba_cache
-        self._segmentation_overlay.label_rgba_cache_limit = self._label_rgba_cache_limit
-
-    def _sync_marker_overlay_aliases(self) -> None:
-        self._crosshair_h = self._marker_overlay.crosshair_h
-        self._crosshair_v = self._marker_overlay.crosshair_v
-        self._selection_marker_node = self._marker_overlay.selection_marker_node
-        self._selection_marker_visible = self._marker_overlay.selection_marker_visible
-        self._selection_marker_xy = self._marker_overlay.selection_marker_xy
-
-    def _sync_marker_overlay_from_aliases(self) -> None:
-        self._marker_overlay.crosshair_h = self._crosshair_h
-        self._marker_overlay.crosshair_v = self._crosshair_v
-        self._marker_overlay.selection_marker_node = self._selection_marker_node
-        self._marker_overlay.selection_marker_visible = self._selection_marker_visible
-        self._marker_overlay.selection_marker_xy = self._selection_marker_xy
-
-    def _sync_bbox_overlay_aliases(self) -> None:
-        self._bbox_line_node = self._bbox_overlay.line_node
-        self._bbox_selected_line_node = self._bbox_overlay.selected_line_node
-        self._bbox_hover_handle_node = self._bbox_overlay.hover_handle_node
-        self._bbox_active_handle_node = self._bbox_overlay.active_handle_node
-        self._bbox_label_colors = self._bbox_overlay.label_colors
-        self._bbox_default_color = self._bbox_overlay.default_color
-        self._bbox_selected_color = self._bbox_overlay.selected_color
-        self._bbox_hover_color = self._bbox_overlay.hover_color
-        self._bbox_active_color = self._bbox_overlay.active_color
-
-    def _sync_bbox_overlay_from_aliases(self) -> None:
-        self._bbox_overlay.line_node = self._bbox_line_node
-        self._bbox_overlay.selected_line_node = self._bbox_selected_line_node
-        self._bbox_overlay.hover_handle_node = self._bbox_hover_handle_node
-        self._bbox_overlay.active_handle_node = self._bbox_active_handle_node
-        self._bbox_overlay.label_colors = self._bbox_label_colors
-        self._bbox_overlay.default_color = self._bbox_default_color
-        self._bbox_overlay.selected_color = self._bbox_selected_color
-        self._bbox_overlay.hover_color = self._bbox_hover_color
-        self._bbox_overlay.active_color = self._bbox_active_color
-
-    def _sync_camera_view_aliases(self) -> None:
-        self._zoom = self._camera_view.zoom
-        self._pan = self._camera_view.pan
-        self._fit_done = self._camera_view.fit_done
-
-    def _sync_camera_view_from_aliases(self) -> None:
-        self._camera_view.zoom = self._zoom
-        self._camera_view.pan = self._pan
-        self._camera_view.fit_done = self._fit_done
-
-    def _sync_vispy_aliases(self) -> None:
-        self._gl_info_logged = self._vispy.gl_info_logged
-
-    def _sync_vispy_from_aliases(self) -> None:
-        self._vispy.gl_info_logged = self._gl_info_logged
 
     def initialize(self) -> None:
         if self._ready:
@@ -1660,18 +1519,13 @@ class GLBackend:
             scene=self._view.scene,
         )
         self._image_texture.initialize(scene, self._scene_context)
-        self._sync_image_texture_aliases()
         self._segmentation_overlay.initialize(scene, self._scene_context)
-        self._sync_segmentation_overlay_aliases()
         self._marker_overlay.initialize(scene, self._scene_context)
-        self._sync_marker_overlay_aliases()
         self._bbox_overlay.initialize(scene, self._scene_context)
-        self._sync_bbox_overlay_aliases()
         self._camera_view.initialize(
             self._scene_context,
             disable_backspace_reset=_VispyCompatibilityLayer.disable_camera_backspace_reset,
         )
-        self._sync_camera_view_aliases()
         self._log_gl_context_info()
         self._ready = True
 
@@ -1690,12 +1544,9 @@ class GLBackend:
         return self._ready
 
     def set_segmentation_opacity(self, opacity: float) -> None:
-        self._sync_segmentation_overlay_from_aliases()
         self._segmentation_overlay.set_opacity(opacity, canvas=self._canvas)
-        self._sync_segmentation_overlay_aliases()
 
     def segmentation_opacity(self) -> float:
-        self._sync_segmentation_overlay_aliases()
         return float(self._segmentation_overlay.segmentation_opacity)
 
     def widget(self):
@@ -1704,9 +1555,7 @@ class GLBackend:
         return self._canvas.native  # Qt widget
 
     def _ensure_float_image_node(self, image: np.ndarray) -> None:
-        self._sync_image_texture_from_aliases()
         self._image_texture.ensure_float_image_node(image)
-        self._sync_image_texture_aliases()
 
     def upload_texture(
         self,
@@ -1731,9 +1580,7 @@ class GLBackend:
             segmentation_labels=segmentation_labels,
             segmentation_roi=segmentation_roi,
         )
-        self._sync_image_texture_from_aliases()
         self._image_texture.upload_image(image)
-        self._sync_image_texture_aliases()
         self._update_segmentation(
             segmentation,
             segmentation_range,
@@ -1741,13 +1588,11 @@ class GLBackend:
             segmentation_roi=segmentation_roi,
             segmentation_patch=segmentation_patch,
         )
-        self._sync_camera_view_from_aliases()
         self._camera_view.fit_image_if_needed(
             view=self._view,
             width=width,
             height=height,
         )
-        self._sync_camera_view_aliases()
         self._canvas.update()
         return texture
 
@@ -1756,9 +1601,7 @@ class GLBackend:
             self.initialize()
         if texture.data is None:
             return
-        self._sync_image_texture_from_aliases()
         self._image_texture.upload_image(texture.data)
-        self._sync_image_texture_aliases()
         self._update_segmentation(
             texture.segmentation,
             texture.segmentation_range,
@@ -1790,9 +1633,7 @@ class GLBackend:
     def clear_bounding_boxes_overlay(self) -> None:
         if not self._ready:
             self.initialize()
-        self._sync_bbox_overlay_from_aliases()
         self._bbox_overlay.clear(canvas=self._canvas)
-        self._sync_bbox_overlay_aliases()
 
     def update_bounding_boxes_overlay(
         self,
@@ -1804,7 +1645,6 @@ class GLBackend:
     ) -> None:
         if not self._ready:
             self.initialize()
-        self._sync_bbox_overlay_from_aliases()
         self._bbox_overlay.update(
             boxes,
             canvas=self._canvas,
@@ -1812,7 +1652,6 @@ class GLBackend:
             hover_hit=hover_hit,
             active_hit=active_hit,
         )
-        self._sync_bbox_overlay_aliases()
 
     def _set_bounding_box_line_node(
         self,
@@ -1832,7 +1671,6 @@ class GLBackend:
         )
 
     def _bbox_color_for_label(self, label: object) -> np.ndarray:
-        self._sync_bbox_overlay_from_aliases()
         return self._bbox_overlay.bbox_color_for_label(label)
 
     def _set_handle_marker_node(
@@ -1862,9 +1700,7 @@ class GLBackend:
         return _BoundingBoxOverlayLayer.handle_marker_xy(hit, by_id=by_id)
 
     def _reset_segmentation_texture_state(self) -> None:
-        self._sync_segmentation_overlay_from_aliases()
         self._segmentation_overlay.reset_texture_state()
-        self._sync_segmentation_overlay_aliases()
 
     def _update_segmentation(
         self,
@@ -1874,7 +1710,6 @@ class GLBackend:
         segmentation_roi: Optional[SegmentationROI] = None,
         segmentation_patch: Optional[np.ndarray] = None,
     ) -> None:
-        self._sync_segmentation_overlay_from_aliases()
         self._segmentation_overlay.update(
             segmentation,
             segmentation_range,
@@ -1882,7 +1717,6 @@ class GLBackend:
             segmentation_roi=segmentation_roi,
             segmentation_patch=segmentation_patch,
         )
-        self._sync_segmentation_overlay_aliases()
 
     def _normalize_segmentation_roi(
         self,
@@ -1898,10 +1732,7 @@ class GLBackend:
         return self._segmentation_overlay.build_seg_colormap(seg_min, seg_max)
 
     def _build_seg_palette(self, labels: np.ndarray) -> np.ndarray:
-        self._sync_segmentation_overlay_from_aliases()
-        result = self._segmentation_overlay.build_seg_palette(labels)
-        self._sync_segmentation_overlay_aliases()
-        return result
+        return self._segmentation_overlay.build_seg_palette(labels)
 
     def _normalize_segmentation_patch(
         self,
@@ -1917,10 +1748,7 @@ class GLBackend:
         *,
         roi: SegmentationROI,
     ) -> Tuple[bool, str]:
-        self._sync_segmentation_overlay_from_aliases()
-        result = self._segmentation_overlay.upload_segmentation_roi(rgba_patch, roi=roi)
-        self._sync_segmentation_overlay_aliases()
-        return result
+        return self._segmentation_overlay.upload_segmentation_roi(rgba_patch, roi=roi)
 
     def _roi_texture_offset(
         self,
@@ -1953,56 +1781,34 @@ class GLBackend:
         *,
         texture_shape: Tuple[int, int],
     ) -> Tuple[bool, str]:
-        self._sync_segmentation_overlay_from_aliases()
-        result = self._segmentation_overlay.verify_subupload_mapping(
+        return self._segmentation_overlay.verify_subupload_mapping(
             texture,
             texture_shape=texture_shape,
         )
-        self._sync_segmentation_overlay_aliases()
-        return result
 
     def _record_seg_roi_upload_result(self, success: bool, *, reason: str) -> None:
-        self._sync_segmentation_overlay_from_aliases()
         self._segmentation_overlay.record_seg_roi_upload_result(success, reason=reason)
-        self._sync_segmentation_overlay_aliases()
 
     def segmentation_upload_stats(self) -> Dict[str, object]:
-        self._sync_segmentation_overlay_from_aliases()
-        result = self._segmentation_overlay.upload_stats()
-        self._sync_segmentation_overlay_aliases()
-        return result
+        return self._segmentation_overlay.upload_stats()
 
     def reset_segmentation_upload_stats(self) -> None:
-        self._sync_segmentation_overlay_from_aliases()
         self._segmentation_overlay.reset_upload_stats()
-        self._sync_segmentation_overlay_aliases()
 
     def _seg_texture_handle(self):
-        self._sync_segmentation_overlay_from_aliases()
-        result = self._segmentation_overlay.seg_texture_handle()
-        self._sync_segmentation_overlay_aliases()
-        return result
+        return self._segmentation_overlay.seg_texture_handle()
 
     def _label_to_rgba(self, label: int) -> Tuple[int, int, int, int]:
         return self._segmentation_overlay.label_to_rgba(label)
 
     def _label_rgba(self, label: int) -> np.ndarray:
-        self._sync_segmentation_overlay_from_aliases()
-        result = self._segmentation_overlay.label_rgba(label)
-        self._sync_segmentation_overlay_aliases()
-        return result
+        return self._segmentation_overlay.label_rgba(label)
 
     def _palette_for_unique_labels(self, labels: np.ndarray) -> np.ndarray:
-        self._sync_segmentation_overlay_from_aliases()
-        result = self._segmentation_overlay.palette_for_unique_labels(labels)
-        self._sync_segmentation_overlay_aliases()
-        return result
+        return self._segmentation_overlay.palette_for_unique_labels(labels)
 
     def _colorize_labeled_segmentation(self, segmentation: np.ndarray) -> np.ndarray:
-        self._sync_segmentation_overlay_from_aliases()
-        result = self._segmentation_overlay.colorize_labeled_segmentation(segmentation)
-        self._sync_segmentation_overlay_aliases()
-        return result
+        return self._segmentation_overlay.colorize_labeled_segmentation(segmentation)
 
     def _label_hue(self, label: int) -> float:
         # Bit-reversed ordering (Van der Corput base-2) spreads consecutive
@@ -2024,7 +1830,6 @@ class GLBackend:
     def set_crosshair(self, x: float, y: float, width: int, height: int) -> None:
         if not self._ready:
             self.initialize()
-        self._sync_marker_overlay_from_aliases()
         self._marker_overlay.set_crosshair(
             canvas=self._canvas,
             x=x,
@@ -2032,19 +1837,16 @@ class GLBackend:
             width=width,
             height=height,
         )
-        self._sync_marker_overlay_aliases()
 
     def set_selection_marker(self, x: float, y: float, *, visible: bool) -> None:
         if not self._ready:
             self.initialize()
-        self._sync_marker_overlay_from_aliases()
         self._marker_overlay.set_selection_marker(
             canvas=self._canvas,
             x=x,
             y=y,
             visible=visible,
         )
-        self._sync_marker_overlay_aliases()
 
     def _selection_marker_position(self, x: float, y: float) -> np.ndarray:
         return _MarkerOverlayLayer.selection_marker_position(x, y)
@@ -2054,7 +1856,6 @@ class GLBackend:
             self.initialize()
         if self._view is None or self._view.camera is None:
             return
-        self._sync_camera_view_from_aliases()
         self._camera_view.set_pan(
             view=self._view,
             canvas=self._canvas,
@@ -2063,12 +1864,11 @@ class GLBackend:
             width=width,
             height=height,
         )
-        self._sync_camera_view_aliases()
 
     def _map_image_to_scene(self, x: float, y: float) -> Optional[Tuple[float, float]]:
         if not self._ready:
             self.initialize()
-        return _CameraViewLayer.map_image_to_scene(self._image_node, x, y)
+        return _CameraViewLayer.map_image_to_scene(self._image_texture.image_node, x, y)
 
     def set_zoom(
         self,
@@ -2081,32 +1881,28 @@ class GLBackend:
             self.initialize()
         if self._view is None or self._view.camera is None:
             return
-        self._sync_camera_view_from_aliases()
         self._camera_view.set_zoom(
             view=self._view,
             canvas=self._canvas,
-            image_node=self._image_node,
+            image_node=self._image_texture.image_node,
             zoom=zoom,
             width=width,
             height=height,
             center=center,
         )
-        self._sync_camera_view_aliases()
 
     def map_canvas_to_image(self, x: float, y: float) -> Optional[Tuple[float, float]]:
         if not self._ready:
             self.initialize()
         return _VispyCompatibilityLayer.map_canvas_to_image(
             canvas=self._canvas,
-            image_node=self._image_node,
+            image_node=self._image_texture.image_node,
             x=x,
             y=y,
         )
 
     def _log_gl_context_info(self) -> None:
-        self._sync_vispy_from_aliases()
         self._vispy.log_gl_context_info(self._canvas)
-        self._sync_vispy_aliases()
 
     def _query_gl_string(self, gl, token_name: str) -> Optional[str]:
         return self._vispy.query_gl_string(gl, token_name)
