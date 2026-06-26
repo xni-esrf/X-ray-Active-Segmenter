@@ -14,29 +14,17 @@ except Exception:  # pragma: no cover - environment dependent
     QSizePolicy = None  # type: ignore[assignment]
 
 from src.bbox import BoundingBox
+
 try:
     from src.ui.bottom_panel import BottomPanel
-    from src.ui.bottom_panel_subpanels import (
-        AnnotationPanel,
-        BoundingBoxesPanel,
-        ContrastPanel,
-        FilesPanel,
-        HistoryPanel,
-        LearningPanel,
-        NavigationPanel,
-    )
 except Exception:  # pragma: no cover - environment dependent
-    AnnotationPanel = None  # type: ignore[assignment]
-    BoundingBoxesPanel = None  # type: ignore[assignment]
-    ContrastPanel = None  # type: ignore[assignment]
     BottomPanel = None  # type: ignore[assignment]
-    FilesPanel = None  # type: ignore[assignment]
-    HistoryPanel = None  # type: ignore[assignment]
-    LearningPanel = None  # type: ignore[assignment]
-    NavigationPanel = None  # type: ignore[assignment]
 
 
-@unittest.skipUnless(QApplication is not None and BottomPanel is not None, "PySide6 is not available")
+@unittest.skipUnless(
+    QApplication is not None and BottomPanel is not None,
+    "PySide6 is not available",
+)
 class BottomPanelBoundingBoxesTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
@@ -68,188 +56,29 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         )
         return (box1, box2)
 
-    def test_sections_are_composed_subpanels_with_compatibility_aliases(
-        self,
-    ) -> None:
-        self.assertIsInstance(self.panel._files_panel, FilesPanel)
-        self.assertIsInstance(self.panel._history_panel, HistoryPanel)
-        self.assertIsInstance(self.panel._learning_panel, LearningPanel)
-        self.assertIsInstance(self.panel._navigation_panel, NavigationPanel)
-        self.assertIsInstance(self.panel._contrast_panel, ContrastPanel)
-        self.assertIsInstance(self.panel._annotation_panel, AnnotationPanel)
-        self.assertIsInstance(self.panel._bounding_boxes_panel, BoundingBoxesPanel)
-
-        self.assertIs(self.panel._open_button, self.panel._files_panel.open_button)
-        self.assertIs(
-            self.panel._open_semantic_button,
-            self.panel._files_panel.open_semantic_button,
-        )
-        self.assertIs(
-            self.panel._open_instance_button,
-            self.panel._files_panel.open_instance_button,
-        )
-        self.assertIs(
-            self.panel._save_segmentation_button,
-            self.panel._files_panel.save_segmentation_button,
-        )
-        self.assertIs(self.panel._undo_button, self.panel._history_panel.undo_button)
-        self.assertIs(self.panel._redo_button, self.panel._history_panel.redo_button)
-        self.assertIs(
-            self.panel._load_model_button,
-            self.panel._learning_panel.load_model_button,
-        )
-        self.assertIs(
-            self.panel._save_model_button,
-            self.panel._learning_panel.save_model_button,
-        )
-        self.assertIs(
-            self.panel._segment_inference_button,
-            self.panel._learning_panel.segment_inference_button,
-        )
-        self.assertIs(
-            self.panel._stop_inference_button,
-            self.panel._learning_panel.stop_inference_button,
-        )
-        self.assertIs(
-            self.panel._train_model_button,
-            self.panel._learning_panel.train_model_button,
-        )
-        self.assertIs(
-            self.panel._stop_training_button,
-            self.panel._learning_panel.stop_training_button,
-        )
-        self.assertIs(
-            self.panel._change_training_parameters_button,
-            self.panel._learning_panel.change_training_parameters_button,
-        )
-        self.assertIs(
-            self.panel._learning_training_status,
-            self.panel._learning_panel.training_status,
-        )
-        self.assertIs(self.panel._cursor_z, self.panel._navigation_panel.cursor_z)
-        self.assertIs(self.panel._cursor_y, self.panel._navigation_panel.cursor_y)
-        self.assertIs(self.panel._cursor_x, self.panel._navigation_panel.cursor_x)
-        self.assertIs(self.panel._zoom_spin, self.panel._navigation_panel.zoom_spin)
-        self.assertIs(
-            self.panel._auto_level_checkbox,
-            self.panel._navigation_panel.auto_level_checkbox,
-        )
-        self.assertIs(
-            self.panel._view_layout_button_group,
-            self.panel._navigation_panel.view_layout_button_group,
-        )
-        self.assertIs(
-            self.panel._view_layout_all_radio,
-            self.panel._navigation_panel.view_layout_all_radio,
-        )
-        self.assertIs(
-            self.panel._level_status,
-            self.panel._navigation_panel.level_status,
-        )
-        self.assertIs(
-            self.panel._contrast_min_slider,
-            self.panel._contrast_panel.contrast_min_slider,
-        )
-        self.assertIs(
-            self.panel._contrast_max_slider,
-            self.panel._contrast_panel.contrast_max_slider,
-        )
-        self.assertIs(
-            self.panel._segmentation_opacity_slider,
-            self.panel._contrast_panel.segmentation_opacity_slider,
-        )
-        self.assertIs(
-            self.panel._segmentation_opacity_value,
-            self.panel._contrast_panel.segmentation_opacity_value,
-        )
-        self.assertIs(
-            self.panel._annotation_toggle,
-            self.panel._annotation_panel.annotation_toggle,
-        )
-        self.assertIs(
-            self.panel._annotation_tool_combo,
-            self.panel._annotation_panel.annotation_tool_combo,
-        )
-        self.assertIs(
-            self.panel._tool_label_edit,
-            self.panel._annotation_panel.tool_label_edit,
-        )
-        self.assertIs(
-            self.panel._brush_radius_spin,
-            self.panel._annotation_panel.brush_radius_spin,
-        )
-        self.assertIs(
-            self.panel._flood_fill_button,
-            self.panel._annotation_panel.flood_fill_button,
-        )
-        self.assertIs(
-            self.panel._next_available_button,
-            self.panel._annotation_panel.next_available_button,
-        )
-        self.assertIs(
-            self.panel._bounding_boxes_group,
-            self.panel._bounding_boxes_panel,
-        )
-        self.assertIs(
-            self.panel._bounding_box_mode_toggle,
-            self.panel._bounding_boxes_panel.bounding_box_mode_toggle,
-        )
-        self.assertIs(self.panel._bbox_table, self.panel._bounding_boxes_panel.bbox_table)
-        self.assertIs(
-            self.panel._bbox_label_combo,
-            self.panel._bounding_boxes_panel.bbox_label_combo,
-        )
-        self.assertIs(
-            self.panel._open_bounding_boxes_button,
-            self.panel._bounding_boxes_panel.open_bounding_boxes_button,
-        )
-        self.assertIs(
-            self.panel._save_bounding_boxes_button,
-            self.panel._bounding_boxes_panel.save_bounding_boxes_button,
-        )
-        self.assertIs(
-            self.panel._delete_bbox_button,
-            self.panel._bounding_boxes_panel.delete_bbox_button,
-        )
-        self.assertIs(
-            self.panel._median_filter_selected_button,
-            self.panel._bounding_boxes_panel.median_filter_selected_button,
-        )
-        self.assertIs(
-            self.panel._erosion_selected_button,
-            self.panel._bounding_boxes_panel.erosion_selected_button,
-        )
-        self.assertIs(
-            self.panel._dilation_selected_button,
-            self.panel._bounding_boxes_panel.dilation_selected_button,
-        )
-        self.assertIs(
-            self.panel._erase_bbox_segmentation_button,
-            self.panel._bounding_boxes_panel.erase_bbox_segmentation_button,
-        )
-
     def test_set_bounding_boxes_populates_table(self) -> None:
         box1, box2 = self._boxes()
         self.panel.set_bounding_boxes((box1, box2))
+        table = self.panel._bounding_boxes_panel.bbox_table
 
-        self.assertEqual(self.panel._bbox_table.rowCount(), 2)
-        self.assertEqual(self.panel._bbox_table.item(0, 0).text(), "1")
-        self.assertEqual(self.panel._bbox_table.item(0, 1).text(), "bbox_0001")
-        self.assertEqual(self.panel._bbox_table.item(0, 2).text(), "train")
-        self.assertEqual(self.panel._bbox_table.item(0, 3).text(), "3 x 4 x 5")
-        self.assertEqual(self.panel._bbox_table.item(0, 4).text(), "(2.00, 3.50, 5.00)")
-        self.assertEqual(self.panel._bbox_table.item(1, 0).text(), "2")
-        self.assertEqual(self.panel._bbox_table.item(1, 1).text(), "bbox_0002")
-        self.assertEqual(self.panel._bbox_table.item(1, 2).text(), "train")
+        self.assertEqual(table.rowCount(), 2)
+        self.assertEqual(table.item(0, 0).text(), "1")
+        self.assertEqual(table.item(0, 1).text(), "bbox_0001")
+        self.assertEqual(table.item(0, 2).text(), "train")
+        self.assertEqual(table.item(0, 3).text(), "3 x 4 x 5")
+        self.assertEqual(table.item(0, 4).text(), "(2.00, 3.50, 5.00)")
+        self.assertEqual(table.item(1, 0).text(), "2")
+        self.assertEqual(table.item(1, 1).text(), "bbox_0002")
+        self.assertEqual(table.item(1, 2).text(), "train")
 
     def test_bbox_table_uses_extended_row_selection_mode(self) -> None:
         self.assertIsNotNone(QAbstractItemView)
         self.assertEqual(
-            self.panel._bbox_table.selectionMode(),
+            self.panel._bounding_boxes_panel.bbox_table.selectionMode(),
             QAbstractItemView.ExtendedSelection,
         )
         self.assertEqual(
-            self.panel._bbox_table.selectionBehavior(),
+            self.panel._bounding_boxes_panel.bbox_table.selectionBehavior(),
             QAbstractItemView.SelectRows,
         )
 
@@ -261,13 +90,13 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.on_bounding_boxes_delete_requested(delete_many_events.append)
         self.panel.set_bounding_boxes((box1, box2))
 
-        self.panel._bbox_table.selectRow(1)
+        self.panel._bounding_boxes_panel.bbox_table.selectRow(1)
         QApplication.processEvents()
         self.assertEqual(self.panel.state.bbox_selected_ids, ("bbox_0002",))
         self.assertEqual(selected_many_events[-1], ("bbox_0002",))
-        self.assertTrue(self.panel._delete_bbox_button.isEnabled())
+        self.assertTrue(self.panel._bounding_boxes_panel.delete_bbox_button.isEnabled())
 
-        self.panel._delete_bbox_button.click()
+        self.panel._bounding_boxes_panel.delete_bbox_button.click()
         QApplication.processEvents()
         self.assertEqual(delete_many_events, [("bbox_0002",)])
 
@@ -281,7 +110,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.set_bounding_boxes((box1,))
         self.assertIsNone(self.panel.selected_bounding_box())
         self.assertEqual(self.panel.selected_bounding_boxes(), tuple())
-        self.assertFalse(self.panel._delete_bbox_button.isEnabled())
+        self.assertFalse(self.panel._bounding_boxes_panel.delete_bbox_button.isEnabled())
 
     def test_multi_selection_has_no_primary_selected_box(self) -> None:
         box1, box2 = self._boxes()
@@ -312,9 +141,9 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.on_bounding_box_double_clicked(double_click_events.append)
         self.panel.set_bounding_boxes((box1, box2))
 
-        item = self.panel._bbox_table.item(1, 3)
+        item = self.panel._bounding_boxes_panel.bbox_table.item(1, 3)
         self.assertIsNotNone(item)
-        self.panel._bbox_table.itemDoubleClicked.emit(item)
+        self.panel._bounding_boxes_panel.bbox_table.itemDoubleClicked.emit(item)
         QApplication.processEvents()
 
         self.assertEqual(double_click_events, ["bbox_0002"])
@@ -324,12 +153,12 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         double_click_events = []
         self.panel.on_bounding_box_double_clicked(double_click_events.append)
         self.panel.set_bounding_boxes((box1, box2))
-        self.panel._bbox_table.selectRow(0)
+        self.panel._bounding_boxes_panel.bbox_table.selectRow(0)
         QApplication.processEvents()
 
-        item = self.panel._bbox_table.item(1, 1)
+        item = self.panel._bounding_boxes_panel.bbox_table.item(1, 1)
         self.assertIsNotNone(item)
-        self.panel._bbox_table.itemDoubleClicked.emit(item)
+        self.panel._bounding_boxes_panel.bbox_table.itemDoubleClicked.emit(item)
         QApplication.processEvents()
 
         self.assertEqual(double_click_events, ["bbox_0002"])
@@ -360,8 +189,8 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
 
         self.assertIsNone(self.panel.selected_bounding_box())
         self.assertIsNone(self.panel.selected_bounding_box_label())
-        self.assertTrue(self.panel._bbox_label_combo.isEnabled())
-        self.assertEqual(self.panel._bbox_label_combo.currentIndex(), -1)
+        self.assertTrue(self.panel._bounding_boxes_panel.bbox_label_combo.isEnabled())
+        self.assertEqual(self.panel._bounding_boxes_panel.bbox_label_combo.currentIndex(), -1)
 
     def test_label_editor_emits_plural_callback_for_mixed_multi_selection(self) -> None:
         box1, box2 = self._boxes()
@@ -383,9 +212,9 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         )
         self.panel.set_selected_bounding_boxes(("bbox_0001", "bbox_0002"))
 
-        inference_index = self.panel._bbox_label_combo.findData("inference")
+        inference_index = self.panel._bounding_boxes_panel.bbox_label_combo.findData("inference")
         self.assertGreaterEqual(inference_index, 0)
-        self.panel._bbox_label_combo.setCurrentIndex(inference_index)
+        self.panel._bounding_boxes_panel.bbox_label_combo.setCurrentIndex(inference_index)
         QApplication.processEvents()
 
         self.assertEqual(
@@ -400,7 +229,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.on_bounding_boxes_delete_requested(delete_many_events.append)
         self.panel.set_selected_bounding_boxes(("bbox_0001", "bbox_0002"))
 
-        self.panel._delete_bbox_button.click()
+        self.panel._bounding_boxes_panel.delete_bbox_button.click()
         QApplication.processEvents()
 
         self.assertEqual(delete_many_events, [(("bbox_0001", "bbox_0002"))])
@@ -408,12 +237,13 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
     def test_metadata_updates_after_geometry_change(self) -> None:
         box1, _ = self._boxes()
         self.panel.set_bounding_boxes((box1,))
-        self.assertEqual(self.panel._bbox_table.item(0, 3).text(), "3 x 4 x 5")
+        table = self.panel._bounding_boxes_panel.bbox_table
+        self.assertEqual(table.item(0, 3).text(), "3 x 4 x 5")
 
         updated = box1.move_face("x_max", 12, volume_shape=(20, 30, 40))
         self.panel.set_bounding_boxes((updated,))
-        self.assertEqual(self.panel._bbox_table.item(0, 3).text(), "3 x 4 x 9")
-        self.assertEqual(self.panel._bbox_table.item(0, 4).text(), "(2.00, 3.50, 7.00)")
+        self.assertEqual(table.item(0, 3).text(), "3 x 4 x 9")
+        self.assertEqual(table.item(0, 4).text(), "(2.00, 3.50, 7.00)")
 
     def test_label_editor_emits_plural_callback_for_selected_box(self) -> None:
         label_many_events = []
@@ -424,9 +254,9 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         )
         self.panel.set_selected_bounding_box("bbox_0001")
 
-        validation_index = self.panel._bbox_label_combo.findData("validation")
+        validation_index = self.panel._bounding_boxes_panel.bbox_label_combo.findData("validation")
         self.assertGreaterEqual(validation_index, 0)
-        self.panel._bbox_label_combo.setCurrentIndex(validation_index)
+        self.panel._bounding_boxes_panel.bbox_label_combo.setCurrentIndex(validation_index)
         QApplication.processEvents()
 
         self.assertEqual(label_many_events, [(("bbox_0001",), "validation")])
@@ -447,53 +277,53 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         dilation_events = []
         erase_bbox_segmentation_events = []
         self.assertEqual(
-            self.panel._load_model_button.text(),
+            self.panel._learning_panel.load_model_button.text(),
             "Load Model",
         )
         self.assertEqual(
-            self.panel._save_model_button.text(),
+            self.panel._learning_panel.save_model_button.text(),
             "Save Model",
         )
         self.assertEqual(
-            self.panel._train_model_button.text(),
+            self.panel._learning_panel.train_model_button.text(),
             "Train Model",
         )
         self.assertEqual(
-            self.panel._segment_inference_button.text(),
+            self.panel._learning_panel.segment_inference_button.text(),
             "Segment Inference BBox",
         )
         self.assertEqual(
-            self.panel._stop_inference_button.text(),
+            self.panel._learning_panel.stop_inference_button.text(),
             "Stop Inference",
         )
         self.assertEqual(
-            self.panel._stop_training_button.text(),
+            self.panel._learning_panel.stop_training_button.text(),
             "Stop Training",
         )
         self.assertEqual(
-            self.panel._change_training_parameters_button.text(),
+            self.panel._learning_panel.change_training_parameters_button.text(),
             "Change default training parameters",
         )
         self.assertEqual(
-            self.panel._median_filter_selected_button.text(),
+            self.panel._bounding_boxes_panel.median_filter_selected_button.text(),
             "Median Filter Selected",
         )
         self.assertEqual(
-            self.panel._erosion_selected_button.text(),
+            self.panel._bounding_boxes_panel.erosion_selected_button.text(),
             "Erosion Selected",
         )
         self.assertEqual(
-            self.panel._dilation_selected_button.text(),
+            self.panel._bounding_boxes_panel.dilation_selected_button.text(),
             "Dilation Selected",
         )
         self.assertEqual(
-            self.panel._erase_bbox_segmentation_button.text(),
+            self.panel._bounding_boxes_panel.erase_bbox_segmentation_button.text(),
             "Erase BBox Segmentation",
         )
-        self.assertFalse(self.panel._stop_training_button.isEnabled())
-        self.assertFalse(self.panel._stop_inference_button.isEnabled())
+        self.assertFalse(self.panel._learning_panel.stop_training_button.isEnabled())
+        self.assertFalse(self.panel._learning_panel.stop_inference_button.isEnabled())
         self.assertEqual(
-            self.panel._learning_training_status.text(),
+            self.panel._learning_panel.training_status.text(),
             "Training: Idle",
         )
         self.panel.on_open_bounding_boxes_requested(lambda: open_events.append("open"))
@@ -536,19 +366,19 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.set_bounding_boxes((box1,))
         self.panel.set_stop_inference_enabled(True)
         self.panel.set_stop_training_enabled(True)
-        self.panel._open_bounding_boxes_button.click()
-        self.panel._save_bounding_boxes_button.click()
-        self.panel._load_model_button.click()
-        self.panel._save_model_button.click()
-        self.panel._segment_inference_button.click()
-        self.panel._stop_inference_button.click()
-        self.panel._train_model_button.click()
-        self.panel._stop_training_button.click()
-        self.panel._change_training_parameters_button.click()
-        self.panel._median_filter_selected_button.click()
-        self.panel._erosion_selected_button.click()
-        self.panel._dilation_selected_button.click()
-        self.panel._erase_bbox_segmentation_button.click()
+        self.panel._bounding_boxes_panel.open_bounding_boxes_button.click()
+        self.panel._bounding_boxes_panel.save_bounding_boxes_button.click()
+        self.panel._learning_panel.load_model_button.click()
+        self.panel._learning_panel.save_model_button.click()
+        self.panel._learning_panel.segment_inference_button.click()
+        self.panel._learning_panel.stop_inference_button.click()
+        self.panel._learning_panel.train_model_button.click()
+        self.panel._learning_panel.stop_training_button.click()
+        self.panel._learning_panel.change_training_parameters_button.click()
+        self.panel._bounding_boxes_panel.median_filter_selected_button.click()
+        self.panel._bounding_boxes_panel.erosion_selected_button.click()
+        self.panel._bounding_boxes_panel.dilation_selected_button.click()
+        self.panel._bounding_boxes_panel.erase_bbox_segmentation_button.click()
         QApplication.processEvents()
 
         self.assertEqual(open_events, ["open"])
@@ -567,26 +397,26 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
 
     def test_learning_training_status_display_updates(self) -> None:
         self.assertFalse(self.panel.learning_training_running())
-        self.assertEqual(self.panel._learning_training_status.text(), "Training: Idle")
-        self.assertFalse(self.panel._stop_training_button.isEnabled())
-        self.assertFalse(self.panel._stop_inference_button.isEnabled())
+        self.assertEqual(self.panel._learning_panel.training_status.text(), "Training: Idle")
+        self.assertFalse(self.panel._learning_panel.stop_training_button.isEnabled())
+        self.assertFalse(self.panel._learning_panel.stop_inference_button.isEnabled())
 
         self.panel.set_learning_training_running(True)
         self.assertTrue(self.panel.learning_training_running())
-        self.assertEqual(self.panel._learning_training_status.text(), "Training: Running")
+        self.assertEqual(self.panel._learning_panel.training_status.text(), "Training: Running")
 
         self.panel.set_learning_training_running(False)
         self.assertFalse(self.panel.learning_training_running())
-        self.assertEqual(self.panel._learning_training_status.text(), "Training: Idle")
+        self.assertEqual(self.panel._learning_panel.training_status.text(), "Training: Idle")
 
         self.panel.set_stop_training_enabled(True)
-        self.assertTrue(self.panel._stop_training_button.isEnabled())
+        self.assertTrue(self.panel._learning_panel.stop_training_button.isEnabled())
         self.panel.set_stop_training_enabled(False)
-        self.assertFalse(self.panel._stop_training_button.isEnabled())
+        self.assertFalse(self.panel._learning_panel.stop_training_button.isEnabled())
         self.panel.set_stop_inference_enabled(True)
-        self.assertTrue(self.panel._stop_inference_button.isEnabled())
+        self.assertTrue(self.panel._learning_panel.stop_inference_button.isEnabled())
         self.panel.set_stop_inference_enabled(False)
-        self.assertFalse(self.panel._stop_inference_button.isEnabled())
+        self.assertFalse(self.panel._learning_panel.stop_inference_button.isEnabled())
 
     def test_inference_navigation_only_mode_disables_mutations_but_keeps_navigation(self) -> None:
         box1, box2 = self._boxes()
@@ -604,92 +434,92 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
 
         self.panel.set_inference_navigation_only_mode(True)
 
-        self.assertFalse(self.panel._open_button.isEnabled())
-        self.assertFalse(self.panel._open_semantic_button.isEnabled())
-        self.assertFalse(self.panel._open_instance_button.isEnabled())
-        self.assertFalse(self.panel._save_segmentation_button.isEnabled())
-        self.assertFalse(self.panel._annotation_toggle.isEnabled())
-        self.assertFalse(self.panel._annotation_tool_combo.isEnabled())
-        self.assertFalse(self.panel._tool_label_edit.isEnabled())
-        self.assertFalse(self.panel._open_bounding_boxes_button.isEnabled())
-        self.assertFalse(self.panel._save_bounding_boxes_button.isEnabled())
-        self.assertFalse(self.panel._delete_bbox_button.isEnabled())
-        self.assertFalse(self.panel._bbox_label_combo.isEnabled())
-        self.assertFalse(self.panel._load_model_button.isEnabled())
-        self.assertFalse(self.panel._save_model_button.isEnabled())
-        self.assertFalse(self.panel._segment_inference_button.isEnabled())
-        self.assertFalse(self.panel._train_model_button.isEnabled())
-        self.assertFalse(self.panel._change_training_parameters_button.isEnabled())
-        self.assertFalse(self.panel._undo_button.isEnabled())
-        self.assertFalse(self.panel._redo_button.isEnabled())
-        self.assertTrue(self.panel._stop_inference_button.isEnabled())
+        self.assertFalse(self.panel._files_panel.open_button.isEnabled())
+        self.assertFalse(self.panel._files_panel.open_semantic_button.isEnabled())
+        self.assertFalse(self.panel._files_panel.open_instance_button.isEnabled())
+        self.assertFalse(self.panel._files_panel.save_segmentation_button.isEnabled())
+        self.assertFalse(self.panel._annotation_panel.annotation_toggle.isEnabled())
+        self.assertFalse(self.panel._annotation_panel.annotation_tool_combo.isEnabled())
+        self.assertFalse(self.panel._annotation_panel.tool_label_edit.isEnabled())
+        self.assertFalse(self.panel._bounding_boxes_panel.open_bounding_boxes_button.isEnabled())
+        self.assertFalse(self.panel._bounding_boxes_panel.save_bounding_boxes_button.isEnabled())
+        self.assertFalse(self.panel._bounding_boxes_panel.delete_bbox_button.isEnabled())
+        self.assertFalse(self.panel._bounding_boxes_panel.bbox_label_combo.isEnabled())
+        self.assertFalse(self.panel._learning_panel.load_model_button.isEnabled())
+        self.assertFalse(self.panel._learning_panel.save_model_button.isEnabled())
+        self.assertFalse(self.panel._learning_panel.segment_inference_button.isEnabled())
+        self.assertFalse(self.panel._learning_panel.train_model_button.isEnabled())
+        self.assertFalse(self.panel._learning_panel.change_training_parameters_button.isEnabled())
+        self.assertFalse(self.panel._history_panel.undo_button.isEnabled())
+        self.assertFalse(self.panel._history_panel.redo_button.isEnabled())
+        self.assertTrue(self.panel._learning_panel.stop_inference_button.isEnabled())
 
-        self.assertTrue(self.panel._cursor_z.isEnabled())
-        self.assertTrue(self.panel._cursor_y.isEnabled())
-        self.assertTrue(self.panel._cursor_x.isEnabled())
-        self.assertTrue(self.panel._zoom_spin.isEnabled())
-        self.assertTrue(self.panel._auto_level_checkbox.isEnabled())
-        self.assertTrue(self.panel._contrast_min_slider.isEnabled())
-        self.assertTrue(self.panel._contrast_max_slider.isEnabled())
-        self.assertTrue(self.panel._bbox_table.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.cursor_z.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.cursor_y.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.cursor_x.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.zoom_spin.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.auto_level_checkbox.isEnabled())
+        self.assertTrue(self.panel._contrast_panel.contrast_min_slider.isEnabled())
+        self.assertTrue(self.panel._contrast_panel.contrast_max_slider.isEnabled())
+        self.assertTrue(self.panel._bounding_boxes_panel.bbox_table.isEnabled())
 
-        self.panel._bbox_table.clearSelection()
-        self.panel._bbox_table.selectRow(1)
+        self.panel._bounding_boxes_panel.bbox_table.clearSelection()
+        self.panel._bounding_boxes_panel.bbox_table.selectRow(1)
         QApplication.processEvents()
         self.assertEqual(self.panel.selected_bounding_boxes(), ("bbox_0002",))
-        self.assertFalse(self.panel._delete_bbox_button.isEnabled())
+        self.assertFalse(self.panel._bounding_boxes_panel.delete_bbox_button.isEnabled())
 
         self.panel.set_inference_navigation_only_mode(False)
-        self.assertTrue(self.panel._open_button.isEnabled())
-        self.assertTrue(self.panel._save_bounding_boxes_button.isEnabled())
-        self.assertTrue(self.panel._load_model_button.isEnabled())
-        self.assertTrue(self.panel._segment_inference_button.isEnabled())
-        self.assertTrue(self.panel._train_model_button.isEnabled())
-        self.assertTrue(self.panel._change_training_parameters_button.isEnabled())
-        self.assertTrue(self.panel._undo_button.isEnabled())
-        self.assertTrue(self.panel._redo_button.isEnabled())
+        self.assertTrue(self.panel._files_panel.open_button.isEnabled())
+        self.assertTrue(self.panel._bounding_boxes_panel.save_bounding_boxes_button.isEnabled())
+        self.assertTrue(self.panel._learning_panel.load_model_button.isEnabled())
+        self.assertTrue(self.panel._learning_panel.segment_inference_button.isEnabled())
+        self.assertTrue(self.panel._learning_panel.train_model_button.isEnabled())
+        self.assertTrue(self.panel._learning_panel.change_training_parameters_button.isEnabled())
+        self.assertTrue(self.panel._history_panel.undo_button.isEnabled())
+        self.assertTrue(self.panel._history_panel.redo_button.isEnabled())
 
     def test_save_bbox_button_is_disabled_without_boxes(self) -> None:
         self.panel.set_bounding_boxes(tuple())
-        self.assertFalse(self.panel._save_bounding_boxes_button.isEnabled())
+        self.assertFalse(self.panel._bounding_boxes_panel.save_bounding_boxes_button.isEnabled())
 
         box1, _ = self._boxes()
         self.panel.set_bounding_boxes((box1,))
-        self.assertTrue(self.panel._save_bounding_boxes_button.isEnabled())
+        self.assertTrue(self.panel._bounding_boxes_panel.save_bounding_boxes_button.isEnabled())
 
     def test_bounding_box_tool_uses_dedicated_checkbox(self) -> None:
-        index = self.panel._annotation_tool_combo.findData("bbox")
+        index = self.panel._annotation_panel.annotation_tool_combo.findData("bbox")
         self.assertEqual(index, -1)
 
         events = []
         self.panel.on_bounding_box_mode_changed(events.append)
         self.panel.set_interaction_tools_enabled(True)
-        self.panel._bounding_box_mode_toggle.setChecked(True)
+        self.panel._bounding_boxes_panel.bounding_box_mode_toggle.setChecked(True)
         QApplication.processEvents()
 
         self.assertEqual(events, [True])
         self.assertTrue(self.panel.state.bounding_box_mode_enabled)
 
     def test_annotation_tool_controls_show_shortcut_hints(self) -> None:
-        brush_index = self.panel._annotation_tool_combo.findData("brush")
-        eraser_index = self.panel._annotation_tool_combo.findData("eraser")
-        flood_index = self.panel._annotation_tool_combo.findData("flood_filler")
+        brush_index = self.panel._annotation_panel.annotation_tool_combo.findData("brush")
+        eraser_index = self.panel._annotation_panel.annotation_tool_combo.findData("eraser")
+        flood_index = self.panel._annotation_panel.annotation_tool_combo.findData("flood_filler")
         self.assertGreaterEqual(brush_index, 0)
         self.assertGreaterEqual(eraser_index, 0)
         self.assertGreaterEqual(flood_index, 0)
         self.assertEqual(
-            self.panel._annotation_tool_combo.itemText(brush_index),
+            self.panel._annotation_panel.annotation_tool_combo.itemText(brush_index),
             "Brush (Ctrl+B)",
         )
         self.assertEqual(
-            self.panel._annotation_tool_combo.itemText(eraser_index),
+            self.panel._annotation_panel.annotation_tool_combo.itemText(eraser_index),
             "Eraser (Ctrl+E)",
         )
         self.assertEqual(
-            self.panel._annotation_tool_combo.itemText(flood_index),
+            self.panel._annotation_panel.annotation_tool_combo.itemText(flood_index),
             "Flood Fill (Ctrl+F)",
         )
-        hint = self.panel._annotation_tool_combo.toolTip()
+        hint = self.panel._annotation_panel.annotation_tool_combo.toolTip()
         self.assertIn("Ctrl+B", hint)
         self.assertIn("Ctrl+E", hint)
         self.assertIn("Ctrl+F", hint)
@@ -700,8 +530,8 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.set_interaction_tools_enabled(True)
         self.panel.set_annotation_mode(True)
         self.panel.set_annotation_controls_enabled(True)
-        self.panel._tool_label_edit.setText(" 17 ")
-        self.panel._tool_label_edit.editingFinished.emit()
+        self.panel._annotation_panel.tool_label_edit.setText(" 17 ")
+        self.panel._annotation_panel.tool_label_edit.editingFinished.emit()
         QApplication.processEvents()
 
         self.assertEqual(changes, ["17"])
@@ -713,47 +543,47 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.set_annotation_controls_enabled(True)
 
         self.panel.set_annotation_tool("eraser")
-        self.assertEqual(self.panel._tool_label_edit.placeholderText(), "All")
+        self.assertEqual(self.panel._annotation_panel.tool_label_edit.placeholderText(), "All")
 
         self.panel.set_annotation_tool("brush")
-        self.assertEqual(self.panel._tool_label_edit.placeholderText(), "1")
+        self.assertEqual(self.panel._annotation_panel.tool_label_edit.placeholderText(), "1")
 
         self.panel.set_annotation_tool("flood_filler")
-        self.assertEqual(self.panel._tool_label_edit.placeholderText(), "1")
+        self.assertEqual(self.panel._annotation_panel.tool_label_edit.placeholderText(), "1")
 
     def test_history_buttons_are_not_reset_by_annotation_controls(self) -> None:
         self.panel.set_undo_state(depth=2, enabled=True)
         self.panel.set_redo_state(depth=1, enabled=True)
-        self.assertTrue(self.panel._undo_button.isEnabled())
-        self.assertTrue(self.panel._redo_button.isEnabled())
+        self.assertTrue(self.panel._history_panel.undo_button.isEnabled())
+        self.assertTrue(self.panel._history_panel.redo_button.isEnabled())
 
         self.panel.set_annotation_controls_enabled(False)
 
-        self.assertTrue(self.panel._undo_button.isEnabled())
-        self.assertTrue(self.panel._redo_button.isEnabled())
+        self.assertTrue(self.panel._history_panel.undo_button.isEnabled())
+        self.assertTrue(self.panel._history_panel.redo_button.isEnabled())
 
     def test_level_controls_are_disabled_until_interaction_tools_enabled(self) -> None:
         self.panel.set_level_mode(auto_enabled=True, manual_level=0, max_level=4)
-        self.assertFalse(self.panel._auto_level_checkbox.isEnabled())
-        self.assertFalse(self.panel._manual_level_spin.isEnabled())
+        self.assertFalse(self.panel._navigation_panel.auto_level_checkbox.isEnabled())
+        self.assertFalse(self.panel._navigation_panel.manual_level_spin.isEnabled())
 
         self.panel.set_interaction_tools_enabled(True)
-        self.assertTrue(self.panel._auto_level_checkbox.isEnabled())
-        self.assertTrue(self.panel._auto_level_checkbox.isChecked())
-        self.assertFalse(self.panel._manual_level_spin.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.auto_level_checkbox.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.auto_level_checkbox.isChecked())
+        self.assertFalse(self.panel._navigation_panel.manual_level_spin.isEnabled())
 
     def test_zoom_spin_range_matches_core_zoom_bounds(self) -> None:
-        self.assertAlmostEqual(self.panel._zoom_spin.minimum(), 0.1)
-        self.assertAlmostEqual(self.panel._zoom_spin.maximum(), 1.0)
+        self.assertAlmostEqual(self.panel._navigation_panel.zoom_spin.minimum(), 0.1)
+        self.assertAlmostEqual(self.panel._navigation_panel.zoom_spin.maximum(), 1.0)
 
     def test_set_zoom_clamps_to_zoom_spin_range(self) -> None:
         self.panel.set_zoom(2.5)
         self.assertAlmostEqual(self.panel.state.zoom, 1.0)
-        self.assertAlmostEqual(self.panel._zoom_spin.value(), 1.0)
+        self.assertAlmostEqual(self.panel._navigation_panel.zoom_spin.value(), 1.0)
 
         self.panel.set_zoom(-3.0)
         self.assertAlmostEqual(self.panel.state.zoom, 0.1)
-        self.assertAlmostEqual(self.panel._zoom_spin.value(), 0.1)
+        self.assertAlmostEqual(self.panel._navigation_panel.zoom_spin.value(), 0.1)
 
     def test_level_controls_emit_mode_change_and_manual_level_only_on_enter(self) -> None:
         mode_changes = []
@@ -763,16 +593,16 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.set_level_mode(auto_enabled=True, manual_level=0, max_level=4)
         self.panel.set_interaction_tools_enabled(True)
 
-        self.panel._auto_level_checkbox.setChecked(False)
+        self.panel._navigation_panel.auto_level_checkbox.setChecked(False)
         QApplication.processEvents()
         self.assertEqual(mode_changes, [False])
-        self.assertTrue(self.panel._manual_level_spin.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.manual_level_spin.isEnabled())
 
-        self.panel._manual_level_spin.setValue(3)
+        self.panel._navigation_panel.manual_level_spin.setValue(3)
         QApplication.processEvents()
         self.assertEqual(manual_changes, [])
 
-        line_edit = self.panel._manual_level_spin.lineEdit()
+        line_edit = self.panel._navigation_panel.manual_level_spin.lineEdit()
         self.assertIsNotNone(line_edit)
         line_edit.returnPressed.emit()
         QApplication.processEvents()
@@ -783,25 +613,25 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.assertFalse(self.panel.state.auto_level_enabled)
         self.assertEqual(self.panel.state.manual_level, 2)
         self.assertEqual(self.panel.state.manual_level_max, 2)
-        self.assertEqual(self.panel._manual_level_spin.value(), 2)
+        self.assertEqual(self.panel._navigation_panel.manual_level_spin.value(), 2)
 
         self.panel.set_level_mode(auto_enabled=False, manual_level=-5, max_level=2)
         self.assertEqual(self.panel.state.manual_level, 0)
-        self.assertEqual(self.panel._manual_level_spin.value(), 0)
+        self.assertEqual(self.panel._navigation_panel.manual_level_spin.value(), 0)
 
     def test_level_controls_can_be_disabled_explicitly(self) -> None:
         self.panel.set_level_mode(auto_enabled=False, manual_level=1, max_level=3)
         self.panel.set_interaction_tools_enabled(True)
-        self.assertTrue(self.panel._auto_level_checkbox.isEnabled())
-        self.assertTrue(self.panel._manual_level_spin.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.auto_level_checkbox.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.manual_level_spin.isEnabled())
 
         self.panel.set_level_controls_enabled(False)
-        self.assertFalse(self.panel._auto_level_checkbox.isEnabled())
-        self.assertFalse(self.panel._manual_level_spin.isEnabled())
+        self.assertFalse(self.panel._navigation_panel.auto_level_checkbox.isEnabled())
+        self.assertFalse(self.panel._navigation_panel.manual_level_spin.isEnabled())
 
         self.panel.set_level_controls_enabled(True)
-        self.assertTrue(self.panel._auto_level_checkbox.isEnabled())
-        self.assertTrue(self.panel._manual_level_spin.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.auto_level_checkbox.isEnabled())
+        self.assertTrue(self.panel._navigation_panel.manual_level_spin.isEnabled())
 
     def test_active_levels_status_indicates_manual_forced_mode(self) -> None:
         self.panel.set_active_levels(
@@ -810,7 +640,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
             sagittal=(1, 2),
             forced=False,
         )
-        self.assertNotIn("Manual (forced)", self.panel._level_status.text())
+        self.assertNotIn("Manual (forced)", self.panel._navigation_panel.level_status.text())
 
         self.panel.set_active_levels(
             axial=(1, 2),
@@ -818,7 +648,7 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
             sagittal=(1, 2),
             forced=True,
         )
-        self.assertIn("Manual (forced)", self.panel._level_status.text())
+        self.assertIn("Manual (forced)", self.panel._navigation_panel.level_status.text())
 
     def test_contrast_controls_use_1000_steps_and_emit_values(self) -> None:
         changes = []
@@ -827,91 +657,91 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
         self.panel.set_interaction_tools_enabled(True)
         self.panel.set_contrast_range((0.0, 999.0))
 
-        self.assertEqual(self.panel._contrast_min_slider.minimum(), 0)
-        self.assertEqual(self.panel._contrast_min_slider.maximum(), 999)
-        self.assertEqual(self.panel._contrast_max_slider.minimum(), 0)
-        self.assertEqual(self.panel._contrast_max_slider.maximum(), 999)
-        self.assertTrue(self.panel._contrast_min_slider.isEnabled())
-        self.assertTrue(self.panel._contrast_max_slider.isEnabled())
-        self.assertEqual(self.panel._contrast_min_value.text(), "Min: 0")
-        self.assertEqual(self.panel._contrast_max_value.text(), "Max: 999")
+        self.assertEqual(self.panel._contrast_panel.contrast_min_slider.minimum(), 0)
+        self.assertEqual(self.panel._contrast_panel.contrast_min_slider.maximum(), 999)
+        self.assertEqual(self.panel._contrast_panel.contrast_max_slider.minimum(), 0)
+        self.assertEqual(self.panel._contrast_panel.contrast_max_slider.maximum(), 999)
+        self.assertTrue(self.panel._contrast_panel.contrast_min_slider.isEnabled())
+        self.assertTrue(self.panel._contrast_panel.contrast_max_slider.isEnabled())
+        self.assertEqual(self.panel._contrast_panel.contrast_min_value.text(), "Min: 0")
+        self.assertEqual(self.panel._contrast_panel.contrast_max_value.text(), "Max: 999")
 
-        self.panel._contrast_min_slider.setValue(123)
+        self.panel._contrast_panel.contrast_min_slider.setValue(123)
         QApplication.processEvents()
         self.assertEqual(changes[-1], (123.0, 999.0))
-        self.assertEqual(self.panel._contrast_min_value.text(), "Min: 123")
-        self.assertEqual(self.panel._contrast_max_value.text(), "Max: 999")
+        self.assertEqual(self.panel._contrast_panel.contrast_min_value.text(), "Min: 123")
+        self.assertEqual(self.panel._contrast_panel.contrast_max_value.text(), "Max: 999")
 
-        self.panel._contrast_max_slider.setValue(777)
+        self.panel._contrast_panel.contrast_max_slider.setValue(777)
         QApplication.processEvents()
         self.assertEqual(changes[-1], (123.0, 777.0))
-        self.assertEqual(self.panel._contrast_min_value.text(), "Min: 123")
-        self.assertEqual(self.panel._contrast_max_value.text(), "Max: 777")
+        self.assertEqual(self.panel._contrast_panel.contrast_min_value.text(), "Min: 123")
+        self.assertEqual(self.panel._contrast_panel.contrast_max_value.text(), "Max: 777")
 
     def test_contrast_sliders_enforce_min_less_than_max(self) -> None:
         self.panel.set_interaction_tools_enabled(True)
         self.panel.set_contrast_range((0.0, 999.0))
-        self.panel._contrast_max_slider.setValue(200)
+        self.panel._contrast_panel.contrast_max_slider.setValue(200)
         QApplication.processEvents()
 
-        self.panel._contrast_min_slider.setValue(500)
+        self.panel._contrast_panel.contrast_min_slider.setValue(500)
         QApplication.processEvents()
-        self.assertEqual(self.panel._contrast_min_slider.value(), 199)
+        self.assertEqual(self.panel._contrast_panel.contrast_min_slider.value(), 199)
         self.assertEqual(self.panel.contrast_window(), (199.0, 200.0))
 
-        self.panel._contrast_max_slider.setValue(10)
+        self.panel._contrast_panel.contrast_max_slider.setValue(10)
         QApplication.processEvents()
-        self.assertEqual(self.panel._contrast_max_slider.value(), 200)
+        self.assertEqual(self.panel._contrast_panel.contrast_max_slider.value(), 200)
         self.assertEqual(self.panel.contrast_window(), (199.0, 200.0))
 
     def test_contrast_sliders_are_disabled_for_constant_range(self) -> None:
         self.panel.set_interaction_tools_enabled(True)
         self.panel.set_contrast_range((7.0, 7.0))
 
-        self.assertFalse(self.panel._contrast_min_slider.isEnabled())
-        self.assertFalse(self.panel._contrast_max_slider.isEnabled())
-        self.assertEqual(self.panel._contrast_min_value.text(), "Min: 7")
-        self.assertEqual(self.panel._contrast_max_value.text(), "Max: 7")
+        self.assertFalse(self.panel._contrast_panel.contrast_min_slider.isEnabled())
+        self.assertFalse(self.panel._contrast_panel.contrast_max_slider.isEnabled())
+        self.assertEqual(self.panel._contrast_panel.contrast_min_value.text(), "Min: 7")
+        self.assertEqual(self.panel._contrast_panel.contrast_max_value.text(), "Max: 7")
 
     def test_segmentation_opacity_slider_updates_state_and_emits_callback(self) -> None:
         changes: list[float] = []
         self.panel.on_segmentation_opacity_changed(lambda opacity: changes.append(float(opacity)))
 
         self.assertAlmostEqual(self.panel.segmentation_opacity(), 0.3, places=6)
-        self.assertEqual(self.panel._segmentation_opacity_value.text(), "30%")
+        self.assertEqual(self.panel._contrast_panel.segmentation_opacity_value.text(), "30%")
 
-        self.panel._segmentation_opacity_slider.setValue(65)
+        self.panel._contrast_panel.segmentation_opacity_slider.setValue(65)
         QApplication.processEvents()
 
         self.assertAlmostEqual(self.panel.segmentation_opacity(), 0.65, places=6)
-        self.assertEqual(self.panel._segmentation_opacity_value.text(), "65%")
+        self.assertEqual(self.panel._contrast_panel.segmentation_opacity_value.text(), "65%")
         self.assertAlmostEqual(changes[-1], 0.65, places=6)
 
     def test_view_layout_mode_defaults_to_all(self) -> None:
         self.assertEqual(self.panel.view_layout_mode(), "all")
-        self.assertTrue(self.panel._view_layout_all_radio.isChecked())
+        self.assertTrue(self.panel._navigation_panel.view_layout_all_radio.isChecked())
 
     def test_set_view_layout_mode_updates_selected_radio(self) -> None:
         self.panel.set_view_layout_mode("coronal")
         self.assertEqual(self.panel.view_layout_mode(), "coronal")
-        self.assertTrue(self.panel._view_layout_coronal_radio.isChecked())
-        self.assertFalse(self.panel._view_layout_all_radio.isChecked())
+        self.assertTrue(self.panel._navigation_panel.view_layout_coronal_radio.isChecked())
+        self.assertFalse(self.panel._navigation_panel.view_layout_all_radio.isChecked())
 
         self.panel.set_view_layout_mode("not-a-mode")
         self.assertEqual(self.panel.view_layout_mode(), "all")
-        self.assertTrue(self.panel._view_layout_all_radio.isChecked())
+        self.assertTrue(self.panel._navigation_panel.view_layout_all_radio.isChecked())
 
     def test_view_layout_mode_callback_emits_on_user_toggle(self) -> None:
         changes: list[str] = []
         self.panel.on_view_layout_mode_changed(lambda mode: changes.append(str(mode)))
 
-        self.panel._view_layout_axial_radio.click()
+        self.panel._navigation_panel.view_layout_axial_radio.click()
         QApplication.processEvents()
         self.assertEqual(changes[-1], "axial")
 
         # Re-clicking checked button should not emit a redundant change.
         count_after_first_toggle = len(changes)
-        self.panel._view_layout_axial_radio.click()
+        self.panel._navigation_panel.view_layout_axial_radio.click()
         QApplication.processEvents()
         self.assertEqual(len(changes), count_after_first_toggle)
 
@@ -940,29 +770,30 @@ class BottomPanelBoundingBoxesTests(unittest.TestCase):
 
     def test_bbox_table_width_is_expanding_with_content_minimum(self) -> None:
         self.assertIsNotNone(QSizePolicy)
-        horizontal_policy = self.panel._bbox_table.sizePolicy().horizontalPolicy()
+        table = self.panel._bounding_boxes_panel.bbox_table
+        horizontal_policy = table.sizePolicy().horizontalPolicy()
         self.assertEqual(horizontal_policy, QSizePolicy.Expanding)
-        self.assertGreaterEqual(self.panel._bbox_table.minimumWidth(), 176)
-        self.assertGreaterEqual(self.panel._bbox_table.maximumWidth(), 16_777_215)
+        self.assertGreaterEqual(table.minimumWidth(), 176)
+        self.assertGreaterEqual(table.maximumWidth(), 16_777_215)
 
     def test_compact_per_control_width_limits_remain_unchanged(self) -> None:
-        self.assertEqual(self.panel._open_button.maximumWidth(), 170)
-        self.assertEqual(self.panel._open_semantic_button.maximumWidth(), 170)
-        self.assertEqual(self.panel._open_instance_button.maximumWidth(), 170)
-        self.assertEqual(self.panel._save_segmentation_button.maximumWidth(), 170)
+        self.assertEqual(self.panel._files_panel.open_button.maximumWidth(), 170)
+        self.assertEqual(self.panel._files_panel.open_semantic_button.maximumWidth(), 170)
+        self.assertEqual(self.panel._files_panel.open_instance_button.maximumWidth(), 170)
+        self.assertEqual(self.panel._files_panel.save_segmentation_button.maximumWidth(), 170)
 
-        self.assertEqual(self.panel._cursor_z.maximumWidth(), 130)
-        self.assertEqual(self.panel._cursor_y.maximumWidth(), 130)
-        self.assertEqual(self.panel._cursor_x.maximumWidth(), 130)
-        self.assertEqual(self.panel._zoom_spin.maximumWidth(), 130)
-        self.assertEqual(self.panel._manual_level_spin.maximumWidth(), 130)
+        self.assertEqual(self.panel._navigation_panel.cursor_z.maximumWidth(), 130)
+        self.assertEqual(self.panel._navigation_panel.cursor_y.maximumWidth(), 130)
+        self.assertEqual(self.panel._navigation_panel.cursor_x.maximumWidth(), 130)
+        self.assertEqual(self.panel._navigation_panel.zoom_spin.maximumWidth(), 130)
+        self.assertEqual(self.panel._navigation_panel.manual_level_spin.maximumWidth(), 130)
 
-        self.assertEqual(self.panel._contrast_min_slider.maximumWidth(), 180)
-        self.assertEqual(self.panel._contrast_max_slider.maximumWidth(), 180)
-        self.assertEqual(self.panel._segmentation_opacity_slider.maximumWidth(), 180)
+        self.assertEqual(self.panel._contrast_panel.contrast_min_slider.maximumWidth(), 180)
+        self.assertEqual(self.panel._contrast_panel.contrast_max_slider.maximumWidth(), 180)
+        self.assertEqual(self.panel._contrast_panel.segmentation_opacity_slider.maximumWidth(), 180)
 
-        self.assertEqual(self.panel._undo_button.maximumWidth(), 170)
-        self.assertEqual(self.panel._redo_button.maximumWidth(), 170)
+        self.assertEqual(self.panel._history_panel.undo_button.maximumWidth(), 170)
+        self.assertEqual(self.panel._history_panel.redo_button.maximumWidth(), 170)
 
 
 if __name__ == "__main__":

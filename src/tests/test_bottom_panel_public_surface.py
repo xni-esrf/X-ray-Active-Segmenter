@@ -59,7 +59,6 @@ EXPECTED_BOTTOM_PANEL_PUBLIC_METHODS = {
     "on_tool_label_changed",
     "on_train_model_headless_close_requested",
     "on_train_model_requested",
-    "on_change_training_parameters_requested",
     "on_undo_requested",
     "on_view_layout_mode_changed",
     "on_zoom_changed",

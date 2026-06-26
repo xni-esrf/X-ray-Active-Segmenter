@@ -331,12 +331,12 @@ class MainWindowLayoutTests(unittest.TestCase):
         window._main_splitter.setSizes([total_width - min_width, min_width])
         window._apply_main_splitter_width_constraints()
         self._app.processEvents()
-        narrow_width = window.bottom_panel._bbox_table.width()
+        narrow_width = window.bottom_panel._bounding_boxes_panel.bbox_table.width()
 
         window._main_splitter.setSizes([total_width - max_width, max_width])
         window._apply_main_splitter_width_constraints()
         self._app.processEvents()
-        wide_width = window.bottom_panel._bbox_table.width()
+        wide_width = window.bottom_panel._bounding_boxes_panel.bbox_table.width()
 
         self.assertGreaterEqual(max_width, min_width)
         self.assertGreater(wide_width, narrow_width)
@@ -357,10 +357,22 @@ class MainWindowLayoutTests(unittest.TestCase):
         window._apply_main_splitter_width_constraints()
         self._app.processEvents()
 
-        self.assertLessEqual(window.bottom_panel._open_button.width(), 170)
-        self.assertLessEqual(window.bottom_panel._zoom_spin.width(), 130)
-        self.assertLessEqual(window.bottom_panel._contrast_min_slider.width(), 180)
-        self.assertLessEqual(window.bottom_panel._undo_button.width(), 170)
+        self.assertLessEqual(
+            window.bottom_panel._files_panel.open_button.width(),
+            170,
+        )
+        self.assertLessEqual(
+            window.bottom_panel._navigation_panel.zoom_spin.width(),
+            130,
+        )
+        self.assertLessEqual(
+            window.bottom_panel._contrast_panel.contrast_min_slider.width(),
+            180,
+        )
+        self.assertLessEqual(
+            window.bottom_panel._history_panel.undo_button.width(),
+            170,
+        )
 
 
 if __name__ == "__main__":
