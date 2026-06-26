@@ -54,13 +54,11 @@ class UnsavedChangesDecision(str, Enum):
 
 class TrainingCloseDecision(str, Enum):
     STOP_AND_CLOSE = "stop_and_close"
-    CONTINUE_IN_BACKGROUND = "continue_in_background"
     CANCEL = "cancel"
 
 
 class InferenceCloseDecision(str, Enum):
     STOP_AND_CLOSE = "stop_and_close"
-    CONTINUE_IN_BACKGROUND = "continue_in_background"
     CANCEL = "cancel"
 
 

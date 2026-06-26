@@ -129,12 +129,10 @@ LearningStateAction = Literal["load_model", "train", "inference"]
 DeferredTrainingCloseMode = Literal[
     "none",
     "stop_and_close",
-    "continue_in_background",
 ]
 DeferredInferenceCloseMode = Literal[
     "none",
     "stop_and_close",
-    "continue_in_background",
 ]
 ViewLayoutMode = Literal["all", "axial", "coronal", "sagittal"]
 
@@ -473,8 +471,6 @@ class MainWindow(QMainWindow):
         self._deferred_close_checkpoint_path: Optional[str] = None
         self._deferred_close_after_inference = False
         self._deferred_close_inference_mode: DeferredInferenceCloseMode = "none"
-        self._deferred_close_inference_save_path: Optional[str] = None
-        self._deferred_close_inference_save_format: Optional[str] = None
         self._headless_close_requested = False
         self._last_saved_segmentation_path: Optional[str] = None
         self._last_saved_segmentation_kind: Optional[SegmentationKind] = None
@@ -916,7 +912,6 @@ class MainWindow(QMainWindow):
                 qthread_current_thread=QThread.currentThread,
                 inference_worker_factory=LearningInferenceWorker,
                 qapplication_instance=QApplication.instance,
-                save_segmentation_volume=save_segmentation_volume,
                 inference_navigation_lock_active=(
                     MainWindow._inference_navigation_lock_active
                 ),
@@ -959,17 +954,6 @@ class MainWindow(QMainWindow):
         else:
             # Inference-close decisions take precedence when both are active.
             self._clear_deferred_close_training_state()
-        inference_background_close_mode = bool(
-            getattr(self, "_deferred_close_after_inference", False)
-            and getattr(self, "_deferred_close_inference_mode", "none")
-            == "continue_in_background"
-        )
-        if inference_background_close_mode:
-            app_instance = QApplication.instance()
-            if app_instance is not None:
-                set_quit_on_last = getattr(app_instance, "setQuitOnLastWindowClosed", None)
-                if callable(set_quit_on_last):
-                    set_quit_on_last(False)
         if self._app_event_filter_installed:
             app_instance = QApplication.instance()
             if app_instance is not None:
@@ -3309,24 +3293,6 @@ class MainWindow(QMainWindow):
             self
         ).set_deferred_close_after_stop_inference()
 
-    def _set_deferred_close_with_background_inference(
-        self,
-        *,
-        save_path: str,
-        save_format: str,
-    ) -> None:
-        clear_training_state = getattr(self, "_clear_deferred_close_training_state", None)
-        if callable(clear_training_state):
-            clear_training_state()
-        else:
-            MainWindow._clear_deferred_close_training_state(self)
-        MainWindow._inference_controller_for(
-            self
-        ).set_deferred_close_with_background_inference(
-            save_path=save_path,
-            save_format=save_format,
-        )
-
     def _finalize_deferred_close_inference_and_quit(self) -> None:
         MainWindow._inference_controller_for(
             self
@@ -3355,22 +3321,6 @@ class MainWindow(QMainWindow):
         MainWindow._training_controller_for(
             self
         ).set_deferred_close_after_stop_training()
-
-    def _set_deferred_close_with_background_training(
-        self,
-        *,
-        checkpoint_path: str,
-    ) -> None:
-        clear_inference_state = getattr(self, "_clear_deferred_close_inference_state", None)
-        if callable(clear_inference_state):
-            clear_inference_state()
-        else:
-            MainWindow._clear_deferred_close_inference_state(self)
-        MainWindow._training_controller_for(
-            self
-        ).set_deferred_close_with_background_training(
-            checkpoint_path=checkpoint_path
-        )
 
     def _refresh_learning_training_ui_state(self) -> None:
         MainWindow._training_controller_for(self).refresh_learning_training_ui_state()

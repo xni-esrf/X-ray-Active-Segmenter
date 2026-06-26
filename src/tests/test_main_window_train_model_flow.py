@@ -515,66 +515,6 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
         LearningTrainingLoopResult is not None,
         "Learning training loop result type unavailable",
     )
-    def test_on_learning_training_completed_logs_without_dialog_in_background_close_mode(self) -> None:
-        result = LearningTrainingLoopResult(
-            completed_epoch_count=3,
-            total_epoch_count=6,
-            stop_reason="max_epoch",
-            best_epoch=2,
-            best_weighted_mean_dice=0.91,
-            early_stop_patience=2,
-            mixed_precision_enabled=True,
-        )
-        marker_calls: list[int] = []
-        window_like = SimpleNamespace(
-            _deferred_close_after_training=True,
-            _deferred_close_training_mode="continue_in_background",
-            _deferred_close_checkpoint_path="/tmp/background_best.cp",
-            _mark_current_model_runtime_as_trained=lambda completed_epoch_count: marker_calls.append(
-                int(completed_epoch_count)
-            ),
-        )
-
-        with patch("src.ui.main_window._LOGGER") as logger_mock, patch(
-            "src.ui.main_window.show_info"
-        ) as info_mock, patch("src.ui.main_window.show_warning") as warning_mock:
-            MainWindow._on_learning_training_completed(window_like, result)
-
-        self.assertEqual(marker_calls, [3])
-        info_mock.assert_not_called()
-        warning_mock.assert_not_called()
-        logger_mock.info.assert_called_once()
-        self.assertIn("Background training completed", logger_mock.info.call_args.args[0])
-        self.assertIn("best_weighted_dice", logger_mock.info.call_args.args[0])
-        self.assertEqual(logger_mock.info.call_args.args[3], "0.91")
-
-    @unittest.skipUnless(
-        LearningTrainingLoopResult is not None,
-        "Learning training loop result type unavailable",
-    )
-    def test_on_learning_training_completed_logs_invalid_payload_without_dialog_in_background_close_mode(self) -> None:
-        window_like = SimpleNamespace(
-            _deferred_close_after_training=True,
-            _deferred_close_training_mode="continue_in_background",
-        )
-
-        with patch("src.ui.main_window._LOGGER") as logger_mock, patch(
-            "src.ui.main_window.show_info"
-        ) as info_mock, patch("src.ui.main_window.show_warning") as warning_mock:
-            MainWindow._on_learning_training_completed(window_like, object())
-
-        info_mock.assert_not_called()
-        warning_mock.assert_not_called()
-        logger_mock.error.assert_called_once()
-        self.assertIn(
-            "invalid result payload",
-            str(logger_mock.error.call_args.args[0]).lower(),
-        )
-
-    @unittest.skipUnless(
-        LearningTrainingLoopResult is not None,
-        "Learning training loop result type unavailable",
-    )
     def test_on_learning_training_completed_rejects_invalid_stop_reason(self) -> None:
         result = LearningTrainingLoopResult(
             completed_epoch_count=2,
@@ -607,48 +547,6 @@ class MainWindowTrainModelFlowTests(unittest.TestCase):
         self.assertIn("Training aborted:", warning_text)
         self.assertIn("boom", warning_text)
         self.assertIs(warning_mock.call_args.kwargs["parent"], window_like)
-
-    def test_on_learning_training_failed_logs_without_dialog_in_background_close_mode(self) -> None:
-        window_like = SimpleNamespace(
-            _deferred_close_after_training=True,
-            _deferred_close_training_mode="continue_in_background",
-        )
-
-        with patch("src.ui.main_window._LOGGER") as logger_mock, patch(
-            "src.ui.main_window.show_warning"
-        ) as warning_mock:
-            MainWindow._on_learning_training_failed(
-                window_like,
-                "training crashed",
-            )
-
-        warning_mock.assert_not_called()
-        logger_mock.error.assert_called_once()
-        self.assertIn(
-            "Background training aborted",
-            logger_mock.error.call_args.args[0],
-        )
-
-    def test_on_learning_training_failed_logs_save_error_without_dialog_in_background_close_mode(self) -> None:
-        window_like = SimpleNamespace(
-            _deferred_close_after_training=True,
-            _deferred_close_training_mode="continue_in_background",
-        )
-
-        with patch("src.ui.main_window._LOGGER") as logger_mock, patch(
-            "src.ui.main_window.show_warning"
-        ) as warning_mock:
-            MainWindow._on_learning_training_failed(
-                window_like,
-                "Failed to save training completion checkpoint to /tmp/best.cp: disk full",
-            )
-
-        warning_mock.assert_not_called()
-        logger_mock.error.assert_called_once()
-        self.assertIn(
-            "completion checkpoint save failed",
-            str(logger_mock.error.call_args.args[0]).lower(),
-        )
 
     def test_on_learning_training_thread_finished_exits_running_state(self) -> None:
         exits = []

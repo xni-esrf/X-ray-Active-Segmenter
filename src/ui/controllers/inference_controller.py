@@ -28,8 +28,6 @@ class InferenceControllerContext(Protocol):
     _inference_thread: Optional[object]
     _deferred_close_after_inference: bool
     _deferred_close_inference_mode: str
-    _deferred_close_inference_save_path: Optional[str]
-    _deferred_close_inference_save_format: Optional[str]
     _segmentation_editor: Optional[object]
     _semantic_volume: Optional[object]
     _raw_volume: Optional[object]
@@ -62,7 +60,6 @@ class InferenceControllerOperations:
     qthread_current_thread: Callable[[], object] = QThread.currentThread
     inference_worker_factory: Callable[[], object] = LearningInferenceWorker
     qapplication_instance: Callable[[], object] = QApplication.instance
-    save_segmentation_volume: Callable[..., object] = lambda *_args, **_kwargs: None
     inference_navigation_lock_active: Callable[[object], bool] = lambda _context: False
     inference_stop_already_requested: Callable[[object], bool] = lambda _context: False
     logger: object = _LOGGER
@@ -544,19 +541,12 @@ class InferenceController:
         )
 
     def on_learning_inference_completed(self, result: object) -> None:
-        background_close_mode = self._background_close_mode()
         try:
             if not isinstance(result, LearningInferenceBackgroundResult):
-                if background_close_mode:
-                    self.operations.logger.error(
-                        "Background inference completed with an invalid result payload: %r",
-                        result,
-                    )
-                else:
-                    self.operations.show_warning(
-                        "Segment Inference BBox completed with an invalid result payload.",
-                        parent=self.context,
-                    )
+                self.operations.show_warning(
+                    "Segment Inference BBox completed with an invalid result payload.",
+                    parent=self.context,
+                )
                 return
             if self.operations.inference_stop_already_requested(self.context):
                 cancel = getattr(self.context, "_on_learning_inference_canceled", None)
@@ -570,18 +560,13 @@ class InferenceController:
 
             editor = self.context._segmentation_editor
             if editor is None or editor.kind != "semantic":
-                if background_close_mode:
-                    self.operations.logger.error(
-                        "Background inference completed, but semantic map is unavailable; predictions discarded."
-                    )
-                else:
-                    self.operations.show_warning(
-                        (
-                            "Segment Inference BBox completed, but the semantic map is no longer "
-                            "available. Predictions were discarded."
-                        ),
-                        parent=self.context,
-                    )
+                self.operations.show_warning(
+                    (
+                        "Segment Inference BBox completed, but the semantic map is no longer "
+                        "available. Predictions were discarded."
+                    ),
+                    parent=self.context,
+                )
                 return
 
             failure_by_box_id = dict(result.failure_by_box_id)
@@ -632,10 +617,6 @@ class InferenceController:
             self.context.render_all()
         self.context._refresh_annotation_ui_state()
 
-        if background_close_mode:
-            self._save_background_inference_result()
-            return
-
         self._show_inference_summary(
             total_count=int(result.total_count),
             succeeded_box_ids=tuple(succeeded_box_ids),
@@ -645,18 +626,10 @@ class InferenceController:
         )
 
     def on_learning_inference_canceled(self, message: str) -> None:
-        background_close_mode = self._background_close_mode()
         try:
             normalized_message = str(message).strip()
             if not normalized_message:
                 normalized_message = "Inference canceled by user."
-            if background_close_mode:
-                self.operations.logger.info(
-                    "Background inference canceled: %s",
-                    normalized_message,
-                )
-                self.finalize_deferred_close_inference_and_quit()
-                return
             self.operations.show_info(
                 f"Segment Inference BBox canceled: {normalized_message}",
                 parent=self.context,
@@ -665,18 +638,10 @@ class InferenceController:
             self.clear_learning_inference_stop_request_state()
 
     def on_learning_inference_failed(self, message: str) -> None:
-        background_close_mode = self._background_close_mode()
         try:
             normalized_message = str(message).strip()
             if not normalized_message:
                 normalized_message = "Unknown inference error."
-            if background_close_mode:
-                self.operations.logger.error(
-                    "Background inference aborted: %s",
-                    normalized_message,
-                )
-                self.finalize_deferred_close_inference_and_quit()
-                return
             self.operations.show_warning(
                 f"Segment Inference BBox aborted: {normalized_message}",
                 parent=self.context,
@@ -739,31 +704,10 @@ class InferenceController:
     def clear_deferred_close_inference_state(self) -> None:
         self.context._deferred_close_after_inference = False
         self.context._deferred_close_inference_mode = "none"
-        self.context._deferred_close_inference_save_path = None
-        self.context._deferred_close_inference_save_format = None
 
     def set_deferred_close_after_stop_inference(self) -> None:
         self.context._deferred_close_after_inference = True
         self.context._deferred_close_inference_mode = "stop_and_close"
-        self.context._deferred_close_inference_save_path = None
-        self.context._deferred_close_inference_save_format = None
-
-    def set_deferred_close_with_background_inference(
-        self,
-        *,
-        save_path: str,
-        save_format: str,
-    ) -> None:
-        normalized_path = str(save_path).strip()
-        if not normalized_path:
-            raise ValueError("save_path must be a non-empty string")
-        normalized_format = str(save_format).strip().lower()
-        if not normalized_format:
-            raise ValueError("save_format must be a non-empty string")
-        self.context._deferred_close_after_inference = True
-        self.context._deferred_close_inference_mode = "continue_in_background"
-        self.context._deferred_close_inference_save_path = normalized_path
-        self.context._deferred_close_inference_save_format = normalized_format
 
     def finalize_deferred_close_inference_and_quit(self) -> None:
         clear_state = getattr(self.context, "_clear_deferred_close_inference_state", None)
@@ -843,52 +787,6 @@ class InferenceController:
             refresh()
         else:
             self.refresh_learning_inference_ui_state()
-
-    def _background_close_mode(self) -> bool:
-        return bool(
-            getattr(self.context, "_deferred_close_after_inference", False)
-            and getattr(self.context, "_deferred_close_inference_mode", "none")
-            == "continue_in_background"
-        )
-
-    def _save_background_inference_result(self) -> None:
-        save_path = str(
-            getattr(self.context, "_deferred_close_inference_save_path", "")
-        ).strip()
-        save_format = str(
-            getattr(self.context, "_deferred_close_inference_save_format", "")
-        ).strip().lower()
-        try:
-            active_segmentation_getter = getattr(
-                self.context,
-                "_active_segmentation_volume",
-                None,
-            )
-            if not callable(active_segmentation_getter):
-                raise RuntimeError("No active segmentation provider is available.")
-            active = active_segmentation_getter()
-            if active is None:
-                raise RuntimeError("No semantic or instance segmentation map is loaded.")
-            _kind, volume = active
-            if not save_path:
-                raise RuntimeError("Background inference save path is empty.")
-            if not save_format:
-                raise RuntimeError("Background inference save format is empty.")
-            self.operations.save_segmentation_volume(
-                volume,
-                save_path,
-                save_format=save_format,
-                overwrite=True,
-            )
-            self.operations.logger.info(
-                "Background inference saved segmentation to %s",
-                save_path,
-            )
-        except Exception as exc:
-            self.operations.logger.error(
-                "Background inference save failed: %s",
-                self.operations.exception_message(exc),
-            )
 
     def _show_inference_summary(
         self,

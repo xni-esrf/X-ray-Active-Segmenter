@@ -26,7 +26,6 @@ class TrainingControllerContext(Protocol):
     _training_thread: Optional[object]
     _deferred_close_after_training: bool
     _deferred_close_training_mode: str
-    _deferred_close_checkpoint_path: Optional[str]
     bottom_panel: object
 
 
@@ -203,22 +202,11 @@ class TrainingController:
             raise
 
     def on_learning_training_completed(self, result: object) -> None:
-        background_close_mode = bool(
-            getattr(self.context, "_deferred_close_after_training", False)
-            and getattr(self.context, "_deferred_close_training_mode", "none")
-            == "continue_in_background"
-        )
         if not isinstance(result, LearningTrainingLoopResult):
-            if background_close_mode:
-                self.operations.logger.error(
-                    "Background training finished with an invalid result payload: %r",
-                    result,
-                )
-            else:
-                self.operations.show_warning(
-                    "Training finished with an invalid result payload.",
-                    parent=self.context,
-                )
+            self.operations.show_warning(
+                "Training finished with an invalid result payload.",
+                parent=self.context,
+            )
             return
         normalized_reason = str(result.stop_reason).strip().lower()
         if normalized_reason == "early_stop":
@@ -228,16 +216,10 @@ class TrainingController:
         elif normalized_reason == "user_stop":
             stop_reason_text = "stopped by user"
         else:
-            if background_close_mode:
-                self.operations.logger.error(
-                    "Background training finished with an invalid stop reason: %r",
-                    result.stop_reason,
-                )
-            else:
-                self.operations.show_warning(
-                    f"Training finished with an invalid stop reason: {result.stop_reason!r}.",
-                    parent=self.context,
-                )
+            self.operations.show_warning(
+                f"Training finished with an invalid stop reason: {result.stop_reason!r}.",
+                parent=self.context,
+            )
             return
         best_epoch_text = (
             "N/A"
@@ -257,15 +239,6 @@ class TrainingController:
                 self.context,
                 completed_epoch_count=int(result.completed_epoch_count),
             )
-        if background_close_mode:
-            self.operations.logger.info(
-                "Background training completed: reason=%s, best_epoch=%s, best_weighted_dice=%s, checkpoint=%s",
-                stop_reason_text,
-                best_epoch_text,
-                best_dice_text,
-                getattr(self.context, "_deferred_close_checkpoint_path", None),
-            )
-            return
         self.operations.show_info(
             (
                 "Training is over.\n"
@@ -277,27 +250,9 @@ class TrainingController:
         )
 
     def on_learning_training_failed(self, message: str) -> None:
-        background_close_mode = bool(
-            getattr(self.context, "_deferred_close_after_training", False)
-            and getattr(self.context, "_deferred_close_training_mode", "none")
-            == "continue_in_background"
-        )
         normalized_message = str(message).strip()
         if not normalized_message:
             normalized_message = "Unknown training error."
-        if background_close_mode:
-            lowered = normalized_message.lower()
-            if lowered.startswith("failed to save training completion checkpoint"):
-                self.operations.logger.error(
-                    "Background training completion checkpoint save failed: %s",
-                    normalized_message,
-                )
-            else:
-                self.operations.logger.error(
-                    "Background training aborted: %s",
-                    normalized_message,
-                )
-            return
         self.operations.show_warning(
             f"Training aborted: {normalized_message}",
             parent=self.context,
@@ -373,25 +328,6 @@ class TrainingController:
             sync_method(checkpoint_path=None)
         else:
             self.set_running_training_worker_completion_checkpoint_path(None)
-
-    def set_deferred_close_with_background_training(self, *, checkpoint_path: str) -> None:
-        normalized_checkpoint_path = str(checkpoint_path).strip()
-        if not normalized_checkpoint_path:
-            raise ValueError("checkpoint_path must be a non-empty string")
-        sync_method = getattr(
-            self.context,
-            "_set_running_training_worker_completion_checkpoint_path",
-            None,
-        )
-        if callable(sync_method):
-            sync_method(checkpoint_path=normalized_checkpoint_path)
-        else:
-            self.set_running_training_worker_completion_checkpoint_path(
-                normalized_checkpoint_path
-            )
-        self.context._deferred_close_after_training = True
-        self.context._deferred_close_training_mode = "continue_in_background"
-        self.context._deferred_close_checkpoint_path = normalized_checkpoint_path
 
     def refresh_learning_training_ui_state(self) -> None:
         training_is_running = getattr(self.context, "_training_is_running", None)
