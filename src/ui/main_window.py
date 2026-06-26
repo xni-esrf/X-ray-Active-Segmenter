@@ -450,10 +450,7 @@ class MainWindow(QMainWindow):
         if self._load_mode not in {"ram", "lazy"}:
             raise ValueError("load_mode must be 'ram' or 'lazy'")
         self._cache_max_bytes = int(cache_max_bytes)
-        self._io_worker: Optional[object] = None
-        self._semantic_worker: Optional[object] = None
         self._semantic_volume: Optional[VolumeData] = None
-        self._instance_worker: Optional[object] = None
         self._instance_volume: Optional[VolumeData] = None
         self._training_running = False
         self._training_worker: Optional[object] = None
@@ -1163,10 +1160,8 @@ class MainWindow(QMainWindow):
 
         if self._semantic_volume is not None:
             self._semantic_volume = None
-            self._semantic_worker = None
         if self._instance_volume is not None:
             self._instance_volume = None
-            self._instance_worker = None
         self._last_saved_segmentation_path = None
         self._last_saved_segmentation_kind = None
         self._last_saved_bounding_boxes_path = None
@@ -1923,9 +1918,6 @@ class MainWindow(QMainWindow):
         self._release_learning_state_for_headless_close()
         self._close_loaded_volumes_for_headless_close()
         self._segmentation_editor = None
-        self._semantic_worker = None
-        self._instance_worker = None
-        self._io_worker = None
         self._pending_render_view_ids.clear()
         self._pending_annotation_peer_view_ids.clear()
         self._annotation_dirty_views.clear()
@@ -2968,14 +2960,10 @@ class MainWindow(QMainWindow):
         self._segmentation_editor = editor
         if kind == "semantic":
             self._instance_volume = None
-            self._instance_worker = None
             self._semantic_volume = editable_volume
-            self._semantic_worker = None
         else:
             self._semantic_volume = None
-            self._semantic_worker = None
             self._instance_volume = editable_volume
-            self._instance_worker = None
         self.renderer.attach_segmentation(
             editable_volume,
             levels=self._editable_segmentation_levels(editable_volume),
@@ -3693,8 +3681,6 @@ class MainWindow(QMainWindow):
         if not result.accepted or not result.path:
             return
         try:
-            from ..workers import IOWorker
-
             prepared = load_prepared_volume(
                 result.path,
                 kind="raw",
@@ -3703,7 +3689,6 @@ class MainWindow(QMainWindow):
                 pyramid_levels=4,
             )
             if self.set_volume(prepared.volume, levels=prepared.levels):
-                self._io_worker = IOWorker(volume=prepared.volume, cache=prepared.cache)
                 self.render_all()
         except Exception as exc:
             show_warning(str(exc), parent=self)
@@ -3725,10 +3710,6 @@ class MainWindow(QMainWindow):
                 pyramid_levels=1,
             )
             if self.set_semantic_volume(prepared.volume):
-                from ..workers import IOWorker
-
-                if self._semantic_volume is not None:
-                    self._semantic_worker = IOWorker(volume=self._semantic_volume, cache=self._semantic_volume.cache)
                 self.render_all()
         except Exception as exc:
             show_warning(str(exc), parent=self)
@@ -3750,10 +3731,6 @@ class MainWindow(QMainWindow):
                 pyramid_levels=1,
             )
             if self.set_instance_volume(prepared.volume):
-                from ..workers import IOWorker
-
-                if self._instance_volume is not None:
-                    self._instance_worker = IOWorker(volume=self._instance_volume, cache=self._instance_volume.cache)
                 self.render_all()
         except Exception as exc:
             show_warning(str(exc), parent=self)
@@ -4244,9 +4221,7 @@ class MainWindow(QMainWindow):
             )
             editable_volume = editor.to_volume_data(path=path)
             self._semantic_volume = editable_volume
-            self._semantic_worker = None
             self._instance_volume = None
-            self._instance_worker = None
             kind = "semantic"
         else:
             path = (
@@ -4256,9 +4231,7 @@ class MainWindow(QMainWindow):
             )
             editable_volume = editor.to_volume_data(path=path)
             self._instance_volume = editable_volume
-            self._instance_worker = None
             self._semantic_volume = None
-            self._semantic_worker = None
             kind = "instance"
 
         if reattach_renderer:

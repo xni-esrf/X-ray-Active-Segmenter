@@ -41,9 +41,7 @@ class MainWindowSetVolumeTests(unittest.TestCase):
             _raw_volume=raw_volume,
             _annotation_kind="semantic",
             _semantic_volume=None,
-            _semantic_worker=None,
             _instance_volume=None,
-            _instance_worker=None,
             _annotation_labels_dirty=True,
             renderer=renderer,
             bottom_panel=SimpleNamespace(
@@ -135,9 +133,7 @@ class MainWindowSetVolumeTests(unittest.TestCase):
         renderer = _RendererStub()
         window_like = SimpleNamespace(
             _semantic_volume=None,
-            _semantic_worker=None,
             _instance_volume=None,
-            _instance_worker=None,
             _segmentation_editor=None,
             _pending_render_view_ids=set(),
             _render_flush_scheduled=False,
@@ -260,9 +256,7 @@ class MainWindowSetVolumeTests(unittest.TestCase):
         previous_bbox_manager = object()
         window_like = SimpleNamespace(
             _semantic_volume="semantic",
-            _semantic_worker="semantic_worker",
             _instance_volume="instance",
-            _instance_worker="instance_worker",
             _segmentation_editor="editor",
             _pending_render_view_ids={"axial"},
             _render_flush_scheduled=True,
@@ -343,9 +337,7 @@ class MainWindowSetVolumeTests(unittest.TestCase):
         )
         window_like = SimpleNamespace(
             _semantic_volume=None,
-            _semantic_worker=None,
             _instance_volume=None,
-            _instance_worker=None,
             _segmentation_editor=None,
             _pending_render_view_ids=set(),
             _render_flush_scheduled=False,

@@ -18,7 +18,6 @@ from .render import Renderer
 from .ui import MainWindow
 from .ui.dialogs import show_warning
 from .utils import get_logger, setup_logging
-from .workers import IOWorker
 
 
 @dataclass
@@ -31,9 +30,6 @@ class AppContext:
     volume: Optional[VolumeData] = None
     semantic_volume: Optional[VolumeData] = None
     instance_volume: Optional[VolumeData] = None
-    io_worker: Optional[IOWorker] = None
-    semantic_worker: Optional[IOWorker] = None
-    instance_worker: Optional[IOWorker] = None
     segmentation_editor: Optional[SegmentationEditor] = None
 
 
@@ -172,7 +168,6 @@ def run(
             )
             if main_window.set_volume(prepared.volume, levels=prepared.levels):
                 context.volume = prepared.volume
-                context.io_worker = IOWorker(volume=prepared.volume, cache=prepared.cache)
                 main_window.render_all()
         except Exception as exc:
             logger.exception("Failed to load raw volume at startup: %s", volume_path)
@@ -191,13 +186,7 @@ def run(
             if main_window.set_semantic_volume(prepared.volume):
                 context.semantic_volume = main_window.semantic_volume()
                 context.instance_volume = None
-                context.instance_worker = None
                 context.segmentation_editor = main_window.segmentation_editor()
-                if context.semantic_volume is not None:
-                    context.semantic_worker = IOWorker(
-                        volume=context.semantic_volume,
-                        cache=context.semantic_volume.cache,
-                    )
                 main_window.render_all()
         except Exception as exc:
             logger.exception("Failed to load semantic map at startup: %s", semantic_path)
@@ -215,14 +204,8 @@ def run(
             )
             if main_window.set_instance_volume(prepared.volume):
                 context.semantic_volume = None
-                context.semantic_worker = None
                 context.instance_volume = main_window.instance_volume()
                 context.segmentation_editor = main_window.segmentation_editor()
-                if context.instance_volume is not None:
-                    context.instance_worker = IOWorker(
-                        volume=context.instance_volume,
-                        cache=context.instance_volume.cache,
-                    )
                 main_window.render_all()
         except Exception as exc:
             logger.exception("Failed to load instance map at startup: %s", instance_path)

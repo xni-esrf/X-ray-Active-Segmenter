@@ -1,7 +1,6 @@
-from .renderer import RenderRequest, RenderResult, Renderer, ViewId
+from .renderer import RenderResult, Renderer, ViewId
 
 __all__ = [
-    "RenderRequest",
     "RenderResult",
     "Renderer",
     "ViewId",

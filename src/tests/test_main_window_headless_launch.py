@@ -476,9 +476,6 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
         fake._cache_max_bytes = 1024
         fake._training_parameters = TrainingParameters()
         fake._headless_close_requested = False
-        fake._semantic_worker = object()
-        fake._instance_worker = object()
-        fake._io_worker = object()
         fake._pending_render_view_ids = {"axial"}
         fake._pending_annotation_peer_view_ids = {"coronal"}
         fake._annotation_dirty_views = {"sagittal"}

@@ -25,7 +25,6 @@ class AppStartupLoadingTests(unittest.TestCase):
             levels=(SimpleNamespace(),),
             cache=fake_cache,
         )
-        fake_worker = SimpleNamespace()
 
         class _MainWindowStub:
             def __init__(self) -> None:
@@ -74,8 +73,6 @@ class AppStartupLoadingTests(unittest.TestCase):
         ) as main_window_mock, patch.object(
             app_module, "load_prepared_volume", side_effect=_load_prepared
         ) as load_prepared_mock, patch.object(
-            app_module, "IOWorker", return_value=fake_worker
-        ) as io_worker_mock, patch.object(
             app_module, "show_warning"
         ) as warning_mock:
             qapplication_mock.instance.return_value = fake_app
@@ -94,7 +91,6 @@ class AppStartupLoadingTests(unittest.TestCase):
         input_handlers_mock.assert_called_once_with(sync_manager=fake_sync_manager)
         main_window_mock.assert_called_once()
         load_prepared_mock.assert_called_once()
-        io_worker_mock.assert_called_once_with(volume=fake_volume, cache=fake_cache)
         warning_mock.assert_not_called()
         self.assertEqual(
             call_order,
@@ -106,7 +102,6 @@ class AppStartupLoadingTests(unittest.TestCase):
             ],
         )
         self.assertIs(context.volume, fake_volume)
-        self.assertIs(context.io_worker, fake_worker)
 
     def test_run_shows_warning_when_startup_raw_load_fails(self) -> None:
         fake_app = SimpleNamespace(exec=lambda: None)

@@ -16,15 +16,6 @@ SegmentationROI = Tuple[int, int, int, int]
 
 
 @dataclass
-class RenderRequest:
-    view_id: ViewId
-    axis: int
-    slice_index: int
-    zoom: float = 1.0
-    pan: Tuple[float, float] = (0.0, 0.0)
-
-
-@dataclass
 class RenderResult:
     view_id: ViewId
     axis: int
@@ -104,7 +95,6 @@ class Renderer:
         axis: int,
         slice_index: int,
         zoom: float = 1.0,
-        pan: Tuple[float, float] = (0.0, 0.0),
     ) -> RenderResult:
         if self._volume is None:
             raise RuntimeError("No volume attached to renderer")
@@ -151,15 +141,6 @@ class Renderer:
         if handler is not None:
             handler(result)
         return result
-
-    def queue_request(self, request: RenderRequest) -> RenderResult:
-        return self.render_slice(
-            view_id=request.view_id,
-            axis=request.axis,
-            slice_index=request.slice_index,
-            zoom=request.zoom,
-            pan=request.pan,
-        )
 
     def refresh_segmentation_overlay(
         self,

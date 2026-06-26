@@ -337,9 +337,7 @@ class MainWindowContrastFlowTests(unittest.TestCase):
         window_like = SimpleNamespace(
             _segmentation_editor=None,
             _instance_volume=None,
-            _instance_worker=None,
             _semantic_volume=None,
-            _semantic_worker=None,
             renderer=renderer,
             _editable_segmentation_levels=lambda _volume: ("level0", "level1"),
             _sync_level_mode_controls_from_renderer=lambda: sync_calls.append("sync"),
@@ -375,9 +373,7 @@ class MainWindowContrastFlowTests(unittest.TestCase):
         window_like = SimpleNamespace(
             _segmentation_editor=editor,
             _semantic_volume=None,
-            _semantic_worker=object(),
             _instance_volume=object(),
-            _instance_worker=object(),
             renderer=renderer,
             _editable_segmentation_levels=lambda volume: (volume, "next"),
             _sync_level_mode_controls_from_renderer=lambda: sync_calls.append("sync"),

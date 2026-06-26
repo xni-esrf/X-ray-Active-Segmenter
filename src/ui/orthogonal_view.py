@@ -184,7 +184,6 @@ class OrthogonalView(QWidget):
             axis=self.state.axis,
             slice_index=self.state.slice_index,
             zoom=self.state.zoom,
-            pan=self.state.pan,
         )
         return result
 

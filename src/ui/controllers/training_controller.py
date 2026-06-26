@@ -42,7 +42,7 @@ class TrainingControllerOperations:
     learning_session_kwargs: Callable[[object], dict[str, object]] = lambda _context: {}
     inference_navigation_lock_active: Callable[[object], bool] = lambda _context: False
     mark_current_model_runtime_as_trained: Callable[..., object] = (
-        lambda _context, *, completed_epoch_count: None
+        lambda _context, **_kwargs: None
     )
     refresh_learning_inference_ui_state: Callable[[object], object] = (
         lambda _context: None
