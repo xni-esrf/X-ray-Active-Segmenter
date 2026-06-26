@@ -186,9 +186,9 @@ def run(
                 kind="semantic",
                 load_mode=config.load_mode,
                 cache_max_bytes=config.cache_max_bytes,
-                pyramid_levels=4,
+                pyramid_levels=1,
             )
-            if main_window.set_semantic_volume(prepared.volume, levels=prepared.levels):
+            if main_window.set_semantic_volume(prepared.volume):
                 context.semantic_volume = main_window.semantic_volume()
                 context.instance_volume = None
                 context.instance_worker = None
@@ -211,9 +211,9 @@ def run(
                 kind="instance",
                 load_mode=config.load_mode,
                 cache_max_bytes=config.cache_max_bytes,
-                pyramid_levels=4,
+                pyramid_levels=1,
             )
-            if main_window.set_instance_volume(prepared.volume, levels=prepared.levels):
+            if main_window.set_instance_volume(prepared.volume):
                 context.semantic_volume = None
                 context.semantic_worker = None
                 context.instance_volume = main_window.instance_volume()

@@ -1220,8 +1220,7 @@ class MainWindow(QMainWindow):
         MainWindow._clear_learning_label_space_for(self)
         return True
 
-    def set_semantic_volume(self, volume: VolumeData, levels: Optional[Tuple[VolumeData, ...]] = None) -> bool:
-        del levels  # Active editable segmentation is attached as a writable in-memory volume.
+    def set_semantic_volume(self, volume: VolumeData) -> bool:
         if not self._is_valid_segmentation_dtype(volume):
             show_warning(
                 "Semantic map dtype must be int8/16/32/64 or uint8/16/32/64.",
@@ -1248,8 +1247,7 @@ class MainWindow(QMainWindow):
         MainWindow._clear_learning_label_space_for(self)
         return True
 
-    def set_instance_volume(self, volume: VolumeData, levels: Optional[Tuple[VolumeData, ...]] = None) -> bool:
-        del levels  # Active editable segmentation is attached as a writable in-memory volume.
+    def set_instance_volume(self, volume: VolumeData) -> bool:
         if not self._is_valid_instance_dtype(volume):
             show_warning(
                 "Instance map dtype must be int8/16/32/64 or uint8/16/32/64.",
@@ -3724,9 +3722,9 @@ class MainWindow(QMainWindow):
                 kind="semantic",
                 load_mode=self._load_mode,
                 cache_max_bytes=self._cache_max_bytes,
-                pyramid_levels=4,
+                pyramid_levels=1,
             )
-            if self.set_semantic_volume(prepared.volume, levels=prepared.levels):
+            if self.set_semantic_volume(prepared.volume):
                 from ..workers import IOWorker
 
                 if self._semantic_volume is not None:
@@ -3749,9 +3747,9 @@ class MainWindow(QMainWindow):
                 kind="instance",
                 load_mode=self._load_mode,
                 cache_max_bytes=self._cache_max_bytes,
-                pyramid_levels=4,
+                pyramid_levels=1,
             )
-            if self.set_instance_volume(prepared.volume, levels=prepared.levels):
+            if self.set_instance_volume(prepared.volume):
                 from ..workers import IOWorker
 
                 if self._instance_volume is not None:
