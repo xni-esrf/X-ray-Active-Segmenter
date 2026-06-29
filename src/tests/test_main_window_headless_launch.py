@@ -121,6 +121,54 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             self.assertIsNone(window._semantic_volume)
             self.assertIsNone(window._segmentation_editor)
 
+    def test_inference_headless_close_allows_no_loaded_segmentation(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_path = root / "raw.npy"
+            seg_path = root / "seg.npy"
+            bbox_path = root / "boxes.bbox.txt"
+            output_seg_path = root / "out.npy"
+            job_dir = root / ".headless-job" / "inference-job"
+            self._touch_inputs(raw_path, seg_path, bbox_path)
+            inference_box = self._box("infer-box", "inference")
+            window = self._make_window_like(
+                raw_path=raw_path,
+                seg_path=seg_path,
+                bbox_path=bbox_path,
+                boxes=(inference_box,),
+            )
+            window._semantic_volume = None
+            window._last_saved_segmentation_path = None
+            window._last_saved_segmentation_kind = None
+            window._active_segmentation_volume = lambda: None
+
+            spawned_jobs = []
+            window._save_model_runtime_checkpoint = lambda _runtime, *, checkpoint_path: None
+            window._spawn_headless_after_ui_exit = lambda job_path: spawned_jobs.append(job_path)
+            window._create_headless_job_dir = lambda _kind: job_dir
+
+            with patch(
+                "src.ui.main_window.open_save_segmentation_dialog",
+                return_value=SaveDialogResult(
+                    accepted=True,
+                    path=str(output_seg_path),
+                    format="npy",
+                ),
+            ), patch.object(
+                MainWindow,
+                "_get_learning_model_runtime_for",
+                return_value=SimpleNamespace(num_classes=2),
+            ):
+                result = window._launch_headless_learning_job_and_close(kind="inference")
+
+            self.assertTrue(result)
+            self.assertEqual(len(spawned_jobs), 1)
+            spec = load_headless_job_spec(spawned_jobs[0])
+            self.assertEqual(spec.kind, "inference")
+            self.assertIsNone(spec.segmentation_path)
+            self.assertEqual(spec.segmentation_kind, "semantic")
+            self.assertEqual(spec.output_segmentation_path, str(output_seg_path))
+
     def test_train_headless_close_refuses_when_dirty_segmentation_save_is_canceled(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

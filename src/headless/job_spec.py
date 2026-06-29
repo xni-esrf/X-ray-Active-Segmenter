@@ -21,9 +21,9 @@ SegmentationKind = Literal["semantic", "instance"]
 class HeadlessJobSpec:
     kind: HeadlessJobKind
     raw_volume_path: str
-    segmentation_path: str
-    segmentation_kind: SegmentationKind
     bbox_path: str
+    segmentation_path: Optional[str] = None
+    segmentation_kind: SegmentationKind = "semantic"
     load_mode: str = "lazy"
     cache_max_bytes: int = 512 * 1024 * 1024
     training_parameters: TrainingParameters = DEFAULT_TRAINING_PARAMETERS
@@ -49,9 +49,10 @@ class HeadlessJobSpec:
         created_at = str(self.created_at).strip() or _utc_timestamp()
 
         _require_non_empty_path(self.raw_volume_path, name="raw_volume_path")
-        _require_non_empty_path(self.segmentation_path, name="segmentation_path")
         _require_non_empty_path(self.bbox_path, name="bbox_path")
         _require_non_empty_path(self.job_dir, name="job_dir")
+        if self.segmentation_path is not None:
+            _require_non_empty_path(self.segmentation_path, name="segmentation_path")
         if self.input_checkpoint_path is not None:
             _require_non_empty_path(
                 self.input_checkpoint_path,
@@ -59,6 +60,7 @@ class HeadlessJobSpec:
             )
 
         if kind == "train":
+            _require_non_empty_path(self.segmentation_path, name="segmentation_path")
             _require_non_empty_path(
                 self.input_checkpoint_path,
                 name="input_checkpoint_path",

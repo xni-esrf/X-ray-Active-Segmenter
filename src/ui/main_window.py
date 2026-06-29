@@ -1867,7 +1867,7 @@ class MainWindow(QMainWindow):
 
         job_dir = self._create_headless_job_dir(normalized_kind)
         try:
-            common_inputs = self._prepare_headless_common_inputs()
+            common_inputs = self._prepare_headless_common_inputs(kind=normalized_kind)
             input_checkpoint_path = self._prepare_headless_input_checkpoint(
                 kind=normalized_kind,
                 job_dir=job_dir,
@@ -1962,38 +1962,47 @@ class MainWindow(QMainWindow):
                         )
             setattr(self, attr_name, None)
 
-    def _prepare_headless_common_inputs(self) -> Dict[str, str]:
+    def _prepare_headless_common_inputs(self, *, kind: str) -> Dict[str, object]:
+        normalized_kind = str(kind).strip().lower()
+        if normalized_kind not in {"train", "inference"}:
+            raise ValueError(f"Unsupported headless job kind: {kind!r}")
         raw_path = self._headless_reopenable_volume_path(self._raw_volume, name="raw volume")
+        bbox_path = self._ensure_headless_bounding_boxes_path()
+        common_inputs: Dict[str, object] = {
+            "raw_volume_path": raw_path,
+            "bbox_path": bbox_path,
+        }
         active_segmentation = self._active_segmentation_volume()
         if active_segmentation is None:
-            raise RuntimeError(
-                "Headless learning requires a saved semantic segmentation map."
-            )
+            if normalized_kind == "train":
+                raise RuntimeError(
+                    "Headless training requires a saved semantic segmentation map."
+                )
+            common_inputs["segmentation_path"] = None
+            common_inputs["segmentation_kind"] = "semantic"
+            return common_inputs
         segmentation_kind, _segmentation_volume = active_segmentation
         if segmentation_kind != "semantic":
             raise RuntimeError(
                 "Headless learning currently requires the active segmentation to be semantic."
             )
-        segmentation_path = self._ensure_headless_segmentation_path()
-        bbox_path = self._ensure_headless_bounding_boxes_path()
-        return {
-            "raw_volume_path": raw_path,
-            "segmentation_path": segmentation_path,
-            "segmentation_kind": segmentation_kind,
-            "bbox_path": bbox_path,
-        }
+        common_inputs["segmentation_path"] = self._ensure_headless_segmentation_path()
+        common_inputs["segmentation_kind"] = segmentation_kind
+        return common_inputs
 
     def _build_headless_training_spec(
         self,
         *,
         job_dir: Path,
         raw_volume_path: str,
-        segmentation_path: str,
-        segmentation_kind: str,
         bbox_path: str,
         input_checkpoint_path: str,
+        segmentation_path: Optional[str] = None,
+        segmentation_kind: str = "semantic",
     ) -> HeadlessJobSpec:
         self._require_headless_training_boxes()
+        if segmentation_path is None:
+            raise RuntimeError("Headless training requires a saved semantic segmentation map.")
         dialog_result = open_save_model_checkpoint_dialog(
             self,
             retry_on_overwrite_decline=True,
@@ -2020,10 +2029,10 @@ class MainWindow(QMainWindow):
         *,
         job_dir: Path,
         raw_volume_path: str,
-        segmentation_path: str,
-        segmentation_kind: str,
         bbox_path: str,
         input_checkpoint_path: str,
+        segmentation_path: Optional[str] = None,
+        segmentation_kind: str = "semantic",
     ) -> HeadlessJobSpec:
         self._require_headless_inference_boxes()
         while True:

@@ -8,10 +8,12 @@ from typing import Optional, Sequence, Tuple
 
 import numpy as np
 
+from ..bbox import load_bounding_boxes
 from ..data import open_volume
 from ..io.loader import InMemoryVolumeLoader
 from ..io.saver import save_segmentation_volume
 from ..learning import (
+    LearningSourceBundle,
     LearningSession,
     apply_inference_predictions_to_array,
     instantiate_model_runtime_from_checkpoint,
@@ -24,6 +26,7 @@ from ..learning import (
     validate_foundation_model_instantiation_preconditions,
     validate_training_preconditions_for_session,
 )
+from ..loading import load_prepared_volume
 from ..utils import setup_logging
 from .job_spec import HeadlessJobSpec, load_headless_job_spec
 
@@ -178,8 +181,11 @@ class _HeadlessPeriodicCheckpointManager:
 
 def _open_headless_inputs(spec: HeadlessJobSpec) -> _HeadlessInputContext:
     _require_existing_input_path(spec.raw_volume_path, name="raw_volume_path")
-    _require_existing_input_path(spec.segmentation_path, name="segmentation_path")
     _require_existing_input_path(spec.bbox_path, name="bbox_path")
+    if spec.segmentation_path is not None:
+        _require_existing_input_path(spec.segmentation_path, name="segmentation_path")
+    elif spec.kind == "train":
+        raise ValueError("Training jobs require segmentation_path.")
     if spec.input_checkpoint_path is not None:
         _require_existing_input_path(
             spec.input_checkpoint_path,
@@ -196,15 +202,49 @@ def _open_headless_inputs(spec: HeadlessJobSpec) -> _HeadlessInputContext:
             name="output_segmentation_path",
         )
 
-    sources = load_learning_sources_from_paths(
-        raw_volume_path=spec.raw_volume_path,
-        segmentation_path=spec.segmentation_path,
-        segmentation_kind=spec.segmentation_kind,
-        bbox_path=spec.bbox_path,
+    if spec.segmentation_path is None:
+        sources = _load_inference_sources_without_segmentation(spec)
+    else:
+        sources = load_learning_sources_from_paths(
+            raw_volume_path=spec.raw_volume_path,
+            segmentation_path=spec.segmentation_path,
+            segmentation_kind=spec.segmentation_kind,
+            bbox_path=spec.bbox_path,
+            load_mode=spec.load_mode,
+            cache_max_bytes=spec.cache_max_bytes,
+        )
+    return _HeadlessInputContext(sources=sources)
+
+
+def _load_inference_sources_without_segmentation(spec: HeadlessJobSpec) -> LearningSourceBundle:
+    raw = load_prepared_volume(
+        spec.raw_volume_path,
+        kind="raw",
         load_mode=spec.load_mode,
         cache_max_bytes=spec.cache_max_bytes,
+        pyramid_levels=1,
     )
-    return _HeadlessInputContext(sources=sources)
+    bbox_payload = load_bounding_boxes(
+        spec.bbox_path,
+        expected_shape=raw.volume.shape,
+    )
+    empty_segmentation = np.zeros(raw.volume.shape, dtype=np.int32)
+    segmentation_volume = open_volume(
+        InMemoryVolumeLoader(
+            path="<generated-empty-semantic-segmentation>",
+            array=empty_segmentation,
+            voxel_spacing=raw.volume.info.voxel_spacing,
+            axes=raw.volume.info.axes,
+        )
+    )
+    boxes = tuple(bbox_payload.boxes)
+    return LearningSourceBundle(
+        raw_volume=raw.volume,
+        segmentation_volume=segmentation_volume,
+        segmentation_kind="semantic",
+        boxes_by_id={box.id: box for box in boxes},
+        ordered_box_ids=tuple(box.id for box in boxes),
+    )
 
 
 def _run_training_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) -> None:

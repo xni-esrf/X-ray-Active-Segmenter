@@ -436,6 +436,52 @@ class HeadlessRunnerTests(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             self.assertTrue((job_dir / "headless.log").exists())
 
+    def test_validate_only_reopens_inference_inputs_without_segmentation(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_path = root / "raw.npy"
+            bbox_path = root / "boxes.json"
+            checkpoint_path = root / "input.cp"
+            job_dir = root / ".headless-job"
+            job_path = job_dir / "job.json"
+
+            np.save(raw_path, np.arange(27, dtype=np.float32).reshape(3, 3, 3))
+            checkpoint_path.write_bytes(b"checkpoint")
+            save_bounding_boxes(
+                str(bbox_path),
+                volume_shape=(3, 3, 3),
+                boxes=(
+                    BoundingBox.from_bounds(
+                        box_id="infer-box",
+                        z0=0,
+                        z1=2,
+                        y0=0,
+                        y1=2,
+                        x0=0,
+                        x1=2,
+                        label="inference",
+                        volume_shape=(3, 3, 3),
+                    ),
+                ),
+            )
+            spec = HeadlessJobSpec(
+                kind="inference",
+                raw_volume_path=str(raw_path),
+                bbox_path=str(bbox_path),
+                load_mode="lazy",
+                cache_max_bytes=1024 * 1024,
+                input_checkpoint_path=str(checkpoint_path),
+                output_segmentation_path=str(root / "out.npy"),
+                output_segmentation_format="npy",
+                job_dir=str(job_dir),
+            )
+            save_headless_job_spec(spec, str(job_path))
+
+            exit_code = headless_main([str(job_path), "--validate-only"])
+
+            self.assertEqual(exit_code, 0)
+            self.assertTrue((job_dir / "headless.log").exists())
+
     def test_non_validate_train_returns_not_implemented_code(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)

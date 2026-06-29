@@ -104,6 +104,19 @@ class HeadlessJobSpecTests(unittest.TestCase):
             self.assertEqual(loaded.output_segmentation_format, "npz")
             self.assertEqual(loaded.source_pid, 123)
 
+    def test_inference_spec_allows_missing_input_segmentation(self) -> None:
+        spec = HeadlessJobSpec(
+            kind="inference",
+            raw_volume_path="raw.npy",
+            bbox_path="boxes.bbox.txt",
+            input_checkpoint_path="input.cp",
+            output_segmentation_path="output.npy",
+            output_segmentation_format="npy",
+        )
+
+        self.assertIsNone(spec.segmentation_path)
+        self.assertEqual(spec.segmentation_kind, "semantic")
+
     def test_rejects_invalid_kind_load_mode_and_segmentation_kind(self) -> None:
         base = dict(
             kind="train",
