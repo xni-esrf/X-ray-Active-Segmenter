@@ -333,24 +333,143 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
 
         return _Editor()
 
-    def test_refresh_learning_training_ui_state_sets_bottom_panel_flags(self) -> None:
-        calls: list[tuple[str, object]] = []
-        bottom_panel = SimpleNamespace(
-            set_learning_training_running=lambda running: calls.append(("running", bool(running))),
+    def _make_learning_actions_bottom_panel(
+        self,
+        calls: list,
+        *,
+        train_enabled_event: str = "train_enabled",
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            set_learning_training_running=lambda running: calls.append(
+                ("running", bool(running))
+            ),
             set_segment_inference_enabled=lambda enabled: calls.append(
                 ("segment_enabled", bool(enabled))
             ),
-            set_train_model_enabled=lambda enabled: calls.append(("enabled", bool(enabled))),
-            set_stop_training_enabled=lambda enabled: calls.append(("stop_enabled", bool(enabled))),
-        )
-        window_like = SimpleNamespace(
-            _training_running=False,
-            bottom_panel=bottom_panel,
-            _training_is_running=lambda: False,
-            _refresh_learning_inference_ui_state=lambda: MainWindow._refresh_learning_inference_ui_state(
-                window_like
+            set_train_model_enabled=lambda enabled: calls.append(
+                (train_enabled_event, bool(enabled))
+            ),
+            set_stop_training_enabled=lambda enabled: calls.append(
+                ("stop_enabled", bool(enabled))
+            ),
+            set_stop_inference_enabled=lambda enabled: calls.append(
+                ("stop_inference_enabled", bool(enabled))
+            ),
+            set_inference_navigation_only_mode=lambda enabled: calls.append(
+                ("navigation_only", bool(enabled))
             ),
         )
+
+    def _make_training_state_window(
+        self,
+        calls: list,
+        *,
+        training_running: bool = False,
+    ) -> SimpleNamespace:
+        window_like = SimpleNamespace(
+            _training_running=bool(training_running),
+            _training_worker=None,
+            _training_thread=None,
+            bottom_panel=self._make_learning_actions_bottom_panel(
+                calls,
+                train_enabled_event="enabled",
+            ),
+        )
+        window_like._training_is_running = lambda: bool(window_like._training_running)
+        window_like._refresh_learning_inference_ui_state = (
+            lambda: MainWindow._refresh_learning_inference_ui_state(window_like)
+        )
+        window_like._refresh_learning_training_ui_state = (
+            lambda: MainWindow._refresh_learning_training_ui_state(window_like)
+        )
+        return window_like
+
+    def _make_inference_state_window(
+        self,
+        calls: list,
+        *,
+        training_running: bool = False,
+        inference_running: bool = True,
+        stop_requested: bool = False,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            bottom_panel=self._make_learning_actions_bottom_panel(calls),
+            _training_is_running=lambda: bool(training_running),
+            _inference_is_running=lambda: bool(inference_running),
+            _inference_stop_requested=bool(stop_requested),
+            _refresh_undo_ui_state=lambda: calls.append(("refresh_undo", None)),
+        )
+
+    def _make_bbox_selection_window(
+        self,
+        *,
+        selected_ids: tuple[str, ...] = tuple(),
+        manager_selected_id: str | None = None,
+        boxes: tuple[BoundingBox, ...] = tuple(),
+        editor: object = None,
+        ensure_result: bool = True,
+        ensure_calls: list[str] | None = None,
+        history_calls: list[object] | None = None,
+        refresh_calls: list[str] | None = None,
+        end_calls: list[str] | None = None,
+    ) -> SimpleNamespace:
+        def _ensure_editor() -> bool:
+            if ensure_calls is not None:
+                ensure_calls.append("ensure")
+            return bool(ensure_result)
+
+        window_like = SimpleNamespace(
+            bottom_panel=SimpleNamespace(
+                selected_bounding_boxes=lambda: tuple(selected_ids),
+                state=SimpleNamespace(bbox_selected_ids=tuple(selected_ids)),
+            ),
+            _bbox_manager=SimpleNamespace(
+                selected_id=manager_selected_id,
+                boxes=lambda: tuple(boxes),
+            ),
+            _segmentation_editor=editor,
+            _ensure_editable_segmentation_for_annotation=_ensure_editor,
+            _end_annotation_modification=(
+                (lambda: end_calls.append("end"))
+                if end_calls is not None
+                else (lambda: None)
+            ),
+            _record_global_history_for_segmentation_operation=(
+                (lambda operation: history_calls.append(operation))
+                if history_calls is not None
+                else (lambda _operation: None)
+            ),
+            _sync_renderer_segmentation_labels=(
+                (lambda: refresh_calls.append("sync_labels"))
+                if refresh_calls is not None
+                else (lambda: None)
+            ),
+            _request_hover_readout=(
+                (lambda: refresh_calls.append("hover"))
+                if refresh_calls is not None
+                else (lambda: None)
+            ),
+            _request_picked_readout=(
+                (lambda: refresh_calls.append("picked"))
+                if refresh_calls is not None
+                else (lambda: None)
+            ),
+            render_all=(
+                (lambda: refresh_calls.append("render"))
+                if refresh_calls is not None
+                else (lambda: None)
+            ),
+            _refresh_annotation_ui_state=(
+                (lambda: refresh_calls.append("ui"))
+                if refresh_calls is not None
+                else (lambda: None)
+            ),
+        )
+        return window_like
+
+    def test_refresh_learning_training_ui_state_sets_bottom_panel_flags(self) -> None:
+        calls: list[tuple[str, object]] = []
+        window_like = self._make_training_state_window(calls)
 
         MainWindow._refresh_learning_training_ui_state(window_like)
 
@@ -366,27 +485,7 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
 
     def test_enter_and_exit_learning_training_running_state_updates_runtime_and_ui(self) -> None:
         calls: list[tuple[str, object]] = []
-        bottom_panel = SimpleNamespace(
-            set_learning_training_running=lambda running: calls.append(("running", bool(running))),
-            set_segment_inference_enabled=lambda enabled: calls.append(
-                ("segment_enabled", bool(enabled))
-            ),
-            set_train_model_enabled=lambda enabled: calls.append(("enabled", bool(enabled))),
-            set_stop_training_enabled=lambda enabled: calls.append(("stop_enabled", bool(enabled))),
-        )
-        window_like = SimpleNamespace(
-            _training_running=False,
-            _training_worker=None,
-            _training_thread=None,
-            bottom_panel=bottom_panel,
-        )
-        window_like._training_is_running = lambda: bool(window_like._training_running)
-        window_like._refresh_learning_inference_ui_state = (
-            lambda: MainWindow._refresh_learning_inference_ui_state(window_like)
-        )
-        window_like._refresh_learning_training_ui_state = (
-            lambda: MainWindow._refresh_learning_training_ui_state(window_like)
-        )
+        window_like = self._make_training_state_window(calls)
 
         worker = object()
         thread = object()
@@ -716,24 +815,7 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
 
     def test_refresh_learning_inference_ui_state_sets_navigation_only_mode(self) -> None:
         calls: list[tuple[str, object]] = []
-        bottom_panel = SimpleNamespace(
-            set_segment_inference_enabled=lambda enabled: calls.append(
-                ("segment_enabled", bool(enabled))
-            ),
-            set_train_model_enabled=lambda enabled: calls.append(("train_enabled", bool(enabled))),
-            set_stop_inference_enabled=lambda enabled: calls.append(
-                ("stop_inference_enabled", bool(enabled))
-            ),
-            set_inference_navigation_only_mode=lambda enabled: calls.append(
-                ("navigation_only", bool(enabled))
-            ),
-        )
-        window_like = SimpleNamespace(
-            bottom_panel=bottom_panel,
-            _training_is_running=lambda: False,
-            _inference_is_running=lambda: True,
-            _refresh_undo_ui_state=lambda: calls.append(("refresh_undo", None)),
-        )
+        window_like = self._make_inference_state_window(calls)
 
         MainWindow._refresh_learning_inference_ui_state(window_like)
 
@@ -750,24 +832,9 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
 
     def test_refresh_learning_inference_ui_state_disables_stop_button_after_cancel_request(self) -> None:
         calls: list[tuple[str, object]] = []
-        bottom_panel = SimpleNamespace(
-            set_segment_inference_enabled=lambda enabled: calls.append(
-                ("segment_enabled", bool(enabled))
-            ),
-            set_train_model_enabled=lambda enabled: calls.append(("train_enabled", bool(enabled))),
-            set_stop_inference_enabled=lambda enabled: calls.append(
-                ("stop_inference_enabled", bool(enabled))
-            ),
-            set_inference_navigation_only_mode=lambda enabled: calls.append(
-                ("navigation_only", bool(enabled))
-            ),
-        )
-        window_like = SimpleNamespace(
-            bottom_panel=bottom_panel,
-            _training_is_running=lambda: False,
-            _inference_is_running=lambda: True,
-            _inference_stop_requested=True,
-            _refresh_undo_ui_state=lambda: calls.append(("refresh_undo", None)),
+        window_like = self._make_inference_state_window(
+            calls,
+            stop_requested=True,
         )
 
         MainWindow._refresh_learning_inference_ui_state(window_like)
@@ -1367,15 +1434,9 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
 
     def test_erase_selected_bbox_segmentation_warns_when_no_bbox_selected(self) -> None:
         ensure_calls = []
-        window_like = SimpleNamespace(
-            bottom_panel=SimpleNamespace(
-                selected_bounding_boxes=lambda: tuple(),
-                state=SimpleNamespace(bbox_selected_ids=tuple()),
-            ),
-            _bbox_manager=SimpleNamespace(selected_id=None),
-            _segmentation_editor=object(),
-            _ensure_editable_segmentation_for_annotation=lambda: ensure_calls.append("ensure")
-            or True,
+        window_like = self._make_bbox_selection_window(
+            editor=object(),
+            ensure_calls=ensure_calls,
         )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
@@ -1393,15 +1454,11 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         self,
     ) -> None:
         ensure_calls = []
-        window_like = SimpleNamespace(
-            bottom_panel=SimpleNamespace(
-                selected_bounding_boxes=lambda: tuple(),
-                state=SimpleNamespace(bbox_selected_ids=tuple()),
-            ),
-            _bbox_manager=SimpleNamespace(selected_id="bbox_0007"),
-            _segmentation_editor=None,
-            _ensure_editable_segmentation_for_annotation=lambda: ensure_calls.append("ensure")
-            or False,
+        window_like = self._make_bbox_selection_window(
+            manager_selected_id="bbox_0007",
+            editor=None,
+            ensure_result=False,
+            ensure_calls=ensure_calls,
         )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
@@ -1417,15 +1474,10 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
 
     def test_erase_selected_bbox_segmentation_warns_when_editor_still_missing_after_ensure(self) -> None:
         ensure_calls = []
-        window_like = SimpleNamespace(
-            bottom_panel=SimpleNamespace(
-                selected_bounding_boxes=lambda: ("bbox_0001",),
-                state=SimpleNamespace(bbox_selected_ids=("bbox_0001",)),
-            ),
-            _bbox_manager=SimpleNamespace(selected_id=None),
-            _segmentation_editor=None,
-            _ensure_editable_segmentation_for_annotation=lambda: ensure_calls.append("ensure")
-            or True,
+        window_like = self._make_bbox_selection_window(
+            selected_ids=("bbox_0001",),
+            editor=None,
+            ensure_calls=ensure_calls,
         )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
@@ -1440,17 +1492,9 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         info_mock.assert_not_called()
 
     def test_erase_selected_bbox_segmentation_warns_when_selected_boxes_are_missing(self) -> None:
-        window_like = SimpleNamespace(
-            bottom_panel=SimpleNamespace(
-                selected_bounding_boxes=lambda: ("bbox_0007",),
-                state=SimpleNamespace(bbox_selected_ids=("bbox_0007",)),
-            ),
-            _bbox_manager=SimpleNamespace(
-                selected_id=None,
-                boxes=lambda: tuple(),
-            ),
-            _segmentation_editor=object(),
-            _ensure_editable_segmentation_for_annotation=lambda: True,
+        window_like = self._make_bbox_selection_window(
+            selected_ids=("bbox_0007",),
+            editor=object(),
         )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
@@ -1475,26 +1519,14 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         end_calls = []
         history_calls = []
         refresh_calls = []
-        window_like = SimpleNamespace(
-            bottom_panel=SimpleNamespace(
-                selected_bounding_boxes=lambda: ("bbox_0001",),
-                state=SimpleNamespace(bbox_selected_ids=("bbox_0001",)),
-            ),
-            _bbox_manager=SimpleNamespace(
-                selected_id="bbox_0002",
-                boxes=lambda: (box1, box2),
-            ),
-            _segmentation_editor=editor,
-            _ensure_editable_segmentation_for_annotation=lambda: True,
-            _end_annotation_modification=lambda: end_calls.append("end"),
-            _record_global_history_for_segmentation_operation=lambda operation: history_calls.append(
-                operation
-            ),
-            _sync_renderer_segmentation_labels=lambda: refresh_calls.append("sync_labels"),
-            _request_hover_readout=lambda: refresh_calls.append("hover"),
-            _request_picked_readout=lambda: refresh_calls.append("picked"),
-            render_all=lambda: refresh_calls.append("render"),
-            _refresh_annotation_ui_state=lambda: refresh_calls.append("ui"),
+        window_like = self._make_bbox_selection_window(
+            selected_ids=("bbox_0001",),
+            manager_selected_id="bbox_0002",
+            boxes=(box1, box2),
+            editor=editor,
+            history_calls=history_calls,
+            refresh_calls=refresh_calls,
+            end_calls=end_calls,
         )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
@@ -1543,26 +1575,12 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
         )
         history_calls = []
         refresh_calls = []
-        window_like = SimpleNamespace(
-            bottom_panel=SimpleNamespace(
-                selected_bounding_boxes=lambda: ("bbox_0001",),
-                state=SimpleNamespace(bbox_selected_ids=("bbox_0001",)),
-            ),
-            _bbox_manager=SimpleNamespace(
-                selected_id=None,
-                boxes=lambda: (box,),
-            ),
-            _segmentation_editor=editor,
-            _ensure_editable_segmentation_for_annotation=lambda: True,
-            _end_annotation_modification=lambda: None,
-            _record_global_history_for_segmentation_operation=lambda operation: history_calls.append(
-                operation
-            ),
-            _sync_renderer_segmentation_labels=lambda: refresh_calls.append("sync_labels"),
-            _request_hover_readout=lambda: refresh_calls.append("hover"),
-            _request_picked_readout=lambda: refresh_calls.append("picked"),
-            render_all=lambda: refresh_calls.append("render"),
-            _refresh_annotation_ui_state=lambda: refresh_calls.append("ui"),
+        window_like = self._make_bbox_selection_window(
+            selected_ids=("bbox_0001",),
+            boxes=(box,),
+            editor=editor,
+            history_calls=history_calls,
+            refresh_calls=refresh_calls,
         )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
@@ -1586,24 +1604,10 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
             active_label=4,
             commit_result=committed_operation,
         )
-        window_like = SimpleNamespace(
-            bottom_panel=SimpleNamespace(
-                selected_bounding_boxes=lambda: ("bbox_0001",),
-                state=SimpleNamespace(bbox_selected_ids=("bbox_0001",)),
-            ),
-            _bbox_manager=SimpleNamespace(
-                selected_id=None,
-                boxes=lambda: (box,),
-            ),
-            _segmentation_editor=editor,
-            _ensure_editable_segmentation_for_annotation=lambda: True,
-            _end_annotation_modification=lambda: None,
-            _record_global_history_for_segmentation_operation=lambda _operation: None,
-            _sync_renderer_segmentation_labels=lambda: None,
-            _request_hover_readout=lambda: None,
-            _request_picked_readout=lambda: None,
-            render_all=lambda: None,
-            _refresh_annotation_ui_state=lambda: None,
+        window_like = self._make_bbox_selection_window(
+            selected_ids=("bbox_0001",),
+            boxes=(box,),
+            editor=editor,
         )
 
         with patch.object(
@@ -1625,21 +1629,11 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
             raise_on_erase=True,
         )
         history_calls = []
-        window_like = SimpleNamespace(
-            bottom_panel=SimpleNamespace(
-                selected_bounding_boxes=lambda: ("bbox_0001",),
-                state=SimpleNamespace(bbox_selected_ids=("bbox_0001",)),
-            ),
-            _bbox_manager=SimpleNamespace(
-                selected_id=None,
-                boxes=lambda: (box,),
-            ),
-            _segmentation_editor=editor,
-            _ensure_editable_segmentation_for_annotation=lambda: True,
-            _end_annotation_modification=lambda: None,
-            _record_global_history_for_segmentation_operation=lambda operation: history_calls.append(
-                operation
-            ),
+        window_like = self._make_bbox_selection_window(
+            selected_ids=("bbox_0001",),
+            boxes=(box,),
+            editor=editor,
+            history_calls=history_calls,
         )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
@@ -1673,15 +1667,9 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
 
     def test_process_selected_bbox_segmentation_operation_warns_when_no_bbox_selected(self) -> None:
         ensure_calls = []
-        window_like = SimpleNamespace(
-            bottom_panel=SimpleNamespace(
-                selected_bounding_boxes=lambda: tuple(),
-                state=SimpleNamespace(bbox_selected_ids=tuple()),
-            ),
-            _bbox_manager=SimpleNamespace(boxes=lambda: tuple()),
-            _segmentation_editor=object(),
-            _ensure_editable_segmentation_for_annotation=lambda: ensure_calls.append("ensure")
-            or True,
+        window_like = self._make_bbox_selection_window(
+            editor=object(),
+            ensure_calls=ensure_calls,
         )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
@@ -1750,15 +1738,12 @@ class MainWindowLearningTrainingStateTests(unittest.TestCase):
     def test_process_selected_bbox_segmentation_operation_warns_when_editor_cannot_be_ensured(self) -> None:
         ensure_calls = []
         box = self._box(box_id="bbox_0001")
-        window_like = SimpleNamespace(
-            bottom_panel=SimpleNamespace(
-                selected_bounding_boxes=lambda: ("bbox_0001",),
-                state=SimpleNamespace(bbox_selected_ids=("bbox_0001",)),
-            ),
-            _bbox_manager=SimpleNamespace(boxes=lambda: (box,)),
-            _segmentation_editor=None,
-            _ensure_editable_segmentation_for_annotation=lambda: ensure_calls.append("ensure")
-            or False,
+        window_like = self._make_bbox_selection_window(
+            selected_ids=("bbox_0001",),
+            boxes=(box,),
+            editor=None,
+            ensure_result=False,
+            ensure_calls=ensure_calls,
         )
 
         with patch("src.ui.main_window.show_info") as info_mock, patch(
