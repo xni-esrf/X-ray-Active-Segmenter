@@ -373,6 +373,7 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
         label_values=tuple(checkpoint_preconditions.label_values),
         volume_shape=tuple(int(value) for value in tuple(context.raw_volume.shape)),
         progress_callback=_log_inference_progress,
+        use_tiled_score_buffer=True,
     )
     (
         output_array,

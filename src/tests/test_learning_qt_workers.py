@@ -109,6 +109,55 @@ class LearningInferenceWorkerConfigureTests(unittest.TestCase):
         )
 
         self.assertIs(worker._configured_raw_array(), raw_array)
+        self.assertFalse(worker._use_tiled_score_buffer)
+
+    def test_configure_accepts_tiled_score_buffer_flag(self) -> None:
+        raw_array = np.zeros((2, 3, 4), dtype=np.uint8)
+        worker = LearningInferenceWorker()
+
+        worker.configure(
+            model_runtime=object(),
+            inference_boxes=(
+                BoundingBox(
+                    id="box-1",
+                    z0=0,
+                    z1=1,
+                    y0=0,
+                    y1=2,
+                    x0=0,
+                    x1=3,
+                ),
+            ),
+            raw_array=raw_array,
+            label_values=(0, 1),
+            volume_shape=raw_array.shape,
+            use_tiled_score_buffer=True,
+        )
+
+        self.assertTrue(worker._use_tiled_score_buffer)
+
+    def test_configure_rejects_non_bool_tiled_score_buffer_flag(self) -> None:
+        worker = LearningInferenceWorker()
+
+        with self.assertRaisesRegex(TypeError, "use_tiled_score_buffer"):
+            worker.configure(
+                model_runtime=object(),
+                inference_boxes=(
+                    BoundingBox(
+                        id="box-1",
+                        z0=0,
+                        z1=1,
+                        y0=0,
+                        y1=2,
+                        x0=0,
+                        x1=3,
+                    ),
+                ),
+                raw_array=np.zeros((2, 3, 4), dtype=np.uint8),
+                label_values=(0, 1),
+                volume_shape=(2, 3, 4),
+                use_tiled_score_buffer=1,
+            )
 
     def test_configure_rejects_empty_inference_boxes(self) -> None:
         worker = LearningInferenceWorker()

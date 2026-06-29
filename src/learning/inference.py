@@ -25,16 +25,6 @@ class LearningInferenceBackgroundResult:
 
 
 @dataclass(frozen=True)
-class LearningInferenceMemoryEstimate:
-    box_id: str
-    context_shape: Tuple[int, int, int]
-    num_classes: int
-    score_buffer_bytes: int
-    label_output_bytes: int
-    rough_peak_bytes: int
-
-
-@dataclass(frozen=True)
 class LearningInferenceProgress:
     completed_count: int
     total_count: int
@@ -53,44 +43,6 @@ class LearningInferenceStopRequested(RuntimeError):
     """Raised internally to stop inference at the next batch boundary."""
 
 
-def estimate_inference_bbox_memory(
-    *,
-    box: BoundingBox,
-    label_values: Sequence[int],
-    volume_shape: Sequence[int],
-) -> LearningInferenceMemoryEstimate:
-    if not isinstance(box, BoundingBox):
-        raise TypeError(f"box must be a BoundingBox, got {type(box).__name__}")
-    normalized_labels = _normalize_label_values(label_values)
-    normalized_shape = _normalize_volume_shape(volume_shape)
-    context_plan = _plan_bbox_context(
-        z_bounds=(int(box.z0), int(box.z1)),
-        y_bounds=(int(box.y0), int(box.y1)),
-        x_bounds=(int(box.x0), int(box.x1)),
-        volume_shape=normalized_shape,
-    )
-    context_shape = (
-        int(context_plan.z.target_size),
-        int(context_plan.y.target_size),
-        int(context_plan.x.target_size),
-    )
-    voxel_count = int(context_shape[0]) * int(context_shape[1]) * int(context_shape[2])
-    num_classes = int(len(normalized_labels))
-    score_buffer_bytes = int(num_classes * voxel_count * 4)
-    label_output_bytes = int(voxel_count * 8)
-    # The dense score buffer is the largest single allocation, but inference also
-    # holds the raw crop, normalized tensor, decoded labels, and apply-time masks.
-    rough_peak_bytes = int(score_buffer_bytes * 2)
-    return LearningInferenceMemoryEstimate(
-        box_id=str(box.id),
-        context_shape=context_shape,
-        num_classes=num_classes,
-        score_buffer_bytes=score_buffer_bytes,
-        label_output_bytes=label_output_bytes,
-        rough_peak_bytes=rough_peak_bytes,
-    )
-
-
 def run_learning_inference(
     *,
     model_runtime: object,
@@ -104,6 +56,7 @@ def run_learning_inference(
     plan_bbox_context_func: Optional[Callable[..., object]] = None,
     build_inference_dataloader_runtime_from_entry_func: Optional[Callable[..., object]] = None,
     dispose_inference_runtime_func: Optional[Callable[[object], Sequence[str]]] = None,
+    use_tiled_score_buffer: bool = False,
 ) -> LearningInferenceBackgroundResult:
     try:
         import torch
@@ -190,6 +143,7 @@ def run_learning_inference(
                         num_workers=8,
                         pin_memory=True,
                         drop_last=False,
+                        use_tiled_score_buffer=bool(use_tiled_score_buffer),
                     )
 
                     add_batch = getattr(runtime.buffer, "add_batch", None)
@@ -438,11 +392,9 @@ def _dispose_inference_runtime(runtime: object) -> Sequence[str]:
 
 __all__ = [
     "LearningInferenceBackgroundResult",
-    "LearningInferenceMemoryEstimate",
     "LearningInferencePrediction",
     "LearningInferenceProgress",
     "LearningInferenceStopRequested",
     "apply_inference_predictions_to_array",
-    "estimate_inference_bbox_memory",
     "run_learning_inference",
 ]

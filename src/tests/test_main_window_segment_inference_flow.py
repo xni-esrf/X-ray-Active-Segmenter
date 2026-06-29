@@ -172,7 +172,7 @@ class _FakeModel:
 
 
 @unittest.skipUnless(MainWindow is not None, "MainWindow is not available")
-class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
+class MainWindowSegmentInferenceFlowTests(unittest.TestCase):
     def _make_box(
         self,
         *,
@@ -913,7 +913,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         self.assertIn("label_values", started_kwargs)
         self.assertEqual(tuple(started_kwargs["label_values"]), (0, 1))
 
-    def test_segment_inference_rejects_bbox_when_label_output_remains_too_large(self) -> None:
+    def test_segment_inference_starts_for_large_label_output(self) -> None:
         volume_shape = (2000, 2000, 2000)
         inference_box = self._make_box(
             box_id="bbox_huge",
@@ -929,8 +929,8 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         window_like = self._make_window_like(
             boxes=(inference_box,),
             active_segmentation=("semantic", object()),
-            semantic_volume=object(),
-            raw_volume=object(),
+            semantic_volume=_FakeSparseVolume(np.dtype(np.int16)),
+            raw_volume=_FakeSparseVolume(np.dtype(np.float32)),
             volume_shape=volume_shape,
         )
         start_calls: list[dict[str, object]] = []
@@ -952,19 +952,12 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         ), patch("src.ui.main_window.show_warning") as warning_mock:
             result = MainWindow._segment_inference_bboxes_with_dialog(window_like)
 
-        self.assertFalse(result)
-        self.assertEqual(start_calls, [])
-        warning_mock.assert_called_once()
-        warning_text = str(warning_mock.call_args.args[0])
-        self.assertIn("was not started", warning_text)
-        self.assertIn("bbox_huge", warning_text)
-        self.assertIn("Context shape: 1100 x 1100 x 1100", warning_text)
-        self.assertIn("Classes: 2", warning_text)
-        self.assertIn("Estimated score buffer", warning_text)
-        self.assertIn("Estimated decoded label output", warning_text)
-        self.assertIn("split this inference bbox", warning_text)
+        self.assertTrue(result)
+        warning_mock.assert_not_called()
+        self.assertEqual(len(start_calls), 1)
+        self.assertEqual(tuple(start_calls[0]["inference_boxes"]), (inference_box,))
 
-    def test_segment_inference_reports_tiled_mode_and_continues_for_large_score_buffer(self) -> None:
+    def test_segment_inference_does_not_report_memory_mode_info(self) -> None:
         volume_shape = (2000, 2000, 2000)
         inference_box = self._make_box(
             box_id="bbox_tiled",
@@ -1007,14 +1000,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         self.assertTrue(result)
         warning_mock.assert_not_called()
-        info_mock.assert_called_once()
-        info_text = str(info_mock.call_args.args[0])
-        self.assertIn("will use tiled score accumulation", info_text)
-        self.assertIn("bbox_tiled", info_text)
-        self.assertIn("Context shape: 1000 x 1000 x 1000", info_text)
-        self.assertIn("Classes: 4", info_text)
-        self.assertIn("Dense score buffer estimate", info_text)
-        self.assertIn("temporary disk files", info_text)
+        info_mock.assert_not_called()
         self.assertEqual(len(start_calls), 1)
 
     def test_start_learning_inference_background_passes_raw_array_reference_to_worker(
@@ -1112,6 +1098,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         self.assertEqual(tuple(configure_calls[0]["inference_boxes"]), (inference_box,))
         self.assertEqual(tuple(configure_calls[0]["label_values"]), (0, 1))
         self.assertEqual(tuple(configure_calls[0]["volume_shape"]), raw_array.shape)
+        self.assertIs(configure_calls[0]["use_tiled_score_buffer"], False)
         self.assertEqual(entered_calls, [(worker_instances[0], thread_instances[0])])
         self.assertIs(worker_instances[0].thread, thread_instances[0])
         self.assertEqual(thread_instances[0].start_calls, 1)

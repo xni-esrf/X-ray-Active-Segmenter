@@ -27,7 +27,6 @@ from .session_store import (
 )
 
 
-DEFAULT_INFERENCE_DENSE_BUFFER_MAX_BYTES = 8 * 1024 * 1024 * 1024
 DEFAULT_INFERENCE_TILE_SHAPE = (256, 256, 256)
 
 
@@ -100,20 +99,6 @@ def _coerce_bool(value: object, *, name: str) -> bool:
     if not isinstance(value, bool):
         raise TypeError(f"{name} must be a bool, got {type(value).__name__}")
     return value
-
-
-def _estimate_dense_score_buffer_bytes(
-    *,
-    volume_shape: Sequence[object],
-    label_values: Sequence[object],
-) -> int:
-    shape = _resolve_dataset_volume_shape(
-        dataset=object(),
-        fallback_shape=volume_shape,
-    )
-    num_classes = _coerce_positive_int(len(tuple(label_values)), name="num_classes")
-    voxel_count = int(shape[0]) * int(shape[1]) * int(shape[2])
-    return int(num_classes * voxel_count * 4)
 
 
 def _resolve_shared_num_classes_from_eval_runtimes(
@@ -460,9 +445,9 @@ def build_inference_dataloader_runtime_from_entry(
     dataset_factory: Optional[Callable[..., object]] = None,
     dataloader_factory: Optional[Callable[..., object]] = None,
     buffer_factory: Optional[Callable[..., object]] = None,
-    dense_buffer_max_bytes: int = DEFAULT_INFERENCE_DENSE_BUFFER_MAX_BYTES,
     tiled_tile_shape: Sequence[object] = DEFAULT_INFERENCE_TILE_SHAPE,
     tiled_temp_dir: Optional[str] = None,
+    use_tiled_score_buffer: bool = False,
 ) -> LearningBBoxEvalRuntime:
     if not isinstance(entry, LearningBBoxTensorEntry):
         raise TypeError(
@@ -475,9 +460,9 @@ def build_inference_dataloader_runtime_from_entry(
     normalized_num_workers = _coerce_non_negative_int(num_workers, name="num_workers")
     normalized_pin_memory = _coerce_bool(pin_memory, name="pin_memory")
     normalized_drop_last = _coerce_bool(drop_last, name="drop_last")
-    normalized_dense_buffer_max_bytes = _coerce_non_negative_int(
-        dense_buffer_max_bytes,
-        name="dense_buffer_max_bytes",
+    normalized_use_tiled_score_buffer = _coerce_bool(
+        use_tiled_score_buffer,
+        name="use_tiled_score_buffer",
     )
 
     if dataset_factory is None:
@@ -504,11 +489,7 @@ def build_inference_dataloader_runtime_from_entry(
             minivol_size=normalized_minivol_size,
         )
     else:
-        estimated_dense_bytes = _estimate_dense_score_buffer_bytes(
-            volume_shape=volume_shape,
-            label_values=normalized_label_values,
-        )
-        if int(estimated_dense_bytes) > int(normalized_dense_buffer_max_bytes):
+        if normalized_use_tiled_score_buffer:
             buffer = TiledInferenceDestVolBuffer(
                 volume_shape,
                 normalized_label_values,
@@ -541,9 +522,9 @@ def build_inference_dataloader_runtimes_from_batch(
     dataset_factory: Optional[Callable[..., object]] = None,
     dataloader_factory: Optional[Callable[..., object]] = None,
     buffer_factory: Optional[Callable[..., object]] = None,
-    dense_buffer_max_bytes: int = DEFAULT_INFERENCE_DENSE_BUFFER_MAX_BYTES,
     tiled_tile_shape: Sequence[object] = DEFAULT_INFERENCE_TILE_SHAPE,
     tiled_temp_dir: Optional[str] = None,
+    use_tiled_score_buffer: bool = False,
 ) -> Dict[str, LearningBBoxEvalRuntime]:
     inference_entries = _inference_entries(batch)
     if not inference_entries:
@@ -565,9 +546,9 @@ def build_inference_dataloader_runtimes_from_batch(
                 dataset_factory=dataset_factory,
                 dataloader_factory=dataloader_factory,
                 buffer_factory=buffer_factory,
-                dense_buffer_max_bytes=dense_buffer_max_bytes,
                 tiled_tile_shape=tiled_tile_shape,
                 tiled_temp_dir=tiled_temp_dir,
+                use_tiled_score_buffer=use_tiled_score_buffer,
             )
             runtimes[entry.box_id] = runtime
         return dict(runtimes)

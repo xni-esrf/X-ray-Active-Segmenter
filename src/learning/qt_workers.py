@@ -133,6 +133,7 @@ class LearningInferenceWorker(QObject):
         self._raw_array: Optional[np.ndarray] = None
         self._label_values: Tuple[int, ...] = tuple()
         self._volume_shape: Tuple[int, int, int] = (1, 1, 1)
+        self._use_tiled_score_buffer = False
 
     def configure(
         self,
@@ -142,6 +143,7 @@ class LearningInferenceWorker(QObject):
         raw_array: np.ndarray,
         label_values: Sequence[int],
         volume_shape: Sequence[int],
+        use_tiled_score_buffer: bool = False,
     ) -> None:
         normalized_boxes: list[BoundingBox] = []
         for raw_box in tuple(inference_boxes):
@@ -165,6 +167,11 @@ class LearningInferenceWorker(QObject):
             raise ValueError(f"volume_shape must be length 3, got {shape}")
         if any(axis <= 0 for axis in shape):
             raise ValueError(f"volume_shape axes must be positive, got {shape}")
+        if not isinstance(use_tiled_score_buffer, bool):
+            raise TypeError(
+                "use_tiled_score_buffer must be a bool, "
+                f"got {type(use_tiled_score_buffer).__name__}"
+            )
 
         self._model_runtime = model_runtime
         self._inference_boxes = tuple(normalized_boxes)
@@ -175,6 +182,7 @@ class LearningInferenceWorker(QObject):
             int(shape[1]),
             int(shape[2]),
         )
+        self._use_tiled_score_buffer = bool(use_tiled_score_buffer)
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -214,6 +222,7 @@ class LearningInferenceWorker(QObject):
                 _build_inference_dataloader_runtime_from_entry
             ),
             dispose_inference_runtime_func=_dispose_inference_runtime,
+            use_tiled_score_buffer=bool(self._use_tiled_score_buffer),
         )
 
     @Slot()

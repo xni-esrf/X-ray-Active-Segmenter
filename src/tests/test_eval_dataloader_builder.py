@@ -682,7 +682,7 @@ class EvalDataLoaderBuilderTests(unittest.TestCase):
         self.assertEqual(runtime.buffer.volume_shape, (4, 4, 4))
         self.assertEqual(runtime.buffer.minivol_size, 200)
 
-    def test_build_inference_runtime_uses_dense_buffer_below_threshold(self) -> None:
+    def test_build_inference_runtime_uses_dense_buffer_when_tiled_flag_is_false(self) -> None:
         inference_entry = self._entry(
             box_id="bbox_0013",
             index=13,
@@ -706,12 +706,12 @@ class EvalDataLoaderBuilderTests(unittest.TestCase):
             drop_last=False,
             dataset_factory=_FakeDataset,
             dataloader_factory=lambda dataset, **kwargs: (dataset, kwargs),
-            dense_buffer_max_bytes=10_000,
+            use_tiled_score_buffer=False,
         )
 
         self.assertIsInstance(runtime.buffer, InferenceDestVolBuffer)
 
-    def test_build_inference_runtime_uses_tiled_buffer_above_threshold(self) -> None:
+    def test_build_inference_runtime_uses_tiled_buffer_when_tiled_flag_is_true(self) -> None:
         inference_entry = self._entry(
             box_id="bbox_0013",
             index=13,
@@ -735,8 +735,8 @@ class EvalDataLoaderBuilderTests(unittest.TestCase):
             drop_last=False,
             dataset_factory=_FakeDataset,
             dataloader_factory=lambda dataset, **kwargs: (dataset, kwargs),
-            dense_buffer_max_bytes=1,
             tiled_tile_shape=(2, 2, 2),
+            use_tiled_score_buffer=True,
         )
         try:
             self.assertIsInstance(runtime.buffer, TiledInferenceDestVolBuffer)
@@ -745,7 +745,7 @@ class EvalDataLoaderBuilderTests(unittest.TestCase):
         finally:
             runtime.buffer.close()
 
-    def test_build_inference_runtime_respects_explicit_buffer_factory_over_threshold(self) -> None:
+    def test_build_inference_runtime_respects_explicit_buffer_factory(self) -> None:
         inference_entry = self._entry(
             box_id="bbox_0013",
             index=13,
@@ -777,7 +777,7 @@ class EvalDataLoaderBuilderTests(unittest.TestCase):
             dataset_factory=_FakeDataset,
             dataloader_factory=lambda dataset, **kwargs: (dataset, kwargs),
             buffer_factory=_FakeBuffer,
-            dense_buffer_max_bytes=1,
+            use_tiled_score_buffer=True,
         )
 
         self.assertIsInstance(runtime.buffer, _FakeBuffer)

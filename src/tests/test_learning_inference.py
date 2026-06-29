@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import sys
 import unittest
+from types import SimpleNamespace
+from unittest.mock import patch
 
 import numpy as np
 
@@ -8,37 +11,11 @@ from src.bbox import BoundingBox
 from src.learning.inference import (
     LearningInferencePrediction,
     apply_inference_predictions_to_array,
-    estimate_inference_bbox_memory,
+    run_learning_inference,
 )
 
 
 class LearningInferenceApplicationTests(unittest.TestCase):
-    def test_estimate_inference_bbox_memory_uses_context_shape_and_class_count(self) -> None:
-        box = BoundingBox.from_bounds(
-            box_id="infer-box",
-            z0=100,
-            z1=1100,
-            y0=100,
-            y1=1100,
-            x0=100,
-            x1=1100,
-            label="inference",
-            volume_shape=(2000, 2000, 2000),
-        )
-
-        estimate = estimate_inference_bbox_memory(
-            box=box,
-            label_values=(0, 1),
-            volume_shape=(2000, 2000, 2000),
-        )
-
-        self.assertEqual(estimate.box_id, "infer-box")
-        self.assertEqual(estimate.context_shape, (1100, 1100, 1100))
-        self.assertEqual(estimate.num_classes, 2)
-        self.assertEqual(estimate.score_buffer_bytes, 2 * 1100 * 1100 * 1100 * 4)
-        self.assertEqual(estimate.label_output_bytes, 1100 * 1100 * 1100 * 8)
-        self.assertEqual(estimate.rough_peak_bytes, estimate.score_buffer_bytes * 2)
-
     def test_apply_inference_predictions_writes_bbox_and_reports_changed_voxels(self) -> None:
         segmentation = np.zeros((3, 3, 3), dtype=np.uint8)
         box = BoundingBox.from_bounds(
@@ -98,6 +75,114 @@ class LearningInferenceApplicationTests(unittest.TestCase):
         self.assertEqual(succeeded_ids, ())
         self.assertIn("infer-box", failures)
         self.assertIn("Predicted bbox shape does not match bbox size", failures["infer-box"])
+
+    def test_run_learning_inference_forwards_tiled_score_buffer_flag(self) -> None:
+        box = BoundingBox.from_bounds(
+            box_id="infer-box",
+            z0=0,
+            z1=1,
+            y0=0,
+            y1=1,
+            x0=0,
+            x1=1,
+            label="inference",
+            volume_shape=(1, 1, 1),
+        )
+        build_calls: list[dict[str, object]] = []
+
+        class _FakeTensor:
+            def __init__(self, array: object) -> None:
+                self.array = np.asarray(array)
+                self.device = SimpleNamespace(type="cpu")
+
+            def to(self, *args: object, **kwargs: object) -> "_FakeTensor":
+                return self
+
+        class _FakeTorch:
+            Tensor = _FakeTensor
+            float16 = object()
+            bfloat16 = object()
+            int16 = object()
+            cuda = SimpleNamespace(is_available=lambda: False, device_count=lambda: 0)
+
+            @staticmethod
+            def from_numpy(array: np.ndarray) -> _FakeTensor:
+                return _FakeTensor(array)
+
+            @staticmethod
+            def zeros(*args: object, **kwargs: object) -> _FakeTensor:
+                del kwargs
+                return _FakeTensor(np.zeros(args[0], dtype=np.int16))
+
+            @staticmethod
+            def device(name: str) -> object:
+                return SimpleNamespace(type=str(name).split(":", 1)[0])
+
+            @staticmethod
+            def no_grad() -> object:
+                return _null_context()
+
+            @staticmethod
+            def autocast(*args: object, **kwargs: object) -> object:
+                del args, kwargs
+                return _null_context()
+
+        def build_runtime(entry: object, **kwargs: object) -> object:
+            del entry
+            build_calls.append(dict(kwargs))
+            return SimpleNamespace(
+                dataloader=tuple(),
+                buffer=SimpleNamespace(
+                    add_batch=lambda _batch, _coordinates: None,
+                    get_pred_labels=lambda: np.zeros((1, 1, 1), dtype=np.int64),
+                ),
+            )
+
+        with patch.dict(sys.modules, {"torch": _FakeTorch}):
+            result = run_learning_inference(
+                model_runtime=SimpleNamespace(
+                    model=SimpleNamespace(
+                        training=False,
+                        eval=lambda: None,
+                        parameters=lambda: iter(()),
+                    )
+                ),
+                inference_boxes=(box,),
+                raw_array=np.zeros((1, 1, 1), dtype=np.float32),
+                label_values=(0, 1),
+                volume_shape=(1, 1, 1),
+                extract_bbox_context_from_array_func=(
+                    lambda array, **_kwargs: np.asarray(array)
+                ),
+                plan_bbox_context_func=lambda **_kwargs: SimpleNamespace(
+                    z=SimpleNamespace(extend_before=0, original_size=1),
+                    y=SimpleNamespace(extend_before=0, original_size=1),
+                    x=SimpleNamespace(extend_before=0, original_size=1),
+                ),
+                build_inference_dataloader_runtime_from_entry_func=build_runtime,
+                dispose_inference_runtime_func=lambda _runtime: tuple(),
+                use_tiled_score_buffer=True,
+            )
+
+        self.assertEqual(len(build_calls), 1)
+        self.assertIs(build_calls[0]["use_tiled_score_buffer"], True)
+        self.assertEqual(result.total_count, 1)
+        self.assertEqual(
+            tuple(prediction.box.id for prediction in result.predictions),
+            ("infer-box",),
+        )
+
+
+def _null_context() -> object:
+    class _Context:
+        def __enter__(self) -> None:
+            return None
+
+        def __exit__(self, exc_type: object, exc: object, traceback: object) -> bool:
+            del exc_type, exc, traceback
+            return False
+
+    return _Context()
 
 
 if __name__ == "__main__":

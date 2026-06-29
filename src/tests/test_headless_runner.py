@@ -728,6 +728,7 @@ class HeadlessRunnerTests(unittest.TestCase):
         self.assertEqual(inference_mock.call_args.kwargs["label_values"], (0, 1))
         self.assertEqual(inference_mock.call_args.kwargs["volume_shape"], (2, 2, 2))
         self.assertTrue(callable(inference_mock.call_args.kwargs["progress_callback"]))
+        self.assertIs(inference_mock.call_args.kwargs["use_tiled_score_buffer"], True)
         save_mock.assert_called_once()
         self.assertEqual(len(saved_arrays), 1)
         expected = np.zeros((2, 2, 2), dtype=np.uint8)
