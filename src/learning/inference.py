@@ -30,6 +30,7 @@ class LearningInferenceMemoryEstimate:
     context_shape: Tuple[int, int, int]
     num_classes: int
     score_buffer_bytes: int
+    label_output_bytes: int
     rough_peak_bytes: int
 
 
@@ -76,6 +77,7 @@ def estimate_inference_bbox_memory(
     voxel_count = int(context_shape[0]) * int(context_shape[1]) * int(context_shape[2])
     num_classes = int(len(normalized_labels))
     score_buffer_bytes = int(num_classes * voxel_count * 4)
+    label_output_bytes = int(voxel_count * 8)
     # The dense score buffer is the largest single allocation, but inference also
     # holds the raw crop, normalized tensor, decoded labels, and apply-time masks.
     rough_peak_bytes = int(score_buffer_bytes * 2)
@@ -84,6 +86,7 @@ def estimate_inference_bbox_memory(
         context_shape=context_shape,
         num_classes=num_classes,
         score_buffer_bytes=score_buffer_bytes,
+        label_output_bytes=label_output_bytes,
         rough_peak_bytes=rough_peak_bytes,
     )
 

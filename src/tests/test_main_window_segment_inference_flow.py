@@ -40,6 +40,14 @@ class _FakeVolume:
         return np.asarray(self._array[zyx_slices])
 
 
+class _FakeSparseVolume:
+    def __init__(self, dtype: np.dtype = np.dtype(np.float32)) -> None:
+        self.dtype = np.dtype(dtype)
+
+    def get_chunk(self, _zyx_slices: tuple[slice, slice, slice]) -> np.ndarray:
+        return np.zeros((1, 1, 1), dtype=self.dtype)
+
+
 class _FakeSignal:
     def __init__(self) -> None:
         self.connected: list[object] = []
@@ -905,7 +913,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         self.assertIn("label_values", started_kwargs)
         self.assertEqual(tuple(started_kwargs["label_values"]), (0, 1))
 
-    def test_segment_inference_rejects_oversized_bbox_before_large_reads(self) -> None:
+    def test_segment_inference_rejects_bbox_when_label_output_remains_too_large(self) -> None:
         volume_shape = (2000, 2000, 2000)
         inference_box = self._make_box(
             box_id="bbox_huge",
@@ -953,7 +961,61 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         self.assertIn("Context shape: 1100 x 1100 x 1100", warning_text)
         self.assertIn("Classes: 2", warning_text)
         self.assertIn("Estimated score buffer", warning_text)
+        self.assertIn("Estimated decoded label output", warning_text)
         self.assertIn("split this inference bbox", warning_text)
+
+    def test_segment_inference_reports_tiled_mode_and_continues_for_large_score_buffer(self) -> None:
+        volume_shape = (2000, 2000, 2000)
+        inference_box = self._make_box(
+            box_id="bbox_tiled",
+            label="inference",
+            z0=100,
+            z1=1000,
+            y0=100,
+            y1=1000,
+            x0=100,
+            x1=1000,
+            volume_shape=volume_shape,
+        )
+        window_like = self._make_window_like(
+            boxes=(inference_box,),
+            active_segmentation=("semantic", object()),
+            semantic_volume=_FakeSparseVolume(np.dtype(np.int16)),
+            raw_volume=_FakeSparseVolume(np.dtype(np.float32)),
+            volume_shape=volume_shape,
+        )
+        start_calls: list[dict[str, object]] = []
+        window_like._start_learning_inference_background = (
+            lambda **kwargs: start_calls.append(dict(kwargs))
+        )
+
+        with patch(
+            "src.ui.main_window.get_current_learning_model_runtime",
+            return_value=SimpleNamespace(
+                hyperparameters={"label_values": (0, 1, 2, 3)},
+                num_classes=4,
+            ),
+        ), patch(
+            "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
+            return_value={},
+        ), patch(
+            "src.ui.main_window._resolve_shared_eval_label_values",
+        ), patch("src.ui.main_window.show_warning") as warning_mock, patch(
+            "src.ui.main_window.show_info"
+        ) as info_mock:
+            result = MainWindow._segment_inference_bboxes_with_dialog(window_like)
+
+        self.assertTrue(result)
+        warning_mock.assert_not_called()
+        info_mock.assert_called_once()
+        info_text = str(info_mock.call_args.args[0])
+        self.assertIn("will use tiled score accumulation", info_text)
+        self.assertIn("bbox_tiled", info_text)
+        self.assertIn("Context shape: 1000 x 1000 x 1000", info_text)
+        self.assertIn("Classes: 4", info_text)
+        self.assertIn("Dense score buffer estimate", info_text)
+        self.assertIn("temporary disk files", info_text)
+        self.assertEqual(len(start_calls), 1)
 
     def test_start_learning_inference_background_passes_raw_array_reference_to_worker(
         self,

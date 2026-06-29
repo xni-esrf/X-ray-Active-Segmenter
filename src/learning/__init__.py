@@ -58,6 +58,7 @@ _EXPORT_MODULE_BY_NAME: Dict[str, str] = {
     "EvalBBoxDataset": ".eval_bbox_dataset",
     "DestVolBuffer": ".eval_bbox_dataset",
     "InferenceDestVolBuffer": ".eval_bbox_dataset",
+    "TiledInferenceDestVolBuffer": ".eval_bbox_dataset",
     "TrainBBoxDataset": ".train_bbox_dataset",
     "LearningBBoxDataLoaderRuntime": ".session_store",
     "LearningBBoxEvalRuntime": ".session_store",

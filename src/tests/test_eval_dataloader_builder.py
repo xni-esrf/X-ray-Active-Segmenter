@@ -11,6 +11,8 @@ from src.learning import (
     LearningBBoxEvalRuntime,
     LearningLabelSpace,
     LearningSession,
+    InferenceDestVolBuffer,
+    TiledInferenceDestVolBuffer,
     LearningBBoxTensorBatch,
     LearningBBoxTensorEntry,
     build_eval_dataloader_runtimes_from_batch,
@@ -680,6 +682,106 @@ class EvalDataLoaderBuilderTests(unittest.TestCase):
         self.assertEqual(runtime.buffer.volume_shape, (4, 4, 4))
         self.assertEqual(runtime.buffer.minivol_size, 200)
 
+    def test_build_inference_runtime_uses_dense_buffer_below_threshold(self) -> None:
+        inference_entry = self._entry(
+            box_id="bbox_0013",
+            index=13,
+            label="inference",
+            raw_value=7,
+            seg_values=(0,),
+        )
+
+        class _FakeDataset:
+            def __init__(self, raw_tensor, *, minivol_size):
+                del minivol_size
+                self.vol = raw_tensor
+
+        runtime = build_inference_dataloader_runtime_from_entry(
+            inference_entry,
+            label_values=(0, 5),
+            minivol_size=2,
+            batch_size=1,
+            num_workers=0,
+            pin_memory=False,
+            drop_last=False,
+            dataset_factory=_FakeDataset,
+            dataloader_factory=lambda dataset, **kwargs: (dataset, kwargs),
+            dense_buffer_max_bytes=10_000,
+        )
+
+        self.assertIsInstance(runtime.buffer, InferenceDestVolBuffer)
+
+    def test_build_inference_runtime_uses_tiled_buffer_above_threshold(self) -> None:
+        inference_entry = self._entry(
+            box_id="bbox_0013",
+            index=13,
+            label="inference",
+            raw_value=7,
+            seg_values=(0,),
+        )
+
+        class _FakeDataset:
+            def __init__(self, raw_tensor, *, minivol_size):
+                del minivol_size
+                self.vol = raw_tensor
+
+        runtime = build_inference_dataloader_runtime_from_entry(
+            inference_entry,
+            label_values=(0, 5),
+            minivol_size=2,
+            batch_size=1,
+            num_workers=0,
+            pin_memory=False,
+            drop_last=False,
+            dataset_factory=_FakeDataset,
+            dataloader_factory=lambda dataset, **kwargs: (dataset, kwargs),
+            dense_buffer_max_bytes=1,
+            tiled_tile_shape=(2, 2, 2),
+        )
+        try:
+            self.assertIsInstance(runtime.buffer, TiledInferenceDestVolBuffer)
+            self.assertEqual(runtime.buffer.tile_shape, (2, 2, 2))
+            self.assertTrue(runtime.buffer.temp_dir_path.exists())
+        finally:
+            runtime.buffer.close()
+
+    def test_build_inference_runtime_respects_explicit_buffer_factory_over_threshold(self) -> None:
+        inference_entry = self._entry(
+            box_id="bbox_0013",
+            index=13,
+            label="inference",
+            raw_value=7,
+            seg_values=(0,),
+        )
+
+        class _FakeDataset:
+            def __init__(self, raw_tensor, *, minivol_size):
+                del minivol_size
+                self.vol = raw_tensor
+
+        class _FakeBuffer:
+            def __init__(self, volume_shape, label_values, *, minivol_size):
+                self.volume_shape = tuple(int(v) for v in volume_shape)
+                self.label_values = tuple(int(v) for v in label_values)
+                self.minivol_size = int(minivol_size)
+                self.num_classes = int(len(self.label_values))
+
+        runtime = build_inference_dataloader_runtime_from_entry(
+            inference_entry,
+            label_values=(0, 5),
+            minivol_size=2,
+            batch_size=1,
+            num_workers=0,
+            pin_memory=False,
+            drop_last=False,
+            dataset_factory=_FakeDataset,
+            dataloader_factory=lambda dataset, **kwargs: (dataset, kwargs),
+            buffer_factory=_FakeBuffer,
+            dense_buffer_max_bytes=1,
+        )
+
+        self.assertIsInstance(runtime.buffer, _FakeBuffer)
+
     def test_build_inference_runtimes_from_batch_builds_only_inference_entries_in_order(self) -> None:
         train_entry = self._entry(
             box_id="bbox_0001",
@@ -796,6 +898,32 @@ class EvalDataLoaderBuilderTests(unittest.TestCase):
         self.assertTrue(any("iterator._shutdown_workers" in error for error in errors))
         self.assertTrue(any("dataloader.close()" in error for error in errors))
         self.assertTrue(any("buffer.close()" in error for error in errors))
+
+    def test_dispose_inference_runtime_cleans_tiled_buffer_temp_files(self) -> None:
+        tiled_buffer = TiledInferenceDestVolBuffer(
+            volume_shape=(4, 4, 4),
+            label_values=(0, 1),
+            minivol_size=2,
+            tile_shape=(2, 2, 2),
+        )
+        batch = torch.ones((1, 2, 2, 2, 2), dtype=torch.float32)
+        batch_coordinates = (
+            torch.tensor([0]),
+            torch.tensor([0]),
+            torch.tensor([0]),
+        )
+        tiled_buffer.add_batch(batch, batch_coordinates)
+        temp_dir = tiled_buffer.temp_dir_path
+        runtime = LearningBBoxEvalRuntime(
+            box_id="bbox_0001",
+            dataloader=object(),
+            buffer=tiled_buffer,
+        )
+
+        errors = dispose_inference_runtime(runtime)
+
+        self.assertEqual(errors, tuple())
+        self.assertFalse(temp_dir.exists())
 
     def test_dispose_inference_runtimes_reports_failures_by_box_id(self) -> None:
         class _Iterator:

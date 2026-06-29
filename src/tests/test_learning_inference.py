@@ -36,6 +36,7 @@ class LearningInferenceApplicationTests(unittest.TestCase):
         self.assertEqual(estimate.context_shape, (1100, 1100, 1100))
         self.assertEqual(estimate.num_classes, 2)
         self.assertEqual(estimate.score_buffer_bytes, 2 * 1100 * 1100 * 1100 * 4)
+        self.assertEqual(estimate.label_output_bytes, 1100 * 1100 * 1100 * 8)
         self.assertEqual(estimate.rough_peak_bytes, estimate.score_buffer_bytes * 2)
 
     def test_apply_inference_predictions_writes_bbox_and_reports_changed_voxels(self) -> None:

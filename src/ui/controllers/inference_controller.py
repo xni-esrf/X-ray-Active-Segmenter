@@ -9,6 +9,10 @@ from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication, QWidget
 
 from ...learning import estimate_inference_bbox_memory, get_current_learning_model_runtime
+from ...learning.eval_dataloader_builder import (
+    DEFAULT_INFERENCE_DENSE_BUFFER_MAX_BYTES,
+    DEFAULT_INFERENCE_TILE_SHAPE,
+)
 from ...learning.qt_workers import (
     LearningInferenceBackgroundResult,
     LearningInferenceStopRequested,
@@ -19,7 +23,7 @@ from ..dialogs import confirm_replace_inference_bboxes, show_info, show_warning
 
 
 _LOGGER = get_logger(__name__)
-_INFERENCE_PREFLIGHT_WARNING_BYTES = 8 * 1024 * 1024 * 1024
+_INFERENCE_PREFLIGHT_LABEL_OUTPUT_MAX_BYTES = 8 * 1024 * 1024 * 1024
 
 
 class InferenceControllerContext(Protocol):
@@ -244,15 +248,24 @@ class InferenceController:
             )
             return False
 
-        preflight_warning = _format_inference_memory_preflight_warning(
+        preflight_warning = _format_inference_memory_preflight_blocking_warning(
             inference_boxes=inference_boxes,
             label_values=label_values,
             volume_shape=self.context._bbox_manager.volume_shape,
-            warning_bytes=_INFERENCE_PREFLIGHT_WARNING_BYTES,
+            label_output_max_bytes=_INFERENCE_PREFLIGHT_LABEL_OUTPUT_MAX_BYTES,
         )
         if preflight_warning is not None:
             self.operations.show_warning(preflight_warning, parent=self.context)
             return False
+        preflight_info = _format_inference_tiled_mode_preflight_info(
+            inference_boxes=inference_boxes,
+            label_values=label_values,
+            volume_shape=self.context._bbox_manager.volume_shape,
+            dense_buffer_max_bytes=DEFAULT_INFERENCE_DENSE_BUFFER_MAX_BYTES,
+            tile_shape=DEFAULT_INFERENCE_TILE_SHAPE,
+        )
+        if preflight_info is not None:
+            self.operations.show_info(preflight_info, parent=self.context)
 
         has_non_empty_inference_bbox = False
         try:
@@ -808,13 +821,12 @@ def _format_bytes_gib(byte_count: int) -> str:
     return f"{gib:.2f} GiB"
 
 
-def _format_inference_memory_preflight_warning(
+def _inference_memory_estimates(
     *,
     inference_boxes: Sequence[object],
     label_values: Sequence[int],
     volume_shape: Sequence[int],
-    warning_bytes: int,
-) -> Optional[str]:
+) -> Tuple[object, ...]:
     estimates = []
     for box in tuple(inference_boxes):
         estimates.append(
@@ -824,14 +836,29 @@ def _format_inference_memory_preflight_warning(
                 volume_shape=volume_shape,
             )
         )
+    return tuple(estimates)
+
+
+def _format_inference_memory_preflight_blocking_warning(
+    *,
+    inference_boxes: Sequence[object],
+    label_values: Sequence[int],
+    volume_shape: Sequence[int],
+    label_output_max_bytes: int,
+) -> Optional[str]:
+    estimates = _inference_memory_estimates(
+        inference_boxes=inference_boxes,
+        label_values=label_values,
+        volume_shape=volume_shape,
+    )
     oversized = tuple(
         sorted(
             (
                 estimate
                 for estimate in estimates
-                if int(estimate.score_buffer_bytes) > int(warning_bytes)
+                if int(estimate.label_output_bytes) > int(label_output_max_bytes)
             ),
-            key=lambda estimate: int(estimate.score_buffer_bytes),
+            key=lambda estimate: int(estimate.label_output_bytes),
             reverse=True,
         )
     )
@@ -843,14 +870,15 @@ def _format_inference_memory_preflight_warning(
     lines = [
         (
             "Segment Inference BBox was not started because one or more inference "
-            "boxes are too large for the current in-memory prediction buffer."
+            "boxes would require a very large decoded label output even with tiled "
+            "score accumulation."
         ),
         "",
         f"Largest bbox: {largest.box_id}",
         f"Context shape: {z_size} x {y_size} x {x_size}",
         f"Classes: {largest.num_classes}",
         f"Estimated score buffer: {_format_bytes_gib(largest.score_buffer_bytes)}",
-        f"Approximate peak memory: at least {_format_bytes_gib(largest.rough_peak_bytes)}",
+        f"Estimated decoded label output: {_format_bytes_gib(largest.label_output_bytes)}",
         "",
         "Please split this inference bbox into smaller boxes before running inference.",
     ]
@@ -861,9 +889,68 @@ def _format_inference_memory_preflight_warning(
             lines.append(
                 "- "
                 f"{estimate.box_id}: context {shape}, "
-                f"score buffer {_format_bytes_gib(estimate.score_buffer_bytes)}"
+                f"decoded labels {_format_bytes_gib(estimate.label_output_bytes)}"
             )
         omitted_count = len(oversized) - 4
+        if omitted_count > 0:
+            lines.append(f"- plus {omitted_count} more")
+    return "\n".join(lines)
+
+
+def _format_inference_tiled_mode_preflight_info(
+    *,
+    inference_boxes: Sequence[object],
+    label_values: Sequence[int],
+    volume_shape: Sequence[int],
+    dense_buffer_max_bytes: int,
+    tile_shape: Sequence[int],
+) -> Optional[str]:
+    estimates = _inference_memory_estimates(
+        inference_boxes=inference_boxes,
+        label_values=label_values,
+        volume_shape=volume_shape,
+    )
+    tiled = tuple(
+        sorted(
+            (
+                estimate
+                for estimate in estimates
+                if int(estimate.score_buffer_bytes) > int(dense_buffer_max_bytes)
+            ),
+            key=lambda estimate: int(estimate.score_buffer_bytes),
+            reverse=True,
+        )
+    )
+    if not tiled:
+        return None
+
+    largest = tiled[0]
+    z_size, y_size, x_size = largest.context_shape
+    tile_text = " x ".join(str(int(axis)) for axis in tuple(tile_shape))
+    lines = [
+        (
+            "Segment Inference BBox will use tiled score accumulation for one or "
+            "more large inference boxes."
+        ),
+        "",
+        f"Largest tiled bbox: {largest.box_id}",
+        f"Context shape: {z_size} x {y_size} x {x_size}",
+        f"Classes: {largest.num_classes}",
+        f"Dense score buffer estimate: {_format_bytes_gib(largest.score_buffer_bytes)}",
+        f"Tiled score tile shape: {tile_text}",
+        "",
+        "This avoids the large in-memory score buffer, but may use temporary disk files.",
+    ]
+    if len(tiled) > 1:
+        lines.extend(("", "Other bboxes using tiled mode:"))
+        for estimate in tiled[1:4]:
+            shape = " x ".join(str(int(axis)) for axis in estimate.context_shape)
+            lines.append(
+                "- "
+                f"{estimate.box_id}: context {shape}, "
+                f"dense score buffer {_format_bytes_gib(estimate.score_buffer_bytes)}"
+            )
+        omitted_count = len(tiled) - 4
         if omitted_count > 0:
             lines.append(f"- plus {omitted_count} more")
     return "\n".join(lines)
