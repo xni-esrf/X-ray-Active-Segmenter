@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import os
 from pathlib import Path
+import sys
 from tempfile import TemporaryDirectory
 from types import MethodType, SimpleNamespace
 import unittest
@@ -320,8 +322,8 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             job_path = str(Path(tmpdir) / ".headless-job" / "job.json")
             popen_calls = []
 
-            def fake_popen(command, *, close_fds, start_new_session):
-                popen_calls.append((command, close_fds, start_new_session))
+            def fake_popen(command, **kwargs):
+                popen_calls.append((command, kwargs))
                 return SimpleNamespace(pid=1234)
 
             with patch("src.ui.main_window.subprocess.Popen", side_effect=fake_popen):
@@ -329,9 +331,31 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
 
             self.assertEqual(result.pid, 1234)
             self.assertEqual(len(popen_calls), 1)
-            command, close_fds, start_new_session = popen_calls[0]
-            self.assertTrue(close_fds)
-            self.assertTrue(start_new_session)
+            command, kwargs = popen_calls[0]
+            self.assertEqual(
+                command,
+                [
+                    sys.executable,
+                    str(Path(__file__).resolve().parents[2] / "launch_headless_after_ui_exit.py"),
+                    "--wait-pid",
+                    str(os.getpid()),
+                    "--job",
+                    job_path,
+                    "--python",
+                    sys.executable,
+                    "--runner",
+                    str(Path(__file__).resolve().parents[2] / "run_headless_job.py"),
+                    "--log-level",
+                    "INFO",
+                ],
+            )
+            self.assertEqual(
+                kwargs,
+                {
+                    "close_fds": True,
+                    "start_new_session": True,
+                },
+            )
             self.assertIn("launch_headless_after_ui_exit.py", command[1])
             self.assertTrue(any("run_headless_job.py" in part for part in command))
             self.assertIn("--wait-pid", command)

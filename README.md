@@ -50,5 +50,22 @@ python3 open_ui_raw_viewer.py --help
 - For a fixed amount of annotated data, the training set is often larger than the validation set (typically 2x to 10x).
 - For each feature, start with easier examples, then progressively add harder cases.
 - You can close the application without stopping a running training job. When training finishes, the best checkpoint (best validation weighted Dice) is saved and can be used for inference.
-- For long training or inference jobs on a remote node, use `Train Headless and Close` or `Segment Inference Headless and Close`. The UI writes a reproducible headless job, closes, and the job starts after the UI process exits, so it can continue safely inside `screen` after you detach.
+- For long training or inference jobs on a remote node, use `Train Headless and Close` or `Segment Inference Headless and Close`.
 - Training can be stopped at any point. If at least the first epoch has finished (about 1 hour), the best state reached so far is restored and can be used for inference.
+
+### Headless Jobs
+
+Headless training and inference jobs are written under `.headless-job/<job>/`. The UI closes, a lightweight launcher waits for the UI process to exit, and the runner starts detached from the terminal so it can continue after you detach `screen` or close the terminal.
+
+- Structured launcher and runner logs: `.headless-job/<job>/headless.log`
+- Raw runner stdout/stderr: `.headless-job/<job>/runner.log`
+- Detached runner PID: `.headless-job/<job>/runner.pid`
+
+Useful commands:
+
+```bash
+tail -f .headless-job/<job>/headless.log
+tail -f .headless-job/<job>/runner.log
+ps -p "$(cat .headless-job/<job>/runner.pid)"
+kill "$(cat .headless-job/<job>/runner.pid)"
+```

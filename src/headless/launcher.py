@@ -37,11 +37,18 @@ def launch_headless_after_ui_exit(
     validate_only: bool = False,
     pid_alive_fn: Callable[[int], bool] = lambda pid: _pid_is_alive(pid),
     sleep_fn: Callable[[float], None] = time.sleep,
-    run_fn: Callable[..., object] = subprocess.run,
+    popen_fn: Callable[..., object] = subprocess.Popen,
 ) -> int:
+    """Wait for the UI process to exit, then detach the headless runner.
+
+    Return 0 once the runner has been spawned successfully. The runner's own
+    final status is recorded by its logs, not by this launcher process.
+    """
     normalized_job_path = str(Path(job_path).expanduser())
     runner = runner_path or _default_runner_path()
     log_path = _headless_log_path(normalized_job_path)
+    runner_log_path = _runner_log_path(normalized_job_path)
+    runner_pid_path = _runner_pid_path(normalized_job_path)
     _emit(log_path, f"Headless job queued: {normalized_job_path}")
     _emit(log_path, f"Waiting for UI process {wait_pid} to exit before loading data.")
 
@@ -61,15 +68,30 @@ def launch_headless_after_ui_exit(
 
     _emit(log_path, "UI process exited; starting headless runner.")
     _emit(log_path, "Command: " + shlex.join(command))
-    completed = run_fn(command)
-    return_code = int(getattr(completed, "returncode", 0))
-    _emit(log_path, f"Headless runner exited with code {return_code}.")
-    return return_code
+    _emit(log_path, f"Runner stdout/stderr: {runner_log_path}")
+    _remove_runner_pid(runner_pid_path)
+    try:
+        process = _spawn_detached_runner(
+            command,
+            runner_log_path=runner_log_path,
+            popen_fn=popen_fn,
+        )
+        pid = _process_pid(process)
+    except Exception as exc:
+        _remove_runner_pid(runner_pid_path)
+        _emit(log_path, f"Failed to start headless runner: {exc}")
+        return 1
+
+    _write_runner_pid(runner_pid_path, pid)
+    _emit(log_path, f"Headless runner started with PID {pid}.")
+    _emit(log_path, f"Runner PID file: {runner_pid_path}")
+    _emit(log_path, "Launcher exiting; runner continues independently.")
+    return 0
 
 
 def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Wait for the UI process to exit, then run a headless job"
+        description="Wait for the UI process to exit, then detach a headless job"
     )
     parser.add_argument("--wait-pid", required=True, type=int, help="UI process id to wait for")
     parser.add_argument("--job", required=True, help="Path to .headless-job job.json")
@@ -107,6 +129,18 @@ def _default_runner_path() -> str:
 
 
 def _headless_log_path(job_path: str) -> Path:
+    return _job_dir_for_path(job_path) / "headless.log"
+
+
+def _runner_log_path(job_path: str) -> Path:
+    return _job_dir_for_path(job_path) / "runner.log"
+
+
+def _runner_pid_path(job_path: str) -> Path:
+    return _job_dir_for_path(job_path) / "runner.pid"
+
+
+def _job_dir_for_path(job_path: str) -> Path:
     job_file = Path(job_path).expanduser()
     job_dir: Optional[Path] = None
     try:
@@ -119,7 +153,46 @@ def _headless_log_path(job_path: str) -> Path:
     if job_dir is None:
         job_dir = job_file.parent
     job_dir.mkdir(parents=True, exist_ok=True)
-    return job_dir / "headless.log"
+    return job_dir
+
+
+def _write_runner_pid(path: Path, pid: int) -> None:
+    path.write_text(f"{int(pid)}\n", encoding="utf-8")
+
+
+def _remove_runner_pid(path: Path) -> None:
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _process_pid(process: object) -> int:
+    pid = int(getattr(process, "pid"))
+    if pid <= 0:
+        raise ValueError(f"Invalid headless runner PID: {pid}")
+    return pid
+
+
+def _spawn_detached_runner(
+    command: Sequence[str],
+    *,
+    runner_log_path: Path,
+    popen_fn: Callable[..., object],
+) -> object:
+    with Path(os.devnull).open("rb") as stdin_handle, runner_log_path.open(
+        "a",
+        encoding="utf-8",
+    ) as output_handle:
+        return popen_fn(
+            list(command),
+            stdin=stdin_handle,
+            stdout=output_handle,
+            stderr=output_handle,
+            close_fds=True,
+            start_new_session=True,
+            cwd=str(Path.cwd()),
+        )
 
 
 def _emit(log_path: Path, message: str) -> None:
