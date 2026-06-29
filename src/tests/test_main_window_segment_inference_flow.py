@@ -19,9 +19,14 @@ from src.bbox import BoundingBox
 
 
 class _FakeBBoxManager:
-    def __init__(self, boxes: tuple[BoundingBox, ...]) -> None:
+    def __init__(
+        self,
+        boxes: tuple[BoundingBox, ...],
+        *,
+        volume_shape: tuple[int, int, int] = (32, 32, 32),
+    ) -> None:
         self._boxes = tuple(boxes)
-        self.volume_shape = (32, 32, 32)
+        self.volume_shape = tuple(int(axis) for axis in volume_shape)
 
     def boxes(self) -> tuple[BoundingBox, ...]:
         return self._boxes
@@ -171,6 +176,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         y1: int,
         x0: int,
         x1: int,
+        volume_shape: tuple[int, int, int] = (32, 32, 32),
     ) -> BoundingBox:
         return BoundingBox.from_bounds(
             box_id=box_id,
@@ -181,7 +187,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
             x0=x0,
             x1=x1,
             label=label,
-            volume_shape=(32, 32, 32),
+            volume_shape=volume_shape,
         )
 
     def _make_window_like(
@@ -191,6 +197,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         active_segmentation: tuple[str, object] | None,
         semantic_volume: object | None,
         raw_volume: object | None,
+        volume_shape: tuple[int, int, int] = (32, 32, 32),
         ensure_semantic_result: bool = True,
     ) -> SimpleNamespace:
         ordered_rows = tuple(SimpleNamespace(box_id=box.id) for box in boxes)
@@ -219,7 +226,7 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
 
         window_like = SimpleNamespace(
             bottom_panel=SimpleNamespace(state=SimpleNamespace(bbox_rows=ordered_rows)),
-            _bbox_manager=_FakeBBoxManager(boxes),
+            _bbox_manager=_FakeBBoxManager(boxes, volume_shape=volume_shape),
             _active_segmentation_volume=lambda: active_segmentation,
             _semantic_volume=semantic_volume,
             _raw_volume=raw_volume,
@@ -897,6 +904,56 @@ class MainWindowSegmentInferencePreflightTests(unittest.TestCase):
         self.assertEqual(len(tuple(started_kwargs["inference_boxes"])), 1)
         self.assertIn("label_values", started_kwargs)
         self.assertEqual(tuple(started_kwargs["label_values"]), (0, 1))
+
+    def test_segment_inference_rejects_oversized_bbox_before_large_reads(self) -> None:
+        volume_shape = (2000, 2000, 2000)
+        inference_box = self._make_box(
+            box_id="bbox_huge",
+            label="inference",
+            z0=100,
+            z1=1100,
+            y0=100,
+            y1=1100,
+            x0=100,
+            x1=1100,
+            volume_shape=volume_shape,
+        )
+        window_like = self._make_window_like(
+            boxes=(inference_box,),
+            active_segmentation=("semantic", object()),
+            semantic_volume=object(),
+            raw_volume=object(),
+            volume_shape=volume_shape,
+        )
+        start_calls: list[dict[str, object]] = []
+        window_like._start_learning_inference_background = (
+            lambda **kwargs: start_calls.append(dict(kwargs))
+        )
+
+        with patch(
+            "src.ui.main_window.get_current_learning_model_runtime",
+            return_value=SimpleNamespace(
+                hyperparameters={"label_values": (0, 1)},
+                num_classes=2,
+            ),
+        ), patch(
+            "src.ui.main_window.get_current_learning_eval_runtimes_by_box_id",
+            return_value={},
+        ), patch(
+            "src.ui.main_window._resolve_shared_eval_label_values",
+        ), patch("src.ui.main_window.show_warning") as warning_mock:
+            result = MainWindow._segment_inference_bboxes_with_dialog(window_like)
+
+        self.assertFalse(result)
+        self.assertEqual(start_calls, [])
+        warning_mock.assert_called_once()
+        warning_text = str(warning_mock.call_args.args[0])
+        self.assertIn("was not started", warning_text)
+        self.assertIn("bbox_huge", warning_text)
+        self.assertIn("Context shape: 1100 x 1100 x 1100", warning_text)
+        self.assertIn("Classes: 2", warning_text)
+        self.assertIn("Estimated score buffer", warning_text)
+        self.assertIn("split this inference bbox", warning_text)
 
     def test_start_learning_inference_background_passes_raw_array_reference_to_worker(
         self,

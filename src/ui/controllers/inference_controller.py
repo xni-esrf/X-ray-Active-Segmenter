@@ -8,7 +8,7 @@ import numpy as np
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication, QWidget
 
-from ...learning import get_current_learning_model_runtime
+from ...learning import estimate_inference_bbox_memory, get_current_learning_model_runtime
 from ...learning.qt_workers import (
     LearningInferenceBackgroundResult,
     LearningInferenceStopRequested,
@@ -19,6 +19,7 @@ from ..dialogs import confirm_replace_inference_bboxes, show_info, show_warning
 
 
 _LOGGER = get_logger(__name__)
+_INFERENCE_PREFLIGHT_WARNING_BYTES = 8 * 1024 * 1024 * 1024
 
 
 class InferenceControllerContext(Protocol):
@@ -236,6 +237,23 @@ class InferenceController:
             )
             return False
 
+        if not label_values:
+            self.operations.show_warning(
+                "Validation buffers did not provide any class label values.",
+                parent=self.context,
+            )
+            return False
+
+        preflight_warning = _format_inference_memory_preflight_warning(
+            inference_boxes=inference_boxes,
+            label_values=label_values,
+            volume_shape=self.context._bbox_manager.volume_shape,
+            warning_bytes=_INFERENCE_PREFLIGHT_WARNING_BYTES,
+        )
+        if preflight_warning is not None:
+            self.operations.show_warning(preflight_warning, parent=self.context)
+            return False
+
         has_non_empty_inference_bbox = False
         try:
             for box in inference_boxes:
@@ -258,13 +276,6 @@ class InferenceController:
         if has_non_empty_inference_bbox:
             if not self.operations.confirm_replace_inference_bboxes(parent=self.context):
                 return False
-
-        if not label_values:
-            self.operations.show_warning(
-                "Validation buffers did not provide any class label values.",
-                parent=self.context,
-            )
-            return False
 
         raw_volume = self.context._raw_volume
         if raw_volume is None:
@@ -295,7 +306,7 @@ class InferenceController:
 
         self.context._show_inference_navigation_only_notice()
         try:
-            self.context._start_learning_inference_background(
+            start_result = self.context._start_learning_inference_background(
                 model_runtime=model_runtime,
                 inference_boxes=inference_boxes,
                 raw_array=raw_array,
@@ -309,6 +320,8 @@ class InferenceController:
                 parent=self.context,
             )
             return False
+        if isinstance(start_result, bool):
+            return bool(start_result)
         return True
 
     def run_learning_inference_inline_compat(
@@ -690,12 +703,21 @@ class InferenceController:
         learning_actions_enabled = not training_running and not inference_running
         self.context.bottom_panel.set_segment_inference_enabled(learning_actions_enabled)
         self.context.bottom_panel.set_train_model_enabled(learning_actions_enabled)
+        bottom_panel_state = getattr(self.context.bottom_panel, "state", None)
+        inference_navigation_only_state = bool(
+            getattr(bottom_panel_state, "learning_inference_navigation_only", False)
+            or getattr(self.context.bottom_panel, "_inference_navigation_only_mode", False)
+            or getattr(self.context.bottom_panel, "_stop_inference_enabled_requested", False)
+        )
+        should_update_inference_controls = bool(
+            inference_running or inference_navigation_only_state
+        )
         set_stop_inference_enabled = getattr(
             self.context.bottom_panel,
             "set_stop_inference_enabled",
             None,
         )
-        if callable(set_stop_inference_enabled):
+        if should_update_inference_controls and callable(set_stop_inference_enabled):
             stop_enabled = bool(
                 inference_running
                 and not self.operations.inference_stop_already_requested(self.context)
@@ -706,9 +728,11 @@ class InferenceController:
             "set_inference_navigation_only_mode",
             None,
         )
-        if callable(set_navigation_only_mode):
+        if should_update_inference_controls and callable(set_navigation_only_mode):
             set_navigation_only_mode(inference_running)
-        self.context._refresh_undo_ui_state()
+        refresh_undo_ui_state = getattr(self.context, "_refresh_undo_ui_state", None)
+        if callable(refresh_undo_ui_state):
+            refresh_undo_ui_state()
 
     def enter_learning_inference_running_state(
         self,
@@ -777,3 +801,69 @@ class InferenceController:
         else:
             self.operations.show_info(summary, parent=self.context)
         return bool(failure_count <= 0)
+
+
+def _format_bytes_gib(byte_count: int) -> str:
+    gib = float(int(byte_count)) / float(1024 ** 3)
+    return f"{gib:.2f} GiB"
+
+
+def _format_inference_memory_preflight_warning(
+    *,
+    inference_boxes: Sequence[object],
+    label_values: Sequence[int],
+    volume_shape: Sequence[int],
+    warning_bytes: int,
+) -> Optional[str]:
+    estimates = []
+    for box in tuple(inference_boxes):
+        estimates.append(
+            estimate_inference_bbox_memory(
+                box=box,  # type: ignore[arg-type]
+                label_values=label_values,
+                volume_shape=volume_shape,
+            )
+        )
+    oversized = tuple(
+        sorted(
+            (
+                estimate
+                for estimate in estimates
+                if int(estimate.score_buffer_bytes) > int(warning_bytes)
+            ),
+            key=lambda estimate: int(estimate.score_buffer_bytes),
+            reverse=True,
+        )
+    )
+    if not oversized:
+        return None
+
+    largest = oversized[0]
+    z_size, y_size, x_size = largest.context_shape
+    lines = [
+        (
+            "Segment Inference BBox was not started because one or more inference "
+            "boxes are too large for the current in-memory prediction buffer."
+        ),
+        "",
+        f"Largest bbox: {largest.box_id}",
+        f"Context shape: {z_size} x {y_size} x {x_size}",
+        f"Classes: {largest.num_classes}",
+        f"Estimated score buffer: {_format_bytes_gib(largest.score_buffer_bytes)}",
+        f"Approximate peak memory: at least {_format_bytes_gib(largest.rough_peak_bytes)}",
+        "",
+        "Please split this inference bbox into smaller boxes before running inference.",
+    ]
+    if len(oversized) > 1:
+        lines.extend(("", "Other oversized bboxes:"))
+        for estimate in oversized[1:4]:
+            shape = " x ".join(str(int(axis)) for axis in estimate.context_shape)
+            lines.append(
+                "- "
+                f"{estimate.box_id}: context {shape}, "
+                f"score buffer {_format_bytes_gib(estimate.score_buffer_bytes)}"
+            )
+        omitted_count = len(oversized) - 4
+        if omitted_count > 0:
+            lines.append(f"- plus {omitted_count} more")
+    return "\n".join(lines)
