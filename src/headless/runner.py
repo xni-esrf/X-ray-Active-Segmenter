@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
+import shutil
 import sys
 from typing import Optional, Sequence, Tuple
 
@@ -361,65 +362,73 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
 
     raw_array = _read_full_volume_array(context.raw_volume)
     segmentation_array = _read_full_volume_array(context.segmentation_volume)
+    tile_scratch_dir = _inference_tile_scratch_dir(spec)
+    tile_scratch_dir.mkdir(parents=True, exist_ok=False)
+    LOGGER.info("Headless inference tile scratch directory: %s", tile_scratch_dir)
     LOGGER.info(
         "Inference started: boxes=%d label_values=%s",
         len(inference_boxes),
         tuple(int(value) for value in tuple(checkpoint_preconditions.label_values)),
     )
-    inference_result = run_learning_inference(
-        model_runtime=runtime,
-        inference_boxes=inference_boxes,
-        raw_array=raw_array,
-        label_values=tuple(checkpoint_preconditions.label_values),
-        volume_shape=tuple(int(value) for value in tuple(context.raw_volume.shape)),
-        progress_callback=_log_inference_progress,
-        use_tiled_score_buffer=True,
-    )
-    (
-        output_array,
-        changed_voxel_count,
-        applied_box_ids,
-        apply_failures_by_box_id,
-    ) = apply_inference_predictions_to_array(
-        segmentation_array,
-        inference_result.predictions,
-    )
-    failures_by_box_id = dict(inference_result.failure_by_box_id)
-    failures_by_box_id.update(apply_failures_by_box_id)
-    if not applied_box_ids and failures_by_box_id:
-        raise RuntimeError(
-            "Headless inference failed for all boxes: "
-            + "; ".join(
-                f"{box_id}: {message}"
-                for box_id, message in sorted(failures_by_box_id.items())
-            )
-        )
 
-    output_volume = _open_output_segmentation_volume(
-        output_array,
-        path=spec.output_segmentation_path,
-        source_volume=context.segmentation_volume,
-    )
-    save_path = save_segmentation_volume(
-        output_volume,
-        spec.output_segmentation_path,
-        save_format=spec.output_segmentation_format,
-        overwrite=True,
-    )
-    LOGGER.info(
-        "Inference completed: boxes=%d applied=%d failed=%d changed_voxels=%d output=%s",
-        int(inference_result.total_count),
-        len(applied_box_ids),
-        len(failures_by_box_id),
-        int(changed_voxel_count),
-        save_path,
-    )
-    if failures_by_box_id:
-        for box_id, message in sorted(failures_by_box_id.items()):
-            LOGGER.warning("Inference box failed: box_id=%s error=%s", box_id, message)
-    for box_id, messages in sorted(inference_result.cleanup_errors_by_box_id.items()):
-        for message in tuple(messages):
-            LOGGER.warning("Inference cleanup warning: box_id=%s error=%s", box_id, message)
+    try:
+        inference_result = run_learning_inference(
+            model_runtime=runtime,
+            inference_boxes=inference_boxes,
+            raw_array=raw_array,
+            label_values=tuple(checkpoint_preconditions.label_values),
+            volume_shape=tuple(int(value) for value in tuple(context.raw_volume.shape)),
+            progress_callback=_log_inference_progress,
+            use_tiled_score_buffer=True,
+            tiled_temp_dir=str(tile_scratch_dir),
+        )
+        (
+            output_array,
+            changed_voxel_count,
+            applied_box_ids,
+            apply_failures_by_box_id,
+        ) = apply_inference_predictions_to_array(
+            segmentation_array,
+            inference_result.predictions,
+        )
+        failures_by_box_id = dict(inference_result.failure_by_box_id)
+        failures_by_box_id.update(apply_failures_by_box_id)
+        if not applied_box_ids and failures_by_box_id:
+            raise RuntimeError(
+                "Headless inference failed for all boxes: "
+                + "; ".join(
+                    f"{box_id}: {message}"
+                    for box_id, message in sorted(failures_by_box_id.items())
+                )
+            )
+
+        output_volume = _open_output_segmentation_volume(
+            output_array,
+            path=spec.output_segmentation_path,
+            source_volume=context.segmentation_volume,
+        )
+        save_path = save_segmentation_volume(
+            output_volume,
+            spec.output_segmentation_path,
+            save_format=spec.output_segmentation_format,
+            overwrite=True,
+        )
+        LOGGER.info(
+            "Inference completed: boxes=%d applied=%d failed=%d changed_voxels=%d output=%s",
+            int(inference_result.total_count),
+            len(applied_box_ids),
+            len(failures_by_box_id),
+            int(changed_voxel_count),
+            save_path,
+        )
+        if failures_by_box_id:
+            for box_id, message in sorted(failures_by_box_id.items()):
+                LOGGER.warning("Inference box failed: box_id=%s error=%s", box_id, message)
+        for box_id, messages in sorted(inference_result.cleanup_errors_by_box_id.items()):
+            for message in tuple(messages):
+                LOGGER.warning("Inference cleanup warning: box_id=%s error=%s", box_id, message)
+    finally:
+        _remove_inference_tile_scratch_dir(tile_scratch_dir)
 
 
 def _log_training_epoch_progress(progress: object) -> None:
@@ -469,6 +478,28 @@ def _inference_boxes_from_sources(sources: object) -> Tuple[object, ...]:
 
 def _read_full_volume_array(volume: object) -> np.ndarray:
     return np.asarray(volume.get_chunk((slice(None), slice(None), slice(None))))
+
+
+def _inference_tile_scratch_dir(spec: HeadlessJobSpec) -> Path:
+    if spec.output_segmentation_path is None:
+        raise ValueError("Inference jobs require output_segmentation_path.")
+    output_path = Path(spec.output_segmentation_path).expanduser()
+    job_dir_name = Path(spec.job_dir).expanduser().name or "headless-job"
+    return output_path.parent / f".{output_path.name}.tiles-{job_dir_name}"
+
+
+def _remove_inference_tile_scratch_dir(path: Path) -> None:
+    if not path.exists():
+        return
+    LOGGER.info("Removing headless inference tile scratch directory: %s", path)
+    try:
+        shutil.rmtree(path)
+    except Exception:
+        LOGGER.warning(
+            "Failed to remove headless inference tile scratch directory: %s",
+            path,
+            exc_info=True,
+        )
 
 
 def _open_output_segmentation_volume(

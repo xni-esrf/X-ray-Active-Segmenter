@@ -671,6 +671,12 @@ class HeadlessRunnerTests(unittest.TestCase):
             failure_by_box_id={},
             cleanup_errors_by_box_id={},
         )
+        tmpdir_cm = TemporaryDirectory()
+        self.addCleanup(tmpdir_cm.cleanup)
+        root = Path(tmpdir_cm.name)
+        output_path = root / "output.npy"
+        job_dir = root / ".headless-job" / "inference-job"
+        expected_scratch_dir = root / f".{output_path.name}.tiles-{job_dir.name}"
         spec = HeadlessJobSpec(
             kind="inference",
             raw_volume_path="raw.npy",
@@ -678,8 +684,9 @@ class HeadlessRunnerTests(unittest.TestCase):
             segmentation_kind="semantic",
             bbox_path="boxes.json",
             input_checkpoint_path="input.cp",
-            output_segmentation_path="output.npy",
+            output_segmentation_path=str(output_path),
             output_segmentation_format="npy",
+            job_dir=str(job_dir),
         )
 
         saved_arrays = []
@@ -688,10 +695,17 @@ class HeadlessRunnerTests(unittest.TestCase):
             saved_arrays.append(
                 np.asarray(volume.get_chunk((slice(None), slice(None), slice(None))))
             )
-            self.assertEqual(path, "output.npy")
+            self.assertEqual(path, str(output_path))
             self.assertEqual(save_format, "npy")
             self.assertTrue(overwrite)
             return path
+
+        def fake_inference(**kwargs):
+            scratch_dir = Path(kwargs["tiled_temp_dir"])
+            self.assertEqual(scratch_dir, expected_scratch_dir)
+            self.assertTrue(scratch_dir.exists())
+            (scratch_dir / "tile.bin").write_bytes(b"tile")
+            return inference_result
 
         with patch.object(
             runner_module,
@@ -708,7 +722,7 @@ class HeadlessRunnerTests(unittest.TestCase):
         ) as instantiate_mock, patch.object(
             runner_module,
             "run_learning_inference",
-            return_value=inference_result,
+            side_effect=fake_inference,
         ) as inference_mock, patch.object(
             runner_module,
             "save_segmentation_volume",
@@ -729,11 +743,16 @@ class HeadlessRunnerTests(unittest.TestCase):
         self.assertEqual(inference_mock.call_args.kwargs["volume_shape"], (2, 2, 2))
         self.assertTrue(callable(inference_mock.call_args.kwargs["progress_callback"]))
         self.assertIs(inference_mock.call_args.kwargs["use_tiled_score_buffer"], True)
+        self.assertEqual(
+            inference_mock.call_args.kwargs["tiled_temp_dir"],
+            str(expected_scratch_dir),
+        )
         save_mock.assert_called_once()
         self.assertEqual(len(saved_arrays), 1)
         expected = np.zeros((2, 2, 2), dtype=np.uint8)
         expected[0:1, 0:2, 0:2] = 1
         np.testing.assert_array_equal(saved_arrays[0], expected)
+        self.assertFalse(expected_scratch_dir.exists())
 
 
 class _FakeVolume:

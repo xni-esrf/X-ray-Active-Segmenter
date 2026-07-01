@@ -57,6 +57,7 @@ def run_learning_inference(
     build_inference_dataloader_runtime_from_entry_func: Optional[Callable[..., object]] = None,
     dispose_inference_runtime_func: Optional[Callable[[object], Sequence[str]]] = None,
     use_tiled_score_buffer: bool = False,
+    tiled_temp_dir: Optional[str] = None,
 ) -> LearningInferenceBackgroundResult:
     try:
         import torch
@@ -144,6 +145,7 @@ def run_learning_inference(
                         pin_memory=True,
                         drop_last=False,
                         use_tiled_score_buffer=bool(use_tiled_score_buffer),
+                        tiled_temp_dir=tiled_temp_dir,
                     )
 
                     add_batch = getattr(runtime.buffer, "add_batch", None)

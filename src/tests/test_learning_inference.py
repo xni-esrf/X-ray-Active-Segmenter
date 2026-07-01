@@ -162,10 +162,12 @@ class LearningInferenceApplicationTests(unittest.TestCase):
                 build_inference_dataloader_runtime_from_entry_func=build_runtime,
                 dispose_inference_runtime_func=lambda _runtime: tuple(),
                 use_tiled_score_buffer=True,
+                tiled_temp_dir="/scratch/tiles",
             )
 
         self.assertEqual(len(build_calls), 1)
         self.assertIs(build_calls[0]["use_tiled_score_buffer"], True)
+        self.assertEqual(build_calls[0]["tiled_temp_dir"], "/scratch/tiles")
         self.assertEqual(result.total_count, 1)
         self.assertEqual(
             tuple(prediction.box.id for prediction in result.predictions),
