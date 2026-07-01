@@ -110,6 +110,7 @@ class LearningInferenceWorkerConfigureTests(unittest.TestCase):
 
         self.assertIs(worker._configured_raw_array(), raw_array)
         self.assertFalse(worker._use_tiled_score_buffer)
+        self.assertEqual(worker._batch_size, 4)
 
     def test_configure_accepts_tiled_score_buffer_flag(self) -> None:
         raw_array = np.zeros((2, 3, 4), dtype=np.uint8)
@@ -135,6 +136,58 @@ class LearningInferenceWorkerConfigureTests(unittest.TestCase):
         )
 
         self.assertTrue(worker._use_tiled_score_buffer)
+
+    def test_configure_accepts_batch_size(self) -> None:
+        raw_array = np.zeros((2, 3, 4), dtype=np.uint8)
+        worker = LearningInferenceWorker()
+
+        worker.configure(
+            model_runtime=object(),
+            inference_boxes=(
+                BoundingBox(
+                    id="box-1",
+                    z0=0,
+                    z1=1,
+                    y0=0,
+                    y1=2,
+                    x0=0,
+                    x1=3,
+                ),
+            ),
+            raw_array=raw_array,
+            label_values=(0, 1),
+            volume_shape=raw_array.shape,
+            batch_size=9,
+        )
+
+        self.assertEqual(worker._batch_size, 9)
+
+    def test_configure_rejects_invalid_batch_size(self) -> None:
+        worker = LearningInferenceWorker()
+        kwargs = dict(
+            model_runtime=object(),
+            inference_boxes=(
+                BoundingBox(
+                    id="box-1",
+                    z0=0,
+                    z1=1,
+                    y0=0,
+                    y1=2,
+                    x0=0,
+                    x1=3,
+                ),
+            ),
+            raw_array=np.zeros((2, 3, 4), dtype=np.uint8),
+            label_values=(0, 1),
+            volume_shape=(2, 3, 4),
+        )
+
+        with self.assertRaisesRegex(ValueError, ">= 1"):
+            worker.configure(**kwargs, batch_size=0)
+        with self.assertRaisesRegex(TypeError, "integer"):
+            worker.configure(**kwargs, batch_size=True)
+        with self.assertRaisesRegex(TypeError, "integer"):
+            worker.configure(**kwargs, batch_size=1.5)
 
     def test_configure_rejects_non_bool_tiled_score_buffer_flag(self) -> None:
         worker = LearningInferenceWorker()

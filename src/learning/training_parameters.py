@@ -11,6 +11,7 @@ class TrainingParameters:
     learning_rate: float = 5e-5
     training_batch_size: int = 4
     validation_batch_size: int = 4
+    inference_batch_size: int = 4
     patches_per_epoch: int = 1000
     early_stopping_patience: int = 2
 
@@ -57,6 +58,10 @@ def validate_training_parameters(parameters: TrainingParameters) -> TrainingPara
             parameters.validation_batch_size,
             name="validation_batch_size",
         ),
+        inference_batch_size=_coerce_positive_int(
+            parameters.inference_batch_size,
+            name="inference_batch_size",
+        ),
         patches_per_epoch=_coerce_positive_int(
             parameters.patches_per_epoch,
             name="patches_per_epoch",
@@ -66,4 +71,3 @@ def validate_training_parameters(parameters: TrainingParameters) -> TrainingPara
             name="early_stopping_patience",
         ),
     )
-

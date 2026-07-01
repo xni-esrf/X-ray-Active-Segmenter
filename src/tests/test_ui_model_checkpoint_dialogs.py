@@ -52,6 +52,7 @@ class TrainingParametersDialogTests(unittest.TestCase):
         dialog._learning_rate.setValue(0.001)
         dialog._training_batch_size.setValue(2)
         dialog._validation_batch_size.setValue(3)
+        dialog._inference_batch_size.setValue(6)
         dialog._patches_per_epoch.setValue(12)
         dialog._early_stopping_patience.setValue(4)
 
@@ -63,6 +64,7 @@ class TrainingParametersDialogTests(unittest.TestCase):
                 learning_rate=0.001,
                 training_batch_size=2,
                 validation_batch_size=3,
+                inference_batch_size=6,
                 patches_per_epoch=12,
                 early_stopping_patience=4,
             ),
@@ -74,6 +76,7 @@ class TrainingParametersDialogTests(unittest.TestCase):
                 learning_rate=0.001,
                 training_batch_size=2,
                 validation_batch_size=3,
+                inference_batch_size=6,
                 patches_per_epoch=12,
                 early_stopping_patience=4,
             )

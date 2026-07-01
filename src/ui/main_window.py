@@ -2249,6 +2249,7 @@ class MainWindow(QMainWindow):
                     learning_rate=learning_rate,
                     training_batch_size=self._training_parameters.training_batch_size,
                     validation_batch_size=self._training_parameters.validation_batch_size,
+                    inference_batch_size=self._training_parameters.inference_batch_size,
                     patches_per_epoch=self._training_parameters.patches_per_epoch,
                     early_stopping_patience=self._training_parameters.early_stopping_patience,
                 )

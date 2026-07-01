@@ -16,6 +16,7 @@ except Exception:  # pragma: no cover - environment dependent
     MainWindow = None  # type: ignore[assignment]
 
 from src.bbox import BoundingBox
+from src.learning import TrainingParameters
 
 
 class _FakeBBoxManager:
@@ -1073,6 +1074,7 @@ class MainWindowSegmentInferenceFlowTests(unittest.TestCase):
             entered_calls.append((worker, thread))
 
         window_like = SimpleNamespace(
+            _training_parameters=TrainingParameters(inference_batch_size=11),
             _enter_learning_inference_running_state=_enter_running_state,
             _on_learning_inference_completed=lambda _result: None,
             _on_learning_inference_canceled=lambda _message: None,
@@ -1099,6 +1101,7 @@ class MainWindowSegmentInferenceFlowTests(unittest.TestCase):
         self.assertEqual(tuple(configure_calls[0]["label_values"]), (0, 1))
         self.assertEqual(tuple(configure_calls[0]["volume_shape"]), raw_array.shape)
         self.assertIs(configure_calls[0]["use_tiled_score_buffer"], False)
+        self.assertEqual(configure_calls[0]["batch_size"], 11)
         self.assertEqual(entered_calls, [(worker_instances[0], thread_instances[0])])
         self.assertIs(worker_instances[0].thread, thread_instances[0])
         self.assertEqual(thread_instances[0].start_calls, 1)

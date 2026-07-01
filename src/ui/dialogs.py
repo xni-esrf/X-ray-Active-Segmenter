@@ -156,6 +156,9 @@ class TrainingParametersDialog(QDialog):
         self._validation_batch_size = QSpinBox()
         self._validation_batch_size.setRange(1, 1_000_000)
 
+        self._inference_batch_size = QSpinBox()
+        self._inference_batch_size.setRange(1, 1_000_000)
+
         self._patches_per_epoch = QSpinBox()
         self._patches_per_epoch.setRange(1, 1_000_000_000)
 
@@ -165,6 +168,7 @@ class TrainingParametersDialog(QDialog):
         form.addRow("Learning rate", self._learning_rate)
         form.addRow("Training batch size", self._training_batch_size)
         form.addRow("Validation batch size", self._validation_batch_size)
+        form.addRow("Inference batch size", self._inference_batch_size)
         form.addRow("Patches per epoch", self._patches_per_epoch)
         form.addRow("Early stopping patience", self._early_stopping_patience)
         layout.addLayout(form)
@@ -188,6 +192,7 @@ class TrainingParametersDialog(QDialog):
         self._learning_rate.setValue(float(normalized.learning_rate))
         self._training_batch_size.setValue(int(normalized.training_batch_size))
         self._validation_batch_size.setValue(int(normalized.validation_batch_size))
+        self._inference_batch_size.setValue(int(normalized.inference_batch_size))
         self._patches_per_epoch.setValue(int(normalized.patches_per_epoch))
         self._early_stopping_patience.setValue(int(normalized.early_stopping_patience))
 
@@ -200,6 +205,7 @@ class TrainingParametersDialog(QDialog):
                 learning_rate=float(self._learning_rate.value()),
                 training_batch_size=int(self._training_batch_size.value()),
                 validation_batch_size=int(self._validation_batch_size.value()),
+                inference_batch_size=int(self._inference_batch_size.value()),
                 patches_per_epoch=int(self._patches_per_epoch.value()),
                 early_stopping_patience=int(self._early_stopping_patience.value()),
             )

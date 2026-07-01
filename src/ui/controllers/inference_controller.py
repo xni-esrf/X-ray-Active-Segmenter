@@ -8,7 +8,11 @@ import numpy as np
 from PySide6.QtCore import QThread
 from PySide6.QtWidgets import QApplication, QWidget
 
-from ...learning import get_current_learning_model_runtime
+from ...learning import (
+    DEFAULT_TRAINING_PARAMETERS,
+    get_current_learning_model_runtime,
+    validate_training_parameters,
+)
 from ...learning.qt_workers import (
     LearningInferenceBackgroundResult,
     LearningInferenceStopRequested,
@@ -34,6 +38,7 @@ class InferenceControllerContext(Protocol):
     _annotation_labels_dirty: bool
     _annotation_kind: str
     _bbox_manager: object
+    _training_parameters: object
     bottom_panel: object
 
     def _abort_if_learning_training_running(self) -> bool: ...
@@ -330,6 +335,7 @@ class InferenceController:
             label_values=label_values,
             volume_shape=volume_shape,
             use_tiled_score_buffer=False,
+            batch_size=self._inference_batch_size(),
         )
         try:
             result = worker._run_inference()
@@ -449,6 +455,7 @@ class InferenceController:
             label_values=label_values,
             volume_shape=volume_shape,
             use_tiled_score_buffer=False,
+            batch_size=self._inference_batch_size(),
         )
         worker.moveToThread(thread)
 
@@ -481,6 +488,16 @@ class InferenceController:
             except Exception:
                 pass
             raise
+
+    def _inference_batch_size(self) -> int:
+        parameters = validate_training_parameters(
+            getattr(
+                self.context,
+                "_training_parameters",
+                DEFAULT_TRAINING_PARAMETERS,
+            )
+        )
+        return int(parameters.inference_batch_size)
 
     def apply_inference_predictions_in_single_commit(
         self,

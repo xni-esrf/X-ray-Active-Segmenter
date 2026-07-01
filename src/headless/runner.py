@@ -381,6 +381,8 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
             progress_callback=_log_inference_progress,
             use_tiled_score_buffer=True,
             tiled_temp_dir=str(tile_scratch_dir),
+            batch_size=int(spec.training_parameters.inference_batch_size),
+            async_accumulation=True,
         )
         (
             output_array,

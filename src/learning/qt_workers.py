@@ -134,6 +134,7 @@ class LearningInferenceWorker(QObject):
         self._label_values: Tuple[int, ...] = tuple()
         self._volume_shape: Tuple[int, int, int] = (1, 1, 1)
         self._use_tiled_score_buffer = False
+        self._batch_size = 4
 
     def configure(
         self,
@@ -144,6 +145,7 @@ class LearningInferenceWorker(QObject):
         label_values: Sequence[int],
         volume_shape: Sequence[int],
         use_tiled_score_buffer: bool = False,
+        batch_size: int = 4,
     ) -> None:
         normalized_boxes: list[BoundingBox] = []
         for raw_box in tuple(inference_boxes):
@@ -172,6 +174,7 @@ class LearningInferenceWorker(QObject):
                 "use_tiled_score_buffer must be a bool, "
                 f"got {type(use_tiled_score_buffer).__name__}"
             )
+        normalized_batch_size = self._coerce_batch_size(batch_size)
 
         self._model_runtime = model_runtime
         self._inference_boxes = tuple(normalized_boxes)
@@ -183,6 +186,19 @@ class LearningInferenceWorker(QObject):
             int(shape[2]),
         )
         self._use_tiled_score_buffer = bool(use_tiled_score_buffer)
+        self._batch_size = int(normalized_batch_size)
+
+    @staticmethod
+    def _coerce_batch_size(value: object) -> int:
+        if isinstance(value, bool) or not isinstance(value, Integral):
+            raise TypeError(
+                "batch_size must be an integer, "
+                f"got {type(value).__name__}"
+            )
+        normalized = int(value)
+        if normalized < 1:
+            raise ValueError("batch_size must be >= 1")
+        return normalized
 
     def request_stop(self) -> None:
         self._stop_event.set()
@@ -223,6 +239,7 @@ class LearningInferenceWorker(QObject):
             ),
             dispose_inference_runtime_func=_dispose_inference_runtime,
             use_tiled_score_buffer=bool(self._use_tiled_score_buffer),
+            batch_size=int(self._batch_size),
         )
 
     @Slot()

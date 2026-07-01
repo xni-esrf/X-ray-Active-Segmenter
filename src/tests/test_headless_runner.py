@@ -11,6 +11,7 @@ import numpy as np
 from src.bbox import BoundingBox, save_bounding_boxes
 from src.headless.job_spec import HeadlessJobSpec, save_headless_job_spec
 from src.headless.runner import main as headless_main
+from src.learning import TrainingParameters
 from src.learning.inference import LearningInferencePrediction
 import src.headless.runner as runner_module
 
@@ -686,6 +687,7 @@ class HeadlessRunnerTests(unittest.TestCase):
             input_checkpoint_path="input.cp",
             output_segmentation_path=str(output_path),
             output_segmentation_format="npy",
+            training_parameters=TrainingParameters(inference_batch_size=9),
             job_dir=str(job_dir),
         )
 
@@ -743,6 +745,8 @@ class HeadlessRunnerTests(unittest.TestCase):
         self.assertEqual(inference_mock.call_args.kwargs["volume_shape"], (2, 2, 2))
         self.assertTrue(callable(inference_mock.call_args.kwargs["progress_callback"]))
         self.assertIs(inference_mock.call_args.kwargs["use_tiled_score_buffer"], True)
+        self.assertIs(inference_mock.call_args.kwargs["async_accumulation"], True)
+        self.assertEqual(inference_mock.call_args.kwargs["batch_size"], 9)
         self.assertEqual(
             inference_mock.call_args.kwargs["tiled_temp_dir"],
             str(expected_scratch_dir),

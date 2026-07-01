@@ -17,6 +17,7 @@ class TrainingParametersTests(unittest.TestCase):
                 learning_rate=5e-5,
                 training_batch_size=4,
                 validation_batch_size=4,
+                inference_batch_size=4,
                 patches_per_epoch=1000,
                 early_stopping_patience=2,
             ),
@@ -28,6 +29,7 @@ class TrainingParametersTests(unittest.TestCase):
                 learning_rate=0.001,
                 training_batch_size=2,
                 validation_batch_size=3,
+                inference_batch_size=6,
                 patches_per_epoch=12,
                 early_stopping_patience=4,
             )
@@ -36,6 +38,7 @@ class TrainingParametersTests(unittest.TestCase):
         self.assertEqual(parameters.learning_rate, 0.001)
         self.assertEqual(parameters.training_batch_size, 2)
         self.assertEqual(parameters.validation_batch_size, 3)
+        self.assertEqual(parameters.inference_batch_size, 6)
         self.assertEqual(parameters.patches_per_epoch, 12)
         self.assertEqual(parameters.early_stopping_patience, 4)
 
@@ -45,6 +48,7 @@ class TrainingParametersTests(unittest.TestCase):
             TrainingParameters(learning_rate=float("inf")),
             TrainingParameters(training_batch_size=0),
             TrainingParameters(validation_batch_size=0),
+            TrainingParameters(inference_batch_size=0),
             TrainingParameters(patches_per_epoch=0),
             TrainingParameters(early_stopping_patience=0),
         )

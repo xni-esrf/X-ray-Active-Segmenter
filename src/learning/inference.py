@@ -1,6 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
+from numbers import Integral
+from queue import Queue
+from threading import Lock, Thread
+import time
 from typing import Callable, Dict, Optional, Sequence, Tuple
 
 import numpy as np
@@ -8,6 +13,9 @@ import numpy as np
 from ..bbox import BoundingBox
 from ..utils import exception_message, torch_from_numpy_safe
 from .session_store import LearningBBoxTensorEntry
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -43,6 +51,93 @@ class LearningInferenceStopRequested(RuntimeError):
     """Raised internally to stop inference at the next batch boundary."""
 
 
+_ASYNC_ACCUMULATOR_STOP = object()
+
+
+class _AsyncInferenceAccumulator:
+    def __init__(self, buffer: object, *, max_queue_size: int = 2) -> None:
+        add_batch = getattr(buffer, "add_batch", None)
+        if not callable(add_batch):
+            raise TypeError("buffer must define a callable add_batch(batch, coordinates)")
+        self._add_batch = add_batch
+        self._queue: Queue[object] = Queue(
+            maxsize=_coerce_positive_int(max_queue_size, name="max_queue_size")
+        )
+        self._error: Optional[BaseException] = None
+        self._lock = Lock()
+        self._closed = False
+        self._worker = Thread(
+            target=self._run,
+            name="xray-inference-accumulator",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def submit(self, batch: object, coordinates: object) -> float:
+        self._raise_if_failed()
+        if self._closed:
+            raise RuntimeError("Async inference accumulator is closed")
+        start_time = time.perf_counter()
+        self._queue.put((batch, coordinates))
+        wait_seconds = time.perf_counter() - start_time
+        if LOGGER.isEnabledFor(logging.DEBUG):
+            LOGGER.debug(
+                "Inference async queue submit wait: %.6fs queue_size=%d",
+                float(wait_seconds),
+                int(self._queue.qsize()),
+            )
+        self._raise_if_failed()
+        return float(wait_seconds)
+
+    def finish(self) -> None:
+        if not self._closed:
+            self._closed = True
+            self._queue.put(_ASYNC_ACCUMULATOR_STOP)
+        self._worker.join()
+        self._raise_if_failed()
+
+    def close(self) -> None:
+        if not self._closed:
+            self._closed = True
+            try:
+                self._queue.put(_ASYNC_ACCUMULATOR_STOP)
+            except Exception:
+                return
+        try:
+            self._worker.join()
+        except RuntimeError:
+            return
+
+    def _run(self) -> None:
+        while True:
+            job = self._queue.get()
+            try:
+                if job is _ASYNC_ACCUMULATOR_STOP:
+                    return
+                if self._error is not None:
+                    continue
+                batch, coordinates = job
+                start_time = time.perf_counter()
+                self._add_batch(batch, coordinates)
+                if LOGGER.isEnabledFor(logging.DEBUG):
+                    LOGGER.debug(
+                        "Inference async buffer accumulation: %.6fs",
+                        float(time.perf_counter() - start_time),
+                    )
+            except BaseException as exc:
+                with self._lock:
+                    if self._error is None:
+                        self._error = exc
+            finally:
+                self._queue.task_done()
+
+    def _raise_if_failed(self) -> None:
+        with self._lock:
+            error = self._error
+        if error is not None:
+            raise RuntimeError(f"Async inference accumulation failed: {error}") from error
+
+
 def run_learning_inference(
     *,
     model_runtime: object,
@@ -58,6 +153,9 @@ def run_learning_inference(
     dispose_inference_runtime_func: Optional[Callable[[object], Sequence[str]]] = None,
     use_tiled_score_buffer: bool = False,
     tiled_temp_dir: Optional[str] = None,
+    batch_size: int = 4,
+    async_accumulation: bool = False,
+    async_accumulation_queue_size: int = 2,
 ) -> LearningInferenceBackgroundResult:
     try:
         import torch
@@ -69,6 +167,15 @@ def run_learning_inference(
     normalized_boxes = _normalize_inference_boxes(inference_boxes)
     normalized_labels = _normalize_label_values(label_values)
     normalized_shape = _normalize_volume_shape(volume_shape)
+    normalized_batch_size = _coerce_positive_int(batch_size, name="batch_size")
+    normalized_async_accumulation = _coerce_bool(
+        async_accumulation,
+        name="async_accumulation",
+    )
+    normalized_async_queue_size = _coerce_positive_int(
+        async_accumulation_queue_size,
+        name="async_accumulation_queue_size",
+    )
     normalized_raw_array = np.asarray(raw_array)
     total_count = int(len(normalized_boxes))
     extract_bbox_context = (
@@ -110,6 +217,7 @@ def run_learning_inference(
             for order_index, box in enumerate(normalized_boxes, start=1):
                 _raise_if_stop_requested(stop_requested)
                 runtime = None
+                accumulator = None
                 succeeded = False
                 try:
                     z_bounds = (int(box.z0), int(box.z1))
@@ -140,7 +248,7 @@ def run_learning_inference(
                         entry,
                         label_values=normalized_labels,
                         minivol_size=200,
-                        batch_size=4,
+                        batch_size=normalized_batch_size,
                         num_workers=8,
                         pin_memory=True,
                         drop_last=False,
@@ -158,20 +266,68 @@ def run_learning_inference(
                         raise TypeError(
                             f"Inference buffer for box_id={box.id!r} must define get_pred_labels()."
                         )
+                    if normalized_async_accumulation:
+                        accumulator = _AsyncInferenceAccumulator(
+                            runtime.buffer,
+                            max_queue_size=normalized_async_queue_size,
+                        )
 
                     for minivols, coordinates in runtime.dataloader:
                         _raise_if_stop_requested(stop_requested)
-                        minivols = minivols.to(resolved_device)
+                        minivols = minivols.to(resolved_device, non_blocking=True)
+                        forward_start_time = time.perf_counter()
                         with torch.autocast(
                             device_type=resolved_device_type,
                             enabled=autocast_enabled,
                             dtype=getattr(torch, "bfloat16"),
                         ):
                             pred_minivols = model(minivols)
-                        add_batch(pred_minivols.detach().cpu(), coordinates)
+                        if LOGGER.isEnabledFor(logging.DEBUG):
+                            LOGGER.debug(
+                                "Inference model forward: box_id=%s elapsed=%.6fs",
+                                str(box.id),
+                                float(time.perf_counter() - forward_start_time),
+                            )
+                        copy_start_time = time.perf_counter()
+                        prediction_batch = _copy_prediction_batch_to_cpu(pred_minivols)
+                        if LOGGER.isEnabledFor(logging.DEBUG):
+                            LOGGER.debug(
+                                "Inference prediction CPU copy: box_id=%s elapsed=%.6fs",
+                                str(box.id),
+                                float(time.perf_counter() - copy_start_time),
+                            )
+                        if accumulator is not None:
+                            _raise_if_stop_requested(stop_requested)
+                            accumulator.submit(prediction_batch, coordinates)
+                        else:
+                            accumulate_start_time = time.perf_counter()
+                            add_batch(prediction_batch, coordinates)
+                            if LOGGER.isEnabledFor(logging.DEBUG):
+                                LOGGER.debug(
+                                    "Inference sync buffer accumulation: box_id=%s elapsed=%.6fs",
+                                    str(box.id),
+                                    float(time.perf_counter() - accumulate_start_time),
+                                )
 
-                    _raise_if_stop_requested(stop_requested)
+                    if accumulator is not None:
+                        finish_start_time = time.perf_counter()
+                        _finish_accumulator(accumulator, stop_requested)
+                        if LOGGER.isEnabledFor(logging.DEBUG):
+                            LOGGER.debug(
+                                "Inference async accumulator finish: box_id=%s elapsed=%.6fs",
+                                str(box.id),
+                                float(time.perf_counter() - finish_start_time),
+                            )
+                    else:
+                        _raise_if_stop_requested(stop_requested)
+                    decode_start_time = time.perf_counter()
                     predicted_context = get_pred_labels()
+                    if LOGGER.isEnabledFor(logging.DEBUG):
+                        LOGGER.debug(
+                            "Inference get_pred_labels: box_id=%s elapsed=%.6fs",
+                            str(box.id),
+                            float(time.perf_counter() - decode_start_time),
+                        )
                     if isinstance(predicted_context, torch.Tensor):
                         predicted_context_array = np.asarray(
                             predicted_context.detach().cpu()
@@ -210,6 +366,8 @@ def run_learning_inference(
                 except Exception as exc:
                     failure_by_box_id[str(box.id)] = exception_message(exc)
                 finally:
+                    if accumulator is not None:
+                        accumulator.close()
                     if runtime is not None:
                         dispose_errors = tuple(dispose_runtime(runtime))
                         if dispose_errors:
@@ -325,6 +483,21 @@ def _normalize_inference_boxes(values: Sequence[BoundingBox]) -> Tuple[BoundingB
     return tuple(normalized)
 
 
+def _coerce_bool(value: object, *, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be a bool, got {type(value).__name__}")
+    return bool(value)
+
+
+def _coerce_positive_int(value: object, *, name: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, Integral):
+        raise TypeError(f"{name} must be an integer, got {type(value).__name__}")
+    normalized = int(value)
+    if normalized <= 0:
+        raise ValueError(f"{name} must be >= 1, got {normalized}")
+    return normalized
+
+
 def _normalize_label_values(values: Sequence[int]) -> Tuple[int, ...]:
     normalized = tuple(int(value) for value in tuple(values))
     if not normalized:
@@ -344,6 +517,24 @@ def _normalize_volume_shape(values: Sequence[int]) -> Tuple[int, int, int]:
 def _raise_if_stop_requested(stop_requested: Optional[Callable[[], bool]]) -> None:
     if stop_requested is not None and bool(stop_requested()):
         raise LearningInferenceStopRequested("Inference stop requested by user.")
+
+
+def _finish_accumulator(
+    accumulator: _AsyncInferenceAccumulator,
+    stop_requested: Optional[Callable[[], bool]],
+) -> None:
+    accumulator.finish()
+    _raise_if_stop_requested(stop_requested)
+
+
+def _copy_prediction_batch_to_cpu(prediction_batch: object) -> object:
+    detach = getattr(prediction_batch, "detach", None)
+    if callable(detach):
+        prediction_batch = detach()
+    cpu = getattr(prediction_batch, "cpu", None)
+    if callable(cpu):
+        return cpu()
+    return prediction_batch
 
 
 def _resolve_inference_device(torch_mod, model_runtime: object, model: object):

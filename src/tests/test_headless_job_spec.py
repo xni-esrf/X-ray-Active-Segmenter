@@ -28,6 +28,7 @@ class HeadlessJobSpecTests(unittest.TestCase):
                     learning_rate=0.001,
                     training_batch_size=2,
                     validation_batch_size=3,
+                    inference_batch_size=6,
                     patches_per_epoch=4,
                     early_stopping_patience=5,
                 ),
@@ -45,6 +46,7 @@ class HeadlessJobSpecTests(unittest.TestCase):
             self.assertEqual(loaded.cache_max_bytes, 1234)
             self.assertEqual(loaded.training_parameters.learning_rate, 0.001)
             self.assertEqual(loaded.training_parameters.training_batch_size, 2)
+            self.assertEqual(loaded.training_parameters.inference_batch_size, 6)
             self.assertEqual(loaded.output_checkpoint_path, "output.cp")
             self.assertEqual(loaded.source_pid, 42)
 

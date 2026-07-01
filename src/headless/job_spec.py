@@ -121,6 +121,10 @@ class HeadlessJobSpec:
                     "validation_batch_size",
                     4,
                 ),
+                inference_batch_size=raw_training_parameters.get(
+                    "inference_batch_size",
+                    4,
+                ),
                 patches_per_epoch=raw_training_parameters.get(
                     "patches_per_epoch",
                     1000,
