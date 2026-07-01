@@ -24,6 +24,12 @@ class PreparedVolume:
     cache: ChunkCache
 
 
+@dataclass(frozen=True)
+class _PreparedLoader:
+    loader: VolumeLoader
+    data_range: Optional[Tuple[float, float]] = None
+
+
 def load_prepared_volume(
     path: str,
     *,
@@ -34,8 +40,11 @@ def load_prepared_volume(
 ) -> PreparedVolume:
     loader = create_loader(path)
     normalized_mode = str(load_mode).strip().lower()
+    data_range: Optional[Tuple[float, float]] = None
     if normalized_mode == "ram":
-        loader = _prepare_loader_ram(loader, kind=kind)
+        prepared_loader = _prepare_loader_ram(loader, kind=kind)
+        loader = prepared_loader.loader
+        data_range = prepared_loader.data_range
         levels_builder = build_pyramid
     elif normalized_mode == "lazy":
         loader = _prepare_loader_lazy(loader, kind=kind)
@@ -43,7 +52,8 @@ def load_prepared_volume(
     else:
         raise ValueError("load_mode must be 'ram' or 'lazy'")
 
-    data_range = _compute_raw_data_range(loader) if kind == "raw" else None
+    if kind == "raw" and data_range is None:
+        data_range = _compute_raw_data_range(loader)
     cache = ChunkCache(max_bytes=cache_max_bytes)
     volume = open_volume(loader, cache=cache, data_range=data_range)
     levels = levels_builder(volume, levels=pyramid_levels)
@@ -56,13 +66,20 @@ def _prepare_loader_lazy(loader: VolumeLoader, *, kind: VolumeKind) -> VolumeLoa
     return loader
 
 
-def _prepare_loader_ram(loader: VolumeLoader, *, kind: VolumeKind) -> VolumeLoader:
+def _prepare_loader_ram(loader: VolumeLoader, *, kind: VolumeKind) -> _PreparedLoader:
     source_info = loader.info
     try:
-        array = np.asarray(loader.get_chunk((slice(None), slice(None), slice(None))))
+        # RAM mode should detach from mmap/lazy backing storage.  A plain
+        # np.asarray(...) can keep a memmap-backed view for TIFFs, causing later
+        # startup work to fault pages from storage while the UI is still hidden.
+        array = np.array(
+            loader.get_chunk((slice(None), slice(None), slice(None))),
+            copy=True,
+        )
     finally:
         loader.close()
 
+    data_range: Optional[Tuple[float, float]] = None
     if kind == "raw":
         if np.dtype(array.dtype) == np.dtype(np.float32):
             array = array.astype(np.float16, copy=False)
@@ -70,6 +87,7 @@ def _prepare_loader_ram(loader: VolumeLoader, *, kind: VolumeKind) -> VolumeLoad
                 "RAM mode: cast raw volume to float16 while materializing %s",
                 loader.path,
             )
+        data_range = _compute_raw_array_data_range(array)
     elif kind in ("semantic", "instance"):
         if np.issubdtype(array.dtype, np.integer):
             min_value, max_value = _value_range(array)
@@ -86,11 +104,14 @@ def _prepare_loader_ram(loader: VolumeLoader, *, kind: VolumeKind) -> VolumeLoad
                     max_value,
                 )
 
-    return InMemoryVolumeLoader(
-        path=loader.path,
-        array=array,
-        voxel_spacing=source_info.voxel_spacing,
-        axes=source_info.axes,
+    return _PreparedLoader(
+        loader=InMemoryVolumeLoader(
+            path=loader.path,
+            array=array,
+            voxel_spacing=source_info.voxel_spacing,
+            axes=source_info.axes,
+        ),
+        data_range=data_range,
     )
 
 
@@ -134,6 +155,24 @@ def _compute_raw_data_range(loader: VolumeLoader) -> Tuple[float, float]:
     if global_min is None or global_max is None:
         raise ValueError("Raw volume has no voxels to render.")
     return (global_min, global_max)
+
+
+def _compute_raw_array_data_range(array: np.ndarray) -> Tuple[float, float]:
+    shape = tuple(int(dim) for dim in array.shape)
+    if len(shape) != 3 or any(dim <= 0 for dim in shape):
+        raise ValueError(
+            "Raw volume must have a strictly positive 3D shape (z, y, x), "
+            f"got {shape}."
+        )
+
+    dtype = np.dtype(array.dtype)
+    if np.issubdtype(dtype, np.complexfloating):
+        raise ValueError("Complex-valued raw volumes are not supported for rendering.")
+    if np.issubdtype(dtype, np.floating) and not np.all(np.isfinite(array)):
+        raise ValueError("Raw volume contains NaN or Inf values and cannot be displayed.")
+    if array.size == 0:
+        raise ValueError("Raw volume has no voxels to render.")
+    return (float(np.min(array)), float(np.max(array)))
 
 
 def _scan_chunk_shape(

@@ -75,6 +75,47 @@ class LoadingStatisticsTests(unittest.TestCase):
         self.assertGreater(loader.calls, 0)
         mean_mock.assert_not_called()
 
+    def test_raw_ram_load_materializes_independent_array_and_reuses_data_range(self) -> None:
+        array = np.arange(8, dtype=np.uint16).reshape((2, 2, 2)) + 10
+        loader = _ArrayLoader(array)
+
+        with patch.object(loading, "create_loader", return_value=loader):
+            prepared = loading.load_prepared_volume(
+                "/tmp/raw.npy",
+                kind="raw",
+                load_mode="ram",
+                cache_max_bytes=1024,
+                pyramid_levels=1,
+            )
+
+        self.assertEqual(loader.calls, 1)
+        self.assertEqual(prepared.volume.data_range, (10.0, 17.0))
+
+        array[...] = 99
+        loaded = prepared.volume.get_chunk((slice(None), slice(None), slice(None)))
+        self.assertEqual(int(np.min(loaded)), 10)
+        self.assertEqual(int(np.max(loaded)), 17)
+
+    def test_raw_ram_load_uses_post_cast_values_for_data_range(self) -> None:
+        array = np.asarray(
+            [[[0.10006, 0.20007], [0.30008, 0.40009]], [[-0.50001, -0.40002], [0.0, 1.00009]]],
+            dtype=np.float32,
+        )
+        loader = _ArrayLoader(array)
+
+        with patch.object(loading, "create_loader", return_value=loader):
+            prepared = loading.load_prepared_volume(
+                "/tmp/raw.npy",
+                kind="raw",
+                load_mode="ram",
+                cache_max_bytes=1024,
+                pyramid_levels=1,
+            )
+
+        casted = array.astype(np.float16, copy=False)
+        self.assertEqual(prepared.volume.dtype, str(np.dtype(np.float16)))
+        self.assertEqual(prepared.volume.data_range, (float(np.min(casted)), float(np.max(casted))))
+
     def test_semantic_lazy_load_does_not_compute_data_range_or_mean(self) -> None:
         array = np.arange(8, dtype=np.uint16).reshape((2, 2, 2)) + 10
         loader = _ArrayLoader(array)
