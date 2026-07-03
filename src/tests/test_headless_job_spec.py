@@ -58,12 +58,12 @@ class HeadlessJobSpecTests(unittest.TestCase):
             segmentation_kind="instance",
             bbox_path="boxes.json",
             input_checkpoint_path="model.cp",
-            output_segmentation_path="out.tif",
-            output_segmentation_format="tiff",
+            output_segmentation_path="out.zarr",
+            output_segmentation_format="zarr",
         )
 
         spec = HeadlessJobSpec(**valid_kwargs)
-        self.assertEqual(spec.output_segmentation_format, "tiff")
+        self.assertEqual(spec.output_segmentation_format, "zarr")
 
         for removed_key in (
             "input_checkpoint_path",
@@ -75,6 +75,9 @@ class HeadlessJobSpecTests(unittest.TestCase):
             with self.subTest(removed_key=removed_key):
                 with self.assertRaises((TypeError, ValueError)):
                     HeadlessJobSpec(**kwargs)
+
+        with self.assertRaisesRegex(ValueError, "zarr"):
+            HeadlessJobSpec(**dict(valid_kwargs, output_segmentation_format="npy"))
 
     def test_roundtrip_inference_spec(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -88,8 +91,8 @@ class HeadlessJobSpecTests(unittest.TestCase):
                 load_mode="ram",
                 cache_max_bytes=4096,
                 input_checkpoint_path="input.cp",
-                output_segmentation_path="output.npz",
-                output_segmentation_format="npz",
+                output_segmentation_path="output.zarr",
+                output_segmentation_format="zarr",
                 job_dir=str(Path(tmpdir) / ".headless-job"),
                 source_pid=123,
             )
@@ -102,8 +105,8 @@ class HeadlessJobSpecTests(unittest.TestCase):
             self.assertEqual(loaded.load_mode, "ram")
             self.assertEqual(loaded.cache_max_bytes, 4096)
             self.assertEqual(loaded.input_checkpoint_path, "input.cp")
-            self.assertEqual(loaded.output_segmentation_path, "output.npz")
-            self.assertEqual(loaded.output_segmentation_format, "npz")
+            self.assertEqual(loaded.output_segmentation_path, "output.zarr")
+            self.assertEqual(loaded.output_segmentation_format, "zarr")
             self.assertEqual(loaded.source_pid, 123)
 
     def test_inference_spec_allows_missing_input_segmentation(self) -> None:
@@ -112,8 +115,8 @@ class HeadlessJobSpecTests(unittest.TestCase):
             raw_volume_path="raw.npy",
             bbox_path="boxes.bbox.txt",
             input_checkpoint_path="input.cp",
-            output_segmentation_path="output.npy",
-            output_segmentation_format="npy",
+            output_segmentation_path="output.zarr",
+            output_segmentation_format="zarr",
         )
 
         self.assertIsNone(spec.segmentation_path)

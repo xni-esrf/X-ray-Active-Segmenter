@@ -12,6 +12,7 @@ import numpy as np
 
 from ..bbox import BoundingBox
 from ..utils import exception_message, torch_from_numpy_safe
+from .inference_geometry import DEFAULT_INFERENCE_MINIVOL_SIZE
 from .session_store import LearningBBoxTensorEntry
 
 
@@ -247,7 +248,7 @@ def run_learning_inference(
                     runtime = build_runtime(
                         entry,
                         label_values=normalized_labels,
-                        minivol_size=200,
+                        minivol_size=DEFAULT_INFERENCE_MINIVOL_SIZE,
                         batch_size=normalized_batch_size,
                         num_workers=8,
                         pin_memory=True,

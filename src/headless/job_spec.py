@@ -79,10 +79,9 @@ class HeadlessJobSpec:
                 name="output_segmentation_path",
             )
             output_format = str(self.output_segmentation_format or "").strip().lower()
-            if output_format not in {"tiff", "npy", "npz", "hdf5", "zarr"}:
+            if output_format != "zarr":
                 raise ValueError(
-                    "output_segmentation_format must be one of: "
-                    "tiff, npy, npz, hdf5, zarr"
+                    "output_segmentation_format must be 'zarr' for headless inference"
                 )
 
         source_pid = self.source_pid

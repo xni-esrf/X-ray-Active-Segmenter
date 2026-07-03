@@ -3,7 +3,6 @@ from __future__ import annotations
 import argparse
 import logging
 from pathlib import Path
-import shutil
 import sys
 from typing import Optional, Sequence, Tuple
 
@@ -12,15 +11,13 @@ import numpy as np
 from ..bbox import load_bounding_boxes
 from ..data import open_volume
 from ..io.loader import InMemoryVolumeLoader
-from ..io.saver import save_segmentation_volume
 from ..learning import (
     LearningSourceBundle,
     LearningSession,
-    apply_inference_predictions_to_array,
     instantiate_model_runtime_from_checkpoint,
     load_learning_sources_from_paths,
     prepare_learning_state_from_sources,
-    run_learning_inference,
+    run_large_crop_inference_to_zarr,
     save_foundation_model_checkpoint,
     train_learning_model_with_validation_loop,
     validate_foundation_checkpoint_load_preconditions,
@@ -343,8 +340,15 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
         raise ValueError("Inference jobs require output_segmentation_path.")
     if spec.output_segmentation_format is None:
         raise ValueError("Inference jobs require output_segmentation_format.")
+    if str(spec.output_segmentation_format).strip().lower() != "zarr":
+        raise ValueError("Headless large-crop inference requires Zarr output.")
 
     inference_boxes = _inference_boxes_from_sources(context.sources)
+    if len(inference_boxes) != 1:
+        raise ValueError(
+            "Headless large-crop inference currently requires exactly one inference bbox; "
+            f"got {len(inference_boxes)}."
+        )
     LOGGER.info(
         "Preparing headless inference: inference_boxes=%d checkpoint=%s",
         len(inference_boxes),
@@ -360,77 +364,38 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
         device_ids=tuple(checkpoint_preconditions.device_ids),
     )
 
-    raw_array = _read_full_volume_array(context.raw_volume)
-    segmentation_array = _read_full_volume_array(context.segmentation_volume)
-    tile_scratch_dir = _inference_tile_scratch_dir(spec)
-    tile_scratch_dir.mkdir(parents=True, exist_ok=False)
-    LOGGER.info("Headless inference tile scratch directory: %s", tile_scratch_dir)
+    inference_box = inference_boxes[0]
+    requested_bounds = (
+        (int(inference_box.z0), int(inference_box.z1)),
+        (int(inference_box.y0), int(inference_box.y1)),
+        (int(inference_box.x0), int(inference_box.x1)),
+    )
     LOGGER.info(
-        "Inference started: boxes=%d label_values=%s",
+        "Large-crop inference started: boxes=%d label_values=%s requested_bounds=%s",
         len(inference_boxes),
         tuple(int(value) for value in tuple(checkpoint_preconditions.label_values)),
+        requested_bounds,
     )
 
-    try:
-        inference_result = run_learning_inference(
-            model_runtime=runtime,
-            inference_boxes=inference_boxes,
-            raw_array=raw_array,
-            label_values=tuple(checkpoint_preconditions.label_values),
-            volume_shape=tuple(int(value) for value in tuple(context.raw_volume.shape)),
-            progress_callback=_log_inference_progress,
-            use_tiled_score_buffer=True,
-            tiled_temp_dir=str(tile_scratch_dir),
-            batch_size=int(spec.training_parameters.inference_batch_size),
-            async_accumulation=True,
-        )
-        (
-            output_array,
-            changed_voxel_count,
-            applied_box_ids,
-            apply_failures_by_box_id,
-        ) = apply_inference_predictions_to_array(
-            segmentation_array,
-            inference_result.predictions,
-        )
-        failures_by_box_id = dict(inference_result.failure_by_box_id)
-        failures_by_box_id.update(apply_failures_by_box_id)
-        if not applied_box_ids and failures_by_box_id:
-            raise RuntimeError(
-                "Headless inference failed for all boxes: "
-                + "; ".join(
-                    f"{box_id}: {message}"
-                    for box_id, message in sorted(failures_by_box_id.items())
-                )
-            )
-
-        output_volume = _open_output_segmentation_volume(
-            output_array,
-            path=spec.output_segmentation_path,
-            source_volume=context.segmentation_volume,
-        )
-        save_path = save_segmentation_volume(
-            output_volume,
-            spec.output_segmentation_path,
-            save_format=spec.output_segmentation_format,
-            overwrite=True,
-        )
-        LOGGER.info(
-            "Inference completed: boxes=%d applied=%d failed=%d changed_voxels=%d output=%s",
-            int(inference_result.total_count),
-            len(applied_box_ids),
-            len(failures_by_box_id),
-            int(changed_voxel_count),
-            save_path,
-        )
-        if failures_by_box_id:
-            for box_id, message in sorted(failures_by_box_id.items()):
-                LOGGER.warning("Inference box failed: box_id=%s error=%s", box_id, message)
-        for box_id, messages in sorted(inference_result.cleanup_errors_by_box_id.items()):
-            for message in tuple(messages):
-                LOGGER.warning("Inference cleanup warning: box_id=%s error=%s", box_id, message)
-    finally:
-        _remove_inference_tile_scratch_dir(tile_scratch_dir)
+    result = run_large_crop_inference_to_zarr(
+        model_runtime=runtime,
+        raw_volume=context.raw_volume,
+        requested_bounds=requested_bounds,
+        label_values=tuple(checkpoint_preconditions.label_values),
+        output_path=spec.output_segmentation_path,
+        output_dtype=_headless_inference_output_dtype(
+            tuple(checkpoint_preconditions.label_values),
+            context=context,
+        ),
+        overwrite=True,
+        batch_size=int(spec.training_parameters.inference_batch_size),
+    )
+    LOGGER.info(
+        "Large-crop inference completed: crops=%d written=%d output=%s",
+        int(result.plan.total_crop_count),
+        int(result.written_crop_count),
+        result.output_path,
+    )
 
 
 def _log_training_epoch_progress(progress: object) -> None:
@@ -453,18 +418,6 @@ def _log_training_epoch_progress(progress: object) -> None:
     )
 
 
-def _log_inference_progress(progress: object) -> None:
-    LOGGER.info(
-        "Inference progress: %d/%d boxes (%.1f%%), box_id=%s, status=%s, failed=%d",
-        int(getattr(progress, "completed_count")),
-        int(getattr(progress, "total_count")),
-        float(getattr(progress, "percent_complete")),
-        str(getattr(progress, "box_id")),
-        "ok" if bool(getattr(progress, "succeeded")) else "failed",
-        int(getattr(progress, "failed_count")),
-    )
-
-
 def _inference_boxes_from_sources(sources: object) -> Tuple[object, ...]:
     boxes_by_id = getattr(sources, "boxes_by_id", {})
     ordered_box_ids = tuple(getattr(sources, "ordered_box_ids", tuple(boxes_by_id)))
@@ -478,47 +431,26 @@ def _inference_boxes_from_sources(sources: object) -> Tuple[object, ...]:
     return tuple(boxes)
 
 
-def _read_full_volume_array(volume: object) -> np.ndarray:
-    return np.asarray(volume.get_chunk((slice(None), slice(None), slice(None))))
-
-
-def _inference_tile_scratch_dir(spec: HeadlessJobSpec) -> Path:
-    if spec.output_segmentation_path is None:
-        raise ValueError("Inference jobs require output_segmentation_path.")
-    output_path = Path(spec.output_segmentation_path).expanduser()
-    job_dir_name = Path(spec.job_dir).expanduser().name or "headless-job"
-    return output_path.parent / f".{output_path.name}.tiles-{job_dir_name}"
-
-
-def _remove_inference_tile_scratch_dir(path: Path) -> None:
-    if not path.exists():
-        return
-    LOGGER.info("Removing headless inference tile scratch directory: %s", path)
-    try:
-        shutil.rmtree(path)
-    except Exception:
-        LOGGER.warning(
-            "Failed to remove headless inference tile scratch directory: %s",
-            path,
-            exc_info=True,
-        )
-
-
-def _open_output_segmentation_volume(
-    array: np.ndarray,
+def _headless_inference_output_dtype(
+    label_values: Sequence[object],
     *,
-    path: str,
-    source_volume: object,
-) -> object:
-    source_info = getattr(source_volume, "info", None)
-    return open_volume(
-        InMemoryVolumeLoader(
-            path=path,
-            array=array,
-            voxel_spacing=getattr(source_info, "voxel_spacing", (1.0, 1.0, 1.0)),
-            axes=getattr(source_info, "axes", "zyx"),
-        )
-    )
+    context: _HeadlessInputContext,
+) -> np.dtype:
+    segmentation_volume = getattr(context, "segmentation_volume", None)
+    segmentation_dtype = getattr(segmentation_volume, "dtype", None)
+    if segmentation_dtype is not None:
+        return np.dtype(segmentation_dtype)
+
+    normalized_labels = tuple(int(value) for value in tuple(label_values))
+    if not normalized_labels:
+        return np.dtype(np.uint8)
+    min_label = min(normalized_labels)
+    max_label = max(normalized_labels)
+    if min_label >= 0 and max_label <= np.iinfo(np.uint8).max:
+        return np.dtype(np.uint8)
+    if min_label >= 0 and max_label <= np.iinfo(np.uint16).max:
+        return np.dtype(np.uint16)
+    return np.dtype(np.int64)
 
 
 def _persist_runtime_label_space_metadata(

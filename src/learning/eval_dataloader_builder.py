@@ -14,6 +14,7 @@ from .eval_bbox_dataset import (
     InferenceDestVolBuffer,
     TiledInferenceDestVolBuffer,
 )
+from .inference_geometry import DEFAULT_INFERENCE_MINIVOL_SIZE
 from .label_utils import MASK_LABEL, coerce_label_values
 from .label_space import LearningLabelSpace
 from .session_store import (
@@ -309,7 +310,7 @@ def build_eval_dataloader_runtimes_from_batch(
     batch: LearningBBoxTensorBatch,
     *,
     label_values: Optional[Sequence[object]] = None,
-    minivol_size: int = 200,
+    minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
     batch_size: int = 4,
     num_workers: int = 8,
     pin_memory: bool = True,
@@ -399,7 +400,7 @@ def build_eval_dataloader_runtimes_from_batch(
 def build_eval_dataloader_runtimes_from_current_batch(
     *,
     label_values: Optional[Sequence[object]] = None,
-    minivol_size: int = 200,
+    minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
     batch_size: int = 4,
     num_workers: int = 8,
     pin_memory: bool = True,
@@ -437,7 +438,7 @@ def build_inference_dataloader_runtime_from_entry(
     entry: LearningBBoxTensorEntry,
     *,
     label_values: Sequence[object],
-    minivol_size: int = 200,
+    minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
     batch_size: int = 4,
     num_workers: int = 8,
     pin_memory: bool = True,
@@ -514,7 +515,7 @@ def build_inference_dataloader_runtimes_from_batch(
     batch: LearningBBoxTensorBatch,
     *,
     label_values: Sequence[object],
-    minivol_size: int = 200,
+    minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
     batch_size: int = 4,
     num_workers: int = 8,
     pin_memory: bool = True,

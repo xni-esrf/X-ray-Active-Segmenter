@@ -2039,7 +2039,7 @@ class MainWindow(QMainWindow):
             dialog_result = open_save_segmentation_dialog(self)
             if not dialog_result.accepted or not dialog_result.path or not dialog_result.format:
                 raise RuntimeError("Headless inference canceled: no output segmentation selected.")
-            output_path = str(Path(dialog_result.path).expanduser())
+            output_path = str(Path(dialog_result.path).expanduser().with_suffix(".zarr"))
             if Path(output_path).exists() and not confirm_overwrite(output_path, parent=self):
                 continue
             return HeadlessJobSpec(
@@ -2053,7 +2053,7 @@ class MainWindow(QMainWindow):
                 training_parameters=validate_training_parameters(self._training_parameters),
                 input_checkpoint_path=input_checkpoint_path,
                 output_segmentation_path=output_path,
-                output_segmentation_format=str(dialog_result.format),
+                output_segmentation_format="zarr",
                 job_dir=str(job_dir),
                 source_pid=os.getpid(),
             )
@@ -2149,6 +2149,10 @@ class MainWindow(QMainWindow):
         if not inference_boxes:
             raise RuntimeError(
                 "Headless inference requires at least one bbox labeled 'inference'."
+            )
+        if len(inference_boxes) != 1:
+            raise RuntimeError(
+                "Headless large-crop inference requires exactly one bbox labeled 'inference'."
             )
         overlapping_pairs = _find_overlapping_box_id_pairs(inference_boxes)
         if overlapping_pairs:

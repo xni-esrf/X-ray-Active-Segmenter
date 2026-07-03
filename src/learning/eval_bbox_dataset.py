@@ -20,6 +20,10 @@ except Exception:  # pragma: no cover - import availability is environment depen
         pass
 
 from .label_utils import MASK_LABEL, coerce_label_values
+from .inference_geometry import (
+    DEFAULT_INFERENCE_MINIVOL_SIZE,
+    inference_stride_for_minivol_size,
+)
 
 
 def _require_torch():
@@ -389,7 +393,11 @@ def compute_volume_weighted_mean_score(
 
 
 class EvalBBoxDataset(Dataset):
-    def __init__(self, vol, minivol_size: int = 200) -> None:
+    def __init__(
+        self,
+        vol,
+        minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
+    ) -> None:
         torch_mod = _require_torch()
         if not isinstance(vol, torch_mod.Tensor):
             raise TypeError(f"vol must be a torch.Tensor, got {type(vol).__name__}")
@@ -399,9 +407,7 @@ class EvalBBoxDataset(Dataset):
         self.vol = vol
         self.minivol_size = _coerce_positive_int(minivol_size, name="minivol_size")
         self.volume_shape = tuple(int(v) for v in self.vol.shape)
-        stride = int(self.minivol_size // 2)
-        if stride <= 0:
-            raise ValueError("minivol_size must be >= 2 for overlap extraction")
+        stride = inference_stride_for_minivol_size(self.minivol_size)
 
         self.nb_minivol_z = (self.volume_shape[0] // stride) - 1
         self.nb_minivol_x = (self.volume_shape[1] // stride) - 1
@@ -458,7 +464,7 @@ class DestVolBuffer:
         ground_truth,
         volume_shape,
         label_values: Sequence[object],
-        minivol_size: int = 200,
+        minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
     ) -> None:
         torch_mod = _require_torch()
         if not isinstance(ground_truth, torch_mod.Tensor):
@@ -520,7 +526,7 @@ class InferenceDestVolBuffer:
         self,
         volume_shape,
         label_values: Sequence[object],
-        minivol_size: int = 200,
+        minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
     ) -> None:
         torch_mod = _require_torch()
         if len(volume_shape) != 3:
@@ -565,7 +571,7 @@ class TiledInferenceDestVolBuffer:
         self,
         volume_shape,
         label_values: Sequence[object],
-        minivol_size: int = 200,
+        minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
         tile_shape: Sequence[object] = (256, 256, 256),
         temp_dir: Optional[str] = None,
     ) -> None:

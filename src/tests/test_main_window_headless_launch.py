@@ -117,8 +117,8 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             self.assertEqual(spec.raw_volume_path, str(raw_path))
             self.assertEqual(spec.segmentation_path, str(seg_path))
             self.assertEqual(spec.bbox_path, str(bbox_path))
-            self.assertEqual(spec.output_segmentation_path, str(output_seg_path))
-            self.assertEqual(spec.output_segmentation_format, "npy")
+            self.assertEqual(spec.output_segmentation_path, str(output_seg_path.with_suffix(".zarr")))
+            self.assertEqual(spec.output_segmentation_format, "zarr")
             self.assertIsNone(window._raw_volume)
             self.assertIsNone(window._semantic_volume)
             self.assertIsNone(window._segmentation_editor)
@@ -169,7 +169,8 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             self.assertEqual(spec.kind, "inference")
             self.assertIsNone(spec.segmentation_path)
             self.assertEqual(spec.segmentation_kind, "semantic")
-            self.assertEqual(spec.output_segmentation_path, str(output_seg_path))
+            self.assertEqual(spec.output_segmentation_path, str(output_seg_path.with_suffix(".zarr")))
+            self.assertEqual(spec.output_segmentation_format, "zarr")
 
     def test_train_headless_close_refuses_when_dirty_segmentation_save_is_canceled(self) -> None:
         with TemporaryDirectory() as tmpdir:

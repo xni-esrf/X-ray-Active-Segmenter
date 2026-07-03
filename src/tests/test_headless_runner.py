@@ -12,7 +12,6 @@ from src.bbox import BoundingBox, save_bounding_boxes
 from src.headless.job_spec import HeadlessJobSpec, save_headless_job_spec
 from src.headless.runner import main as headless_main
 from src.learning import TrainingParameters
-from src.learning.inference import LearningInferencePrediction
 import src.headless.runner as runner_module
 
 
@@ -426,8 +425,8 @@ class HeadlessRunnerTests(unittest.TestCase):
                 load_mode="lazy",
                 cache_max_bytes=1024 * 1024,
                 input_checkpoint_path=str(checkpoint_path),
-                output_segmentation_path=str(root / "out.npy"),
-                output_segmentation_format="npy",
+                output_segmentation_path=str(root / "out.zarr"),
+                output_segmentation_format="zarr",
                 job_dir=str(job_dir),
             )
             save_headless_job_spec(spec, str(job_path))
@@ -472,8 +471,8 @@ class HeadlessRunnerTests(unittest.TestCase):
                 load_mode="lazy",
                 cache_max_bytes=1024 * 1024,
                 input_checkpoint_path=str(checkpoint_path),
-                output_segmentation_path=str(root / "out.npy"),
-                output_segmentation_format="npy",
+                output_segmentation_path=str(root / "out.zarr"),
+                output_segmentation_format="zarr",
                 job_dir=str(job_dir),
             )
             save_headless_job_spec(spec, str(job_path))
@@ -620,7 +619,7 @@ class HeadlessRunnerTests(unittest.TestCase):
         self.assertTrue(runtime.hyperparameters["trained_in_app"])
         self.assertEqual(runtime.hyperparameters["training_run_count"], 1)
 
-    def test_inference_job_orchestration_loads_checkpoint_applies_predictions_and_saves_output(self) -> None:
+    def test_inference_job_orchestration_runs_large_crop_zarr_inference(self) -> None:
         inference_box = BoundingBox.from_bounds(
             box_id="infer-box",
             z0=0,
@@ -662,22 +661,11 @@ class HeadlessRunnerTests(unittest.TestCase):
             segmentation_volume=segmentation_volume,
         )
         runtime = SimpleNamespace(model=object())
-        prediction = LearningInferencePrediction(
-            box=inference_box,
-            predicted_bbox=np.ones((1, 2, 2), dtype=np.uint8),
-        )
-        inference_result = SimpleNamespace(
-            total_count=1,
-            predictions=(prediction,),
-            failure_by_box_id={},
-            cleanup_errors_by_box_id={},
-        )
         tmpdir_cm = TemporaryDirectory()
         self.addCleanup(tmpdir_cm.cleanup)
         root = Path(tmpdir_cm.name)
-        output_path = root / "output.npy"
+        output_path = root / "output.zarr"
         job_dir = root / ".headless-job" / "inference-job"
-        expected_scratch_dir = root / f".{output_path.name}.tiles-{job_dir.name}"
         spec = HeadlessJobSpec(
             kind="inference",
             raw_volume_path="raw.npy",
@@ -686,28 +674,10 @@ class HeadlessRunnerTests(unittest.TestCase):
             bbox_path="boxes.json",
             input_checkpoint_path="input.cp",
             output_segmentation_path=str(output_path),
-            output_segmentation_format="npy",
+            output_segmentation_format="zarr",
             training_parameters=TrainingParameters(inference_batch_size=9),
             job_dir=str(job_dir),
         )
-
-        saved_arrays = []
-
-        def fake_save(volume, path, *, save_format, overwrite=False):
-            saved_arrays.append(
-                np.asarray(volume.get_chunk((slice(None), slice(None), slice(None))))
-            )
-            self.assertEqual(path, str(output_path))
-            self.assertEqual(save_format, "npy")
-            self.assertTrue(overwrite)
-            return path
-
-        def fake_inference(**kwargs):
-            scratch_dir = Path(kwargs["tiled_temp_dir"])
-            self.assertEqual(scratch_dir, expected_scratch_dir)
-            self.assertTrue(scratch_dir.exists())
-            (scratch_dir / "tile.bin").write_bytes(b"tile")
-            return inference_result
 
         with patch.object(
             runner_module,
@@ -723,13 +693,13 @@ class HeadlessRunnerTests(unittest.TestCase):
             return_value=runtime,
         ) as instantiate_mock, patch.object(
             runner_module,
-            "run_learning_inference",
-            side_effect=fake_inference,
-        ) as inference_mock, patch.object(
-            runner_module,
-            "save_segmentation_volume",
-            side_effect=fake_save,
-        ) as save_mock:
+            "run_large_crop_inference_to_zarr",
+            return_value=SimpleNamespace(
+                output_path=str(output_path),
+                plan=SimpleNamespace(total_crop_count=1),
+                written_crop_count=1,
+            ),
+        ) as inference_mock:
             runner_module._run_inference_job(spec, context)
 
         validate_mock.assert_called_once_with("input.cp", require_min_gpu_count=2)
@@ -740,23 +710,113 @@ class HeadlessRunnerTests(unittest.TestCase):
         )
         inference_mock.assert_called_once()
         self.assertEqual(inference_mock.call_args.kwargs["model_runtime"], runtime)
-        self.assertEqual(inference_mock.call_args.kwargs["inference_boxes"], (inference_box,))
-        self.assertEqual(inference_mock.call_args.kwargs["label_values"], (0, 1))
-        self.assertEqual(inference_mock.call_args.kwargs["volume_shape"], (2, 2, 2))
-        self.assertTrue(callable(inference_mock.call_args.kwargs["progress_callback"]))
-        self.assertIs(inference_mock.call_args.kwargs["use_tiled_score_buffer"], True)
-        self.assertIs(inference_mock.call_args.kwargs["async_accumulation"], True)
-        self.assertEqual(inference_mock.call_args.kwargs["batch_size"], 9)
+        self.assertIs(inference_mock.call_args.kwargs["raw_volume"], raw_volume)
         self.assertEqual(
-            inference_mock.call_args.kwargs["tiled_temp_dir"],
-            str(expected_scratch_dir),
+            inference_mock.call_args.kwargs["requested_bounds"],
+            ((0, 1), (0, 2), (0, 2)),
         )
-        save_mock.assert_called_once()
-        self.assertEqual(len(saved_arrays), 1)
-        expected = np.zeros((2, 2, 2), dtype=np.uint8)
-        expected[0:1, 0:2, 0:2] = 1
-        np.testing.assert_array_equal(saved_arrays[0], expected)
-        self.assertFalse(expected_scratch_dir.exists())
+        self.assertEqual(inference_mock.call_args.kwargs["label_values"], (0, 1))
+        self.assertEqual(inference_mock.call_args.kwargs["output_path"], str(output_path))
+        self.assertEqual(inference_mock.call_args.kwargs["output_dtype"], np.dtype(np.uint8))
+        self.assertIs(inference_mock.call_args.kwargs["overwrite"], True)
+        self.assertEqual(inference_mock.call_args.kwargs["batch_size"], 9)
+
+    def test_inference_job_rejects_non_zarr_output_before_model_setup(self) -> None:
+        inference_box = BoundingBox.from_bounds(
+            box_id="infer-box",
+            z0=0,
+            z1=1,
+            y0=0,
+            y1=1,
+            x0=0,
+            x1=1,
+            label="inference",
+            volume_shape=(1, 1, 1),
+        )
+        raw_volume = _FakeVolume(np.zeros((1, 1, 1), dtype=np.float32), axes="zyx")
+        segmentation_volume = _FakeVolume(np.zeros((1, 1, 1), dtype=np.uint8), axes="zyx")
+        context = SimpleNamespace(
+            sources=SimpleNamespace(
+                raw_volume=raw_volume,
+                segmentation_volume=segmentation_volume,
+                boxes_by_id={"infer-box": inference_box},
+                ordered_box_ids=("infer-box",),
+            ),
+            raw_volume=raw_volume,
+            segmentation_volume=segmentation_volume,
+        )
+        spec = SimpleNamespace(
+            input_checkpoint_path="input.cp",
+            output_segmentation_path="output.npy",
+            output_segmentation_format="npy",
+        )
+
+        with patch.object(
+            runner_module,
+            "validate_foundation_checkpoint_load_preconditions",
+        ) as validate_mock:
+            with self.assertRaisesRegex(ValueError, "Zarr output"):
+                runner_module._run_inference_job(spec, context)
+
+        validate_mock.assert_not_called()
+
+    def test_inference_job_requires_exactly_one_inference_box_before_model_setup(self) -> None:
+        first_box = BoundingBox.from_bounds(
+            box_id="infer-a",
+            z0=0,
+            z1=1,
+            y0=0,
+            y1=1,
+            x0=0,
+            x1=1,
+            label="inference",
+            volume_shape=(2, 2, 2),
+        )
+        second_box = BoundingBox.from_bounds(
+            box_id="infer-b",
+            z0=1,
+            z1=2,
+            y0=1,
+            y1=2,
+            x0=1,
+            x1=2,
+            label="inference",
+            volume_shape=(2, 2, 2),
+        )
+        raw_volume = _FakeVolume(np.zeros((2, 2, 2), dtype=np.float32), axes="zyx")
+        segmentation_volume = _FakeVolume(np.zeros((2, 2, 2), dtype=np.uint8), axes="zyx")
+        context = SimpleNamespace(
+            sources=SimpleNamespace(
+                raw_volume=raw_volume,
+                segmentation_volume=segmentation_volume,
+                boxes_by_id={
+                    "infer-a": first_box,
+                    "infer-b": second_box,
+                },
+                ordered_box_ids=("infer-a", "infer-b"),
+            ),
+            raw_volume=raw_volume,
+            segmentation_volume=segmentation_volume,
+        )
+        spec = HeadlessJobSpec(
+            kind="inference",
+            raw_volume_path="raw.npy",
+            segmentation_path="seg.npy",
+            segmentation_kind="semantic",
+            bbox_path="boxes.json",
+            input_checkpoint_path="input.cp",
+            output_segmentation_path="output.zarr",
+            output_segmentation_format="zarr",
+        )
+
+        with patch.object(
+            runner_module,
+            "validate_foundation_checkpoint_load_preconditions",
+        ) as validate_mock:
+            with self.assertRaisesRegex(ValueError, "exactly one inference bbox"):
+                runner_module._run_inference_job(spec, context)
+
+        validate_mock.assert_not_called()
 
 
 class _FakeVolume:
