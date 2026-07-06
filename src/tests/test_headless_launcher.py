@@ -65,15 +65,15 @@ class HeadlessLauncherTests(unittest.TestCase):
             self.assertTrue(kwargs["close_fds"])
             self.assertTrue(kwargs["start_new_session"])
             self.assertEqual(kwargs["cwd"], str(Path.cwd()))
-            self.assertEqual(kwargs["stdout"].name, str(job_dir / "runner.log"))
-            self.assertEqual(kwargs["stderr"].name, str(job_dir / "runner.log"))
+            self.assertEqual(kwargs["stdout"].name, str(job_dir / "headless.log"))
+            self.assertEqual(kwargs["stderr"].name, str(job_dir / "headless.log"))
             log_text = (job_dir / "headless.log").read_text(encoding="utf-8")
             self.assertIn("Waiting for UI process 123 to exit", log_text)
-            self.assertIn("Runner stdout/stderr:", log_text)
+            self.assertIn("Runner stdout/stderr will be appended to this log", log_text)
             self.assertIn("Headless runner started with PID 456", log_text)
             self.assertIn("Launcher exiting; runner continues independently", log_text)
             self.assertEqual((job_dir / "runner.pid").read_text(encoding="utf-8"), "456\n")
-            self.assertTrue((job_dir / "runner.log").exists())
+            self.assertFalse((job_dir / "runner.log").exists())
 
     def test_uses_job_parent_for_log_when_job_dir_is_missing(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -93,7 +93,7 @@ class HeadlessLauncherTests(unittest.TestCase):
 
             self.assertEqual(exit_code, 0)
             self.assertTrue((root / "headless.log").exists())
-            self.assertTrue((root / "runner.log").exists())
+            self.assertFalse((root / "runner.log").exists())
             self.assertEqual((root / "runner.pid").read_text(encoding="utf-8"), "789\n")
 
     def test_returns_nonzero_and_does_not_write_pid_when_spawn_fails(self) -> None:

@@ -510,6 +510,13 @@ def _setup_headless_logging(*, spec: HeadlessJobSpec, log_level: str) -> None:
     job_dir.mkdir(parents=True, exist_ok=True)
     log_path = job_dir / "headless.log"
     root_logger = logging.getLogger()
+    for handler in list(root_logger.handlers):
+        if isinstance(handler, logging.StreamHandler) and not isinstance(
+            handler,
+            logging.FileHandler,
+        ):
+            root_logger.removeHandler(handler)
+            handler.close()
     formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(name)s | %(message)s")
     file_handler = logging.FileHandler(log_path, encoding="utf-8")
     file_handler.setFormatter(formatter)

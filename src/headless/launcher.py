@@ -47,7 +47,6 @@ def launch_headless_after_ui_exit(
     normalized_job_path = str(Path(job_path).expanduser())
     runner = runner_path or _default_runner_path()
     log_path = _headless_log_path(normalized_job_path)
-    runner_log_path = _runner_log_path(normalized_job_path)
     runner_pid_path = _runner_pid_path(normalized_job_path)
     _emit(log_path, f"Headless job queued: {normalized_job_path}")
     _emit(log_path, f"Waiting for UI process {wait_pid} to exit before loading data.")
@@ -68,12 +67,12 @@ def launch_headless_after_ui_exit(
 
     _emit(log_path, "UI process exited; starting headless runner.")
     _emit(log_path, "Command: " + shlex.join(command))
-    _emit(log_path, f"Runner stdout/stderr: {runner_log_path}")
+    _emit(log_path, "Runner stdout/stderr will be appended to this log.")
     _remove_runner_pid(runner_pid_path)
     try:
         process = _spawn_detached_runner(
             command,
-            runner_log_path=runner_log_path,
+            output_log_path=log_path,
             popen_fn=popen_fn,
         )
         pid = _process_pid(process)
@@ -132,10 +131,6 @@ def _headless_log_path(job_path: str) -> Path:
     return _job_dir_for_path(job_path) / "headless.log"
 
 
-def _runner_log_path(job_path: str) -> Path:
-    return _job_dir_for_path(job_path) / "runner.log"
-
-
 def _runner_pid_path(job_path: str) -> Path:
     return _job_dir_for_path(job_path) / "runner.pid"
 
@@ -177,10 +172,10 @@ def _process_pid(process: object) -> int:
 def _spawn_detached_runner(
     command: Sequence[str],
     *,
-    runner_log_path: Path,
+    output_log_path: Path,
     popen_fn: Callable[..., object],
 ) -> object:
-    with Path(os.devnull).open("rb") as stdin_handle, runner_log_path.open(
+    with Path(os.devnull).open("rb") as stdin_handle, output_log_path.open(
         "a",
         encoding="utf-8",
     ) as output_handle:
