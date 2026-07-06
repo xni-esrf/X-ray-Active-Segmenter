@@ -58,7 +58,7 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         )
 
     def test_training_loop_stops_early_and_restores_best_weights(self) -> None:
-        preconditions = self._make_preconditions(train_box_count=3)
+        preconditions = self._make_preconditions(train_box_count=16)
         model = preconditions.model_runtime.model
 
         def _train_side_effect(**kwargs):
@@ -77,7 +77,7 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
                 object(),
             )
 
-        eval_values = iter((0.50, 0.60, 0.55, 0.54))
+        eval_values = iter((0.60, 0.55, 0.54, 0.53, 0.52, 0.51, 0.50, 0.49))
 
         def _eval_side_effect(**_kwargs):
             value = float(next(eval_values))
@@ -103,14 +103,15 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
                 device="cpu",
             )
 
-        self.assertEqual(train_mock.call_count, 4)
-        self.assertEqual(eval_mock.call_count, 4)
-        self.assertEqual(result.completed_epoch_count, 4)
-        self.assertEqual(result.total_epoch_count, 6)
+        self.assertEqual(train_mock.call_count, 8)
+        self.assertEqual(eval_mock.call_count, 8)
+        self.assertEqual(result.completed_epoch_count, 8)
+        self.assertEqual(result.total_epoch_count, 8)
         self.assertEqual(result.stop_reason, "early_stop")
-        self.assertEqual(result.best_epoch, 2)
+        self.assertEqual(result.best_epoch, 1)
         self.assertAlmostEqual(result.best_weighted_mean_dice, 0.60, places=10)
-        self.assertAlmostEqual(float(model.weight.detach().item()), 2.0, places=10)
+        self.assertEqual(result.early_stop_patience, 7)
+        self.assertAlmostEqual(float(model.weight.detach().item()), 1.0, places=10)
 
     def test_training_loop_reports_epoch_progress(self) -> None:
         preconditions = self._make_preconditions(train_box_count=2)
@@ -237,7 +238,7 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         self.assertEqual(result.best_epoch, 3)
 
     def test_training_loop_runs_to_max_epoch_and_reports_best_epoch(self) -> None:
-        preconditions = self._make_preconditions(train_box_count=2)
+        preconditions = self._make_preconditions(train_box_count=8)
         model = preconditions.model_runtime.model
 
         def _train_side_effect(**kwargs):
@@ -287,6 +288,7 @@ class LearningModelTrainingLoopTests(unittest.TestCase):
         self.assertEqual(result.stop_reason, "max_epoch")
         self.assertEqual(result.best_epoch, 4)
         self.assertAlmostEqual(result.best_weighted_mean_dice, 0.40, places=10)
+        self.assertEqual(result.early_stop_patience, 4)
         self.assertAlmostEqual(float(model.weight.detach().item()), 4.0, places=10)
 
     def test_training_loop_restores_best_state_when_eval_metric_is_not_finite(self) -> None:

@@ -126,11 +126,11 @@ class HeadlessJobSpec:
                 ),
                 patches_per_epoch=raw_training_parameters.get(
                     "patches_per_epoch",
-                    1000,
+                    DEFAULT_TRAINING_PARAMETERS.patches_per_epoch,
                 ),
                 early_stopping_patience=raw_training_parameters.get(
                     "early_stopping_patience",
-                    2,
+                    DEFAULT_TRAINING_PARAMETERS.early_stopping_patience,
                 ),
             )
         else:

@@ -245,7 +245,7 @@ class MainWindowLearningStatePreparationFlowTests(unittest.TestCase):
         self.assertEqual(tuple(extract_args.args[1].shape), (16, 16, 16))
         self.assertEqual(extract_args.kwargs["ordered_box_ids"], ("bbox_0007", "bbox_0008"))
         self.assertNotIn("bbox_0010", extract_args.kwargs["ordered_box_ids"])
-        self.assertEqual(extract_args.kwargs["learning_minivol_per_epoch"], 1000)
+        self.assertEqual(extract_args.kwargs["learning_minivol_per_epoch"], 2000)
         self.assertEqual(extract_args.kwargs["learning_batch_size"], 4)
         self.assertEqual(extract_args.kwargs["learning_num_workers"], 8)
         self.assertTrue(extract_args.kwargs["learning_pin_memory"])

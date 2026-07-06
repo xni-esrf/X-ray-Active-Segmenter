@@ -72,13 +72,13 @@ class LearningTrainingWorker(QObject):
         super().__init__(parent)
         self._preconditions = None
         self._stop_event = Event()
-        self._early_stop_patience = 2
+        self._early_stop_patience = 7
 
     def configure(
         self,
         *,
         preconditions: object,
-        early_stop_patience: int = 2,
+        early_stop_patience: int = 7,
     ) -> None:
         self._preconditions = preconditions
         self._early_stop_patience = self._coerce_early_stop_patience(

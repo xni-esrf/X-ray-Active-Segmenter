@@ -12,8 +12,8 @@ class TrainingParameters:
     training_batch_size: int = 4
     validation_batch_size: int = 4
     inference_batch_size: int = 4
-    patches_per_epoch: int = 1000
-    early_stopping_patience: int = 2
+    patches_per_epoch: int = 2000
+    early_stopping_patience: int = 7
 
 
 DEFAULT_TRAINING_PARAMETERS = TrainingParameters()

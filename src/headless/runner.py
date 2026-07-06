@@ -291,8 +291,8 @@ def _run_training_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) -> 
     )
     LOGGER.info(
         "Training started: total epochs=%d, early_stop_patience=%d",
-        int(2 * preconditions.train_runtime.train_count),
-        int(spec.training_parameters.early_stopping_patience),
+        max(1, (int(preconditions.train_runtime.train_count) + 1) // 2),
+        min(7, max(1, (int(preconditions.train_runtime.train_count) + 1) // 2)),
     )
     periodic_checkpoints = _HeadlessPeriodicCheckpointManager(
         runtime=preconditions.model_runtime,

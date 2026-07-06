@@ -1267,7 +1267,7 @@ class LearningBBoxTensorExtractionTests(unittest.TestCase):
         self.assertEqual(dataloader_runtime.train_box_ids, ("bbox_0002",))
         self.assertEqual(dataloader_runtime.train_count, 1)
         self.assertEqual(dataloader_runtime.minivol_size, FIXED_LEARNING_MINIVOL_SIZE)
-        self.assertEqual(dataloader_runtime.minivol_per_epoch, 1000)
+        self.assertEqual(dataloader_runtime.minivol_per_epoch, 2000)
         self.assertEqual(current.entries[0].label, "validation")
         self.assertEqual(current.entries[1].label, "train")
         self.assertEqual(current.entries[0].raw_tensor.dtype, torch.float16)
@@ -1995,8 +1995,8 @@ class LearningBBoxTensorExtractionTests(unittest.TestCase):
         self.assertEqual(len(datasets), 2)
         self.assertEqual(len(samplers), 2)
         self.assertEqual(len(loaders), 2)
-        self.assertEqual(datasets[0].minivol_per_epoch, 1000)
-        self.assertEqual(datasets[1].minivol_per_epoch, 1000)
+        self.assertEqual(datasets[0].minivol_per_epoch, 2000)
+        self.assertEqual(datasets[1].minivol_per_epoch, 2000)
 
         # Previous runtime components are disposed when replaced on the second call.
         self.assertEqual(loaders[0]._iterator.shutdown_calls, 1)
@@ -2056,7 +2056,7 @@ class LearningBBoxTensorExtractionTests(unittest.TestCase):
         self.assertIsNotNone(runtime)
         self.assertEqual(runtime.train_count, 2)
         self.assertEqual(runtime.minivol_size, FIXED_LEARNING_MINIVOL_SIZE)
-        self.assertEqual(runtime.minivol_per_epoch, 1000)
+        self.assertEqual(runtime.minivol_per_epoch, 2000)
 
 
 if __name__ == "__main__":

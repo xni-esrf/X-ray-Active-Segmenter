@@ -10,6 +10,7 @@ import numpy as np
 
 from ..bbox.model import BoundingBox
 from ..learning import (
+    DEFAULT_TRAINING_PARAMETERS,
     LearningBBoxTensorBatch,
     LearningBBoxTensorEntry,
     LearningSession,
@@ -1041,7 +1042,9 @@ def extract_learning_bboxes_in_memory(
         )
 
         if learning_minivol_per_epoch is None:
-            resolved_minivol_per_epoch = 1000
+            resolved_minivol_per_epoch = int(
+                DEFAULT_TRAINING_PARAMETERS.patches_per_epoch
+            )
         else:
             resolved_minivol_per_epoch = int(learning_minivol_per_epoch)
 

@@ -18,8 +18,8 @@ class TrainingParametersTests(unittest.TestCase):
                 training_batch_size=4,
                 validation_batch_size=4,
                 inference_batch_size=4,
-                patches_per_epoch=1000,
-                early_stopping_patience=2,
+                patches_per_epoch=2000,
+                early_stopping_patience=7,
             ),
         )
 

@@ -161,6 +161,25 @@ def _is_stop_requested(stop_event: Optional[object]) -> bool:
     return bool(is_set())
 
 
+def _default_total_epoch_count(train_count: int) -> int:
+    normalized_train_count = _require_int(train_count, name="train_count")
+    if normalized_train_count <= 0:
+        raise ValueError(f"train_count must be >= 1, got {normalized_train_count}")
+    return max(1, (normalized_train_count + 1) // 2)
+
+
+def _effective_early_stop_patience(total_epoch_count: int) -> int:
+    normalized_total_epoch_count = _require_int(
+        total_epoch_count,
+        name="total_epoch_count",
+    )
+    if normalized_total_epoch_count <= 0:
+        raise ValueError(
+            f"total_epoch_count must be >= 1, got {normalized_total_epoch_count}"
+        )
+    return min(7, normalized_total_epoch_count)
+
+
 def _resolve_torch(torch_module: Optional[object] = None):
     if torch_module is not None:
         return torch_module
@@ -1161,7 +1180,7 @@ def train_learning_model_with_validation_loop(
     train_runtime: Optional[LearningBBoxDataLoaderRuntime] = None,
     eval_runtimes_by_box_id: Optional[Mapping[str, LearningBBoxEvalRuntime]] = None,
     mixed_precision: bool = True,
-    early_stop_patience: int = 2,
+    early_stop_patience: int = 7,
     total_epoch_count: Optional[int] = None,
     label_smoothing: float = 0.025,
     ignore_index: int = MASK_LABEL,
@@ -1177,9 +1196,9 @@ def train_learning_model_with_validation_loop(
         raise ImportError("PyTorch is required to run the learning training loop.")
 
     normalized_mixed_precision = _require_bool(mixed_precision, name="mixed_precision")
-    normalized_patience = _require_int(early_stop_patience, name="early_stop_patience")
-    if normalized_patience <= 0:
-        raise ValueError(f"early_stop_patience must be >= 1, got {normalized_patience}")
+    requested_patience = _require_int(early_stop_patience, name="early_stop_patience")
+    if requested_patience <= 0:
+        raise ValueError(f"early_stop_patience must be >= 1, got {requested_patience}")
 
     if preconditions is None:
         preconditions = validate_learning_model_training_preconditions(
@@ -1199,7 +1218,9 @@ def train_learning_model_with_validation_loop(
 
     resolved_total_epoch_count: int
     if total_epoch_count is None:
-        resolved_total_epoch_count = int(2 * preconditions.train_runtime.train_count)
+        resolved_total_epoch_count = _default_total_epoch_count(
+            preconditions.train_runtime.train_count
+        )
     else:
         resolved_total_epoch_count = _require_int(total_epoch_count, name="total_epoch_count")
     if resolved_total_epoch_count <= 0:
@@ -1207,6 +1228,7 @@ def train_learning_model_with_validation_loop(
             "total_epoch_count must be >= 1. "
             f"Resolved value: {resolved_total_epoch_count}."
         )
+    normalized_patience = _effective_early_stop_patience(resolved_total_epoch_count)
 
     model = preconditions.model_runtime.model
     scaler = None
