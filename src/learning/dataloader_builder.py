@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence as SequenceABC
+import inspect
 from numbers import Integral
 from typing import Callable, Optional, Tuple
 
@@ -54,7 +55,18 @@ def _default_dataloader_factory():
         from torch.utils.data import DataLoader
     except ImportError as exc:  # pragma: no cover - environment dependent
         raise ImportError("PyTorch is required to build the learning DataLoader") from exc
-    return DataLoader
+
+    dataloader_parameters = inspect.signature(DataLoader).parameters
+
+    def _factory(dataset, **kwargs):
+        if (
+            int(kwargs.get("num_workers", 0)) > 0
+            and "persistent_workers" in dataloader_parameters
+        ):
+            kwargs.setdefault("persistent_workers", True)
+        return DataLoader(dataset, **kwargs)
+
+    return _factory
 
 
 def _train_entries(batch: LearningBBoxTensorBatch) -> Tuple[LearningBBoxTensorEntry, ...]:

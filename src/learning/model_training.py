@@ -961,15 +961,16 @@ def train_learning_model_for_one_epoch(
     autocast_enabled = bool(normalized_mixed_precision and resolved_device_type == "cuda")
 
     num_batches = 0
-    cumulative_loss = 0.0
+    cumulative_loss = None
     for minivols, target_annotations in dataloader:
         if _is_stop_requested(stop_event):
             raise _LearningTrainingStopRequested("Training stop requested by user.")
 
-        minivols = minivols.to(resolved_device)
+        minivols = minivols.to(resolved_device, non_blocking=True)
         target_annotations = target_annotations.to(
             device=resolved_device,
             dtype=getattr(torch_mod, "long"),
+            non_blocking=True,
         )
         # CrossEntropyLoss expects compact channel indices; tensors store semantic labels.
         target_annotations = encode_target_labels(
@@ -982,7 +983,10 @@ def train_learning_model_for_one_epoch(
         zero_grad = getattr(optimizer, "zero_grad", None)
         if not callable(zero_grad):
             raise TypeError("optimizer must define a callable zero_grad()")
-        zero_grad()
+        try:
+            zero_grad(set_to_none=True)
+        except TypeError:
+            zero_grad()
 
         with getattr(torch_mod, "autocast")(
             device_type=resolved_device_type,
@@ -1011,7 +1015,12 @@ def train_learning_model_for_one_epoch(
             raise TypeError("scaler must define a callable update()")
         update_method()
 
-        cumulative_loss += float(cur_loss.detach().item())
+        detached_loss = cur_loss.detach()
+        cumulative_loss = (
+            detached_loss
+            if cumulative_loss is None
+            else cumulative_loss + detached_loss
+        )
         num_batches += 1
 
     if num_batches <= 0:
@@ -1019,12 +1028,15 @@ def train_learning_model_for_one_epoch(
             raise _LearningTrainingStopRequested("Training stop requested by user.")
         raise ValueError("Training dataloader produced zero batches for the epoch.")
 
+    if cumulative_loss is None:
+        raise RuntimeError("Training dataloader produced batches but no loss was accumulated.")
+    mean_loss = float((cumulative_loss / float(num_batches)).item())
     result = LearningTrainEpochResult(
         epoch_index=normalized_epoch_index,
         total_epoch_count=normalized_total_epoch_count,
         base_learning_rate=float(base_lr),
         num_batches=int(num_batches),
-        mean_loss=float(cumulative_loss / float(num_batches)),
+        mean_loss=mean_loss,
         mixed_precision_used=bool(autocast_enabled),
     )
     return result, scaler
@@ -1143,7 +1155,7 @@ def evaluate_learning_model_on_validation_dataloaders(
             for minivols, coordinates in dataloader:
                 if _is_stop_requested(stop_event):
                     raise _LearningTrainingStopRequested("Training stop requested by user.")
-                minivols = minivols.to(resolved_device)
+                minivols = minivols.to(resolved_device, non_blocking=True)
                 with getattr(torch_mod, "autocast")(
                     device_type=resolved_device_type,
                     enabled=autocast_enabled,
