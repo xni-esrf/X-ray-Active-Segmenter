@@ -247,6 +247,12 @@ def _run_large_crop_plan_to_zarr(
         )
         prediction = _single_successful_prediction(inference_result)
         predicted_bbox = np.asarray(prediction.predicted_bbox)
+        predicted_bbox = _cast_prediction_labels_to_output_dtype(
+            predicted_bbox,
+            output_dtype=output_dtype_np,
+            crop_number=int(crop_number),
+            total_crops=total_crops,
+        )
         LOGGER.info(
             "Dense inference prediction ready for large crop %d/%d: shape=%s dtype=%s bytes=%d",
             int(crop_number),
@@ -333,7 +339,8 @@ def _run_dense_inference_for_window(
         plan_bbox_context_func=lambda **_kwargs: _identity_context_plan(crop_shape),
         use_tiled_score_buffer=False,
         batch_size=int(batch_size),
-        async_accumulation=False,
+        async_accumulation=True,
+        async_accumulation_queue_size=2,
     )
     LOGGER.info(
         "Dense inference returned for large crop %d/%d: "
@@ -363,6 +370,32 @@ def _single_successful_prediction(
             f"got {len(predictions)}"
         )
     return predictions[0]
+
+
+def _cast_prediction_labels_to_output_dtype(
+    predicted_bbox: np.ndarray,
+    *,
+    output_dtype: np.dtype,
+    crop_number: int,
+    total_crops: int,
+) -> np.ndarray:
+    array = np.asarray(predicted_bbox)
+    dtype = np.dtype(output_dtype)
+    if not np.issubdtype(dtype, np.integer):
+        raise TypeError(f"output_dtype must be an integer dtype, got {dtype}")
+    if int(array.size) > 0:
+        min_value = int(np.min(array))
+        max_value = int(np.max(array))
+        info = np.iinfo(dtype)
+        if min_value < int(info.min) or max_value > int(info.max):
+            raise ValueError(
+                "Dense inference prediction labels do not fit output dtype for "
+                f"large crop {int(crop_number)}/{int(total_crops)}: "
+                f"range=({min_value}, {max_value}) dtype={dtype}"
+            )
+    if array.dtype == dtype:
+        return array
+    return array.astype(dtype, copy=False)
 
 
 def _log_large_crop_plan(

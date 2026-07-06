@@ -38,6 +38,7 @@ class _FakeWriter:
         self.overwrite = bool(overwrite)
         self.output = np.zeros(self.shape, dtype=self.dtype)
         self.write_calls: list[tuple[object, int | None, int | None]] = []
+        self.write_dtypes: list[np.dtype] = []
 
     def write_window_prediction(
         self,
@@ -49,6 +50,7 @@ class _FakeWriter:
     ) -> bool:
         self.write_calls.append((window, crop_number, total_crops))
         crop = np.asarray(prediction_crop)
+        self.write_dtypes.append(np.dtype(crop.dtype))
         self.output[window.requested_output_slices] = crop[
             window.requested_output_slices_in_crop
         ]
@@ -317,7 +319,8 @@ class LargeCropInferenceTests(unittest.TestCase):
         self.assertEqual(call["volume_shape"], result.plan.windows[0].crop_shape)
         self.assertEqual(call["batch_size"], 7)
         self.assertIs(call["use_tiled_score_buffer"], False)
-        self.assertIs(call["async_accumulation"], False)
+        self.assertIs(call["async_accumulation"], True)
+        self.assertEqual(call["async_accumulation_queue_size"], 2)
         self.assertTrue(callable(call["extract_bbox_context_from_array_func"]))
         self.assertTrue(callable(call["plan_bbox_context_func"]))
 
@@ -334,6 +337,83 @@ class LargeCropInferenceTests(unittest.TestCase):
             writer.output,
             prediction_crop[result.plan.windows[0].requested_output_slices_in_crop],
         )
+
+    def test_prediction_labels_are_cast_to_output_dtype_before_writing(self) -> None:
+        raw = np.zeros((4, 4, 4), dtype=np.float32)
+        writer_holder: dict[str, _FakeWriter] = {}
+
+        def fake_writer_factory(path: str, **kwargs: object) -> _FakeWriter:
+            writer = _FakeWriter(path, **kwargs)
+            writer_holder["writer"] = writer
+            return writer
+
+        def fake_run_inference(**kwargs: object) -> object:
+            raw_array = np.asarray(kwargs["raw_array"])
+            box = tuple(kwargs["inference_boxes"])[0]
+            prediction = np.full(raw_array.shape, 10, dtype=np.int64)
+            return SimpleNamespace(
+                total_count=1,
+                predictions=(
+                    LearningInferencePrediction(
+                        box=box,
+                        predicted_bbox=prediction,
+                    ),
+                ),
+                failure_by_box_id={},
+                cleanup_errors_by_box_id={},
+            )
+
+        run_one_crop_large_crop_inference_to_zarr(
+            model_runtime=object(),
+            raw_volume=_FakeVolume(raw),
+            requested_bounds=((0, 4), (0, 4), (0, 4)),
+            label_values=(0, 10),
+            output_path="/tmp/out.zarr",
+            output_dtype=np.uint8,
+            minivol_size=4,
+            writer_factory=fake_writer_factory,
+            run_learning_inference_func=fake_run_inference,
+        )
+
+        writer = writer_holder["writer"]
+        self.assertEqual(writer.write_dtypes, [np.dtype(np.uint8)])
+        self.assertEqual(writer.output.dtype, np.dtype(np.uint8))
+        np.testing.assert_array_equal(
+            writer.output,
+            np.full((4, 4, 4), 10, dtype=np.uint8),
+        )
+
+    def test_prediction_labels_must_fit_output_dtype(self) -> None:
+        raw = np.zeros((4, 4, 4), dtype=np.float32)
+
+        def fake_run_inference(**kwargs: object) -> object:
+            raw_array = np.asarray(kwargs["raw_array"])
+            box = tuple(kwargs["inference_boxes"])[0]
+            prediction = np.full(raw_array.shape, 256, dtype=np.int64)
+            return SimpleNamespace(
+                total_count=1,
+                predictions=(
+                    LearningInferencePrediction(
+                        box=box,
+                        predicted_bbox=prediction,
+                    ),
+                ),
+                failure_by_box_id={},
+                cleanup_errors_by_box_id={},
+            )
+
+        with self.assertRaisesRegex(ValueError, "do not fit output dtype"):
+            run_one_crop_large_crop_inference_to_zarr(
+                model_runtime=object(),
+                raw_volume=_FakeVolume(raw),
+                requested_bounds=((0, 4), (0, 4), (0, 4)),
+                label_values=(0, 256),
+                output_path="/tmp/out.zarr",
+                output_dtype=np.uint8,
+                minivol_size=4,
+                writer_factory=lambda path, **kwargs: _FakeWriter(path, **kwargs),
+                run_learning_inference_func=fake_run_inference,
+            )
 
     def test_one_crop_path_rejects_multi_crop_plan(self) -> None:
         raw = np.zeros((16, 4, 4), dtype=np.float32)

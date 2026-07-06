@@ -436,10 +436,7 @@ def _headless_inference_output_dtype(
     *,
     context: _HeadlessInputContext,
 ) -> np.dtype:
-    segmentation_volume = getattr(context, "segmentation_volume", None)
-    segmentation_dtype = getattr(segmentation_volume, "dtype", None)
-    if segmentation_dtype is not None:
-        return np.dtype(segmentation_dtype)
+    del context
 
     normalized_labels = tuple(int(value) for value in tuple(label_values))
     if not normalized_labels:
@@ -450,6 +447,11 @@ def _headless_inference_output_dtype(
         return np.dtype(np.uint8)
     if min_label >= 0 and max_label <= np.iinfo(np.uint16).max:
         return np.dtype(np.uint16)
+    if (
+        min_label >= np.iinfo(np.int32).min
+        and max_label <= np.iinfo(np.int32).max
+    ):
+        return np.dtype(np.int32)
     return np.dtype(np.int64)
 
 

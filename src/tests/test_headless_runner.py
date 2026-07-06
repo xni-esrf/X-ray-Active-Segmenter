@@ -721,6 +721,40 @@ class HeadlessRunnerTests(unittest.TestCase):
         self.assertIs(inference_mock.call_args.kwargs["overwrite"], True)
         self.assertEqual(inference_mock.call_args.kwargs["batch_size"], 9)
 
+    def test_headless_inference_output_dtype_uses_label_range_not_segmentation_dtype(self) -> None:
+        context = SimpleNamespace(
+            segmentation_volume=SimpleNamespace(dtype=np.dtype(np.int32))
+        )
+
+        self.assertEqual(
+            runner_module._headless_inference_output_dtype(
+                (0, 10),
+                context=context,
+            ),
+            np.dtype(np.uint8),
+        )
+        self.assertEqual(
+            runner_module._headless_inference_output_dtype(
+                (0, 256),
+                context=context,
+            ),
+            np.dtype(np.uint16),
+        )
+        self.assertEqual(
+            runner_module._headless_inference_output_dtype(
+                (-1, 10),
+                context=context,
+            ),
+            np.dtype(np.int32),
+        )
+        self.assertEqual(
+            runner_module._headless_inference_output_dtype(
+                (0, np.iinfo(np.int32).max + 1),
+                context=context,
+            ),
+            np.dtype(np.int64),
+        )
+
     def test_inference_job_rejects_non_zarr_output_before_model_setup(self) -> None:
         inference_box = BoundingBox.from_bounds(
             box_id="infer-box",
