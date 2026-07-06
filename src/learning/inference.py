@@ -154,7 +154,7 @@ def run_learning_inference(
     dispose_inference_runtime_func: Optional[Callable[[object], Sequence[str]]] = None,
     use_tiled_score_buffer: bool = False,
     tiled_temp_dir: Optional[str] = None,
-    batch_size: int = 4,
+    batch_size: int = 16,
     async_accumulation: bool = False,
     async_accumulation_queue_size: int = 2,
 ) -> LearningInferenceBackgroundResult:

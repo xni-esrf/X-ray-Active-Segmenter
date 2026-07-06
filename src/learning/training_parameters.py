@@ -10,8 +10,8 @@ import numpy as np
 class TrainingParameters:
     learning_rate: float = 5e-5
     training_batch_size: int = 4
-    validation_batch_size: int = 4
-    inference_batch_size: int = 4
+    validation_batch_size: int = 16
+    inference_batch_size: int = 16
     patches_per_epoch: int = 2000
     early_stopping_patience: int = 7
 

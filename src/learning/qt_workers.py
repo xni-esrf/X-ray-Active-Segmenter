@@ -134,7 +134,7 @@ class LearningInferenceWorker(QObject):
         self._label_values: Tuple[int, ...] = tuple()
         self._volume_shape: Tuple[int, int, int] = (1, 1, 1)
         self._use_tiled_score_buffer = False
-        self._batch_size = 4
+        self._batch_size = 16
 
     def configure(
         self,
@@ -145,7 +145,7 @@ class LearningInferenceWorker(QObject):
         label_values: Sequence[int],
         volume_shape: Sequence[int],
         use_tiled_score_buffer: bool = False,
-        batch_size: int = 4,
+        batch_size: int = 16,
     ) -> None:
         normalized_boxes: list[BoundingBox] = []
         for raw_box in tuple(inference_boxes):
