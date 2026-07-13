@@ -192,7 +192,7 @@ def _run_large_crop_plan_to_zarr(
     )
     writer = writer_factory(
         output_path,
-        shape=plan.requested_shape,
+        shape=plan.raw_volume_shape,
         dtype=output_dtype_np,
         chunks=output_chunks,
         overwrite=overwrite,
@@ -207,7 +207,7 @@ def _run_large_crop_plan_to_zarr(
             window.grid_index,
             window.crop_shape,
             window.valid_shape,
-            _format_slices(window.requested_output_slices),
+            _format_slices(window.requested_output_slices_in_raw),
         )
         LOGGER.info(
             "Extracting large crop %d/%d: crop=%s valid=%s raw=%s pad_before=%s pad_after=%s",

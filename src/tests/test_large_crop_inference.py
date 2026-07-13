@@ -51,7 +51,7 @@ class _FakeWriter:
         self.write_calls.append((window, crop_number, total_crops))
         crop = np.asarray(prediction_crop)
         self.write_dtypes.append(np.dtype(crop.dtype))
-        self.output[window.requested_output_slices] = crop[
+        self.output[window.requested_output_slices_in_raw] = crop[
             window.requested_output_slices_in_crop
         ]
         return True
@@ -97,9 +97,12 @@ class LargeCropInferenceTests(unittest.TestCase):
 
         self.assertFalse(result.plan.requires_cropping)
         old_full_dense_baseline = raw[1:5, 2:6, 3:7].astype(np.uint16) + 17
+        expected = np.zeros(raw.shape, dtype=np.uint16)
+        expected[1:5, 2:6, 3:7] = old_full_dense_baseline
+        self.assertEqual(writer_holder["writer"].shape, raw.shape)
         np.testing.assert_array_equal(
             writer_holder["writer"].output,
-            old_full_dense_baseline,
+            expected,
         )
 
     def test_multi_crop_output_matches_full_dense_baseline(self) -> None:
@@ -195,9 +198,10 @@ class LargeCropInferenceTests(unittest.TestCase):
         self.assertEqual(result.written_crop_count, 3)
         self.assertEqual(len(run_calls), 3)
         writer = writer_holder["writer"]
-        expected = np.zeros(result.plan.requested_shape, dtype=np.uint8)
+        self.assertEqual(writer.shape, result.plan.raw_volume_shape)
+        expected = np.zeros(result.plan.raw_volume_shape, dtype=np.uint8)
         for window in result.plan.windows:
-            expected[window.requested_output_slices] = int(window.index) + 1
+            expected[window.requested_output_slices_in_raw] = int(window.index) + 1
         np.testing.assert_array_equal(writer.output, expected)
         self.assertEqual(
             [call[1] for call in writer.write_calls],
@@ -325,18 +329,20 @@ class LargeCropInferenceTests(unittest.TestCase):
         self.assertTrue(callable(call["plan_bbox_context_func"]))
 
         writer = writer_holder["writer"]
-        self.assertEqual(writer.shape, result.plan.requested_shape)
+        self.assertEqual(writer.shape, result.plan.raw_volume_shape)
         self.assertEqual(writer.dtype, np.dtype(np.uint16))
         self.assertTrue(writer.overwrite)
         self.assertEqual(len(writer.write_calls), 1)
+        window = result.plan.windows[0]
         prediction_crop = np.arange(
-            np.prod(result.plan.windows[0].crop_shape),
+            np.prod(window.crop_shape),
             dtype=np.uint16,
-        ).reshape(result.plan.windows[0].crop_shape)
-        np.testing.assert_array_equal(
-            writer.output,
-            prediction_crop[result.plan.windows[0].requested_output_slices_in_crop],
-        )
+        ).reshape(window.crop_shape)
+        expected = np.zeros(result.plan.raw_volume_shape, dtype=np.uint16)
+        expected[window.requested_output_slices_in_raw] = prediction_crop[
+            window.requested_output_slices_in_crop
+        ]
+        np.testing.assert_array_equal(writer.output, expected)
 
     def test_prediction_labels_are_cast_to_output_dtype_before_writing(self) -> None:
         raw = np.zeros((4, 4, 4), dtype=np.float32)

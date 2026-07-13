@@ -106,6 +106,10 @@ class LargeCropZarrOutputWriterTests(unittest.TestCase):
                 writer.array[(slice(None), slice(None), slice(None))],
                 expected,
             )
+            self.assertEqual(
+                (path / "1.1.1").stat().st_size,
+                int(np.prod((2, 3, 4))) * np.dtype(np.uint16).itemsize,
+            )
 
     def test_write_slices_casts_to_output_dtype(self) -> None:
         with TemporaryDirectory() as tmpdir:

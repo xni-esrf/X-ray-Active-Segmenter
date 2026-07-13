@@ -98,7 +98,7 @@ class LargeCropZarrOutputWriter:
             return False
 
         source_slices = window.requested_output_slices_in_crop
-        destination_slices = window.requested_output_slices
+        destination_slices = window.requested_output_slices_in_raw
         crop_array = np.asarray(prediction_crop)
         if crop_array.ndim != 3:
             raise ValueError(
@@ -270,7 +270,7 @@ class _RawZarrV2Array:
         return self._path / ".".join(str(int(axis)) for axis in chunk_index)
 
     def _read_chunk(self, chunk_index: ShapeZYX) -> np.ndarray:
-        shape = self._chunk_shape(chunk_index)
+        shape = self.chunks
         path = self._chunk_path(chunk_index)
         if not path.exists():
             return np.zeros(shape, dtype=self.dtype)
@@ -284,7 +284,16 @@ class _RawZarrV2Array:
 
     def _write_chunk(self, chunk_index: ShapeZYX, chunk: np.ndarray) -> None:
         path = self._chunk_path(chunk_index)
-        np.asarray(chunk, dtype=self.dtype).tofile(path)
+        array = np.asarray(chunk, dtype=self.dtype)
+        if tuple(int(axis) for axis in array.shape) != self.chunks:
+            padded = np.zeros(self.chunks, dtype=self.dtype)
+            padded[
+                : int(array.shape[0]),
+                : int(array.shape[1]),
+                : int(array.shape[2]),
+            ] = array
+            array = padded
+        array.tofile(path)
 
 
 def _coerce_shape(values: Sequence[object], *, name: str) -> ShapeZYX:

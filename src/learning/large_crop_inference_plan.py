@@ -38,6 +38,7 @@ class LargeCropWindow:
     valid_slices_in_crop: SliceZYX
     requested_output_slices: SliceZYX
     requested_output_slices_in_crop: SliceZYX
+    requested_output_slices_in_raw: SliceZYX
     extraction: CropExtractionPlan
 
     @property
@@ -181,6 +182,9 @@ def build_large_crop_inference_plan(
         crop_grid_shape=crop_grid_shape,
         valid_step_shape=valid_step_shape,
         internal_margin=int(internal_margin),
+        requested_bounds_origin=tuple(
+            int(normalized_requested_bounds[axis][0]) for axis in range(3)
+        ),
     )
 
     return LargeCropInferencePlan(
@@ -305,6 +309,7 @@ def _build_crop_windows(
     crop_grid_shape: ShapeZYX,
     valid_step_shape: ShapeZYX,
     internal_margin: int,
+    requested_bounds_origin: ShapeZYX,
 ) -> Tuple[LargeCropWindow, ...]:
     windows: list[LargeCropWindow] = []
     requested_region = tuple(requested_slices_in_normalized)
@@ -344,6 +349,10 @@ def _build_crop_windows(
             requested_intersection,
             origin=crop_slices,
         )
+        requested_output_slices_in_raw = _shift_slices(
+            requested_output_slices,
+            offset=requested_bounds_origin,
+        )
         extraction = _crop_extraction_plan(
             crop_slices=crop_slices,
             raw_volume_shape=raw_volume_shape,
@@ -362,6 +371,7 @@ def _build_crop_windows(
                 valid_slices_in_crop=valid_slices_in_crop,
                 requested_output_slices=requested_output_slices,
                 requested_output_slices_in_crop=requested_output_slices_in_crop,
+                requested_output_slices_in_raw=requested_output_slices_in_raw,
                 extraction=extraction,
             )
         )
@@ -470,6 +480,16 @@ def _relative_slices(slices: SliceZYX, *, origin: SliceZYX) -> SliceZYX:
         slice(
             int(slices[axis].start) - int(origin[axis].start),
             int(slices[axis].stop) - int(origin[axis].start),
+        )
+        for axis in range(3)
+    )  # type: ignore[return-value]
+
+
+def _shift_slices(slices: SliceZYX, *, offset: ShapeZYX) -> SliceZYX:
+    return tuple(
+        slice(
+            int(slices[axis].start) + int(offset[axis]),
+            int(slices[axis].stop) + int(offset[axis]),
         )
         for axis in range(3)
     )  # type: ignore[return-value]
