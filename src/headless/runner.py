@@ -490,7 +490,7 @@ def _persist_runtime_label_space_metadata(
 
 def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Run a saved headless learning job")
-    parser.add_argument("job", help="Path to .headless-job job.json")
+    parser.add_argument("job", help="Path to headless-job job.json")
     parser.add_argument(
         "--validate-only",
         action="store_true",

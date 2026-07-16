@@ -50,7 +50,11 @@ from ..history import (
     estimate_bounding_box_history_bytes,
     estimate_segmentation_history_bytes,
 )
-from ..headless.job_spec import HeadlessJobSpec, save_headless_job_spec
+from ..headless.job_spec import (
+    DEFAULT_HEADLESS_JOB_DIR_NAME,
+    HeadlessJobSpec,
+    save_headless_job_spec,
+)
 from ..io import extract_learning_bboxes_in_memory
 from ..io.saver import save_segmentation_volume
 from ..loading import load_prepared_volume
@@ -2190,7 +2194,7 @@ class MainWindow(QMainWindow):
     @staticmethod
     def _create_headless_job_dir(kind: str) -> Path:
         timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-        job_dir = Path(".headless-job") / f"{timestamp}-{kind}-{os.getpid()}"
+        job_dir = Path(DEFAULT_HEADLESS_JOB_DIR_NAME) / f"{timestamp}-{kind}-{os.getpid()}"
         job_dir.mkdir(parents=True, exist_ok=False)
         return job_dir
 

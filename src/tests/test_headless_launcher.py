@@ -13,7 +13,7 @@ class HeadlessLauncherTests(unittest.TestCase):
     def test_waits_for_ui_pid_then_spawns_detached_headless_command(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
-            job_dir = root / ".headless-job"
+            job_dir = root / "headless-job"
             job_path = job_dir / "job.json"
             job_dir.mkdir()
             job_path.write_text(

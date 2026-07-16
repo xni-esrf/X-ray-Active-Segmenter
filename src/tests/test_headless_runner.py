@@ -344,7 +344,7 @@ class HeadlessRunnerTests(unittest.TestCase):
             seg_path = root / "seg.npy"
             bbox_path = root / "boxes.json"
             checkpoint_path = root / "input.cp"
-            job_dir = root / ".headless-job"
+            job_dir = root / "headless-job"
             job_path = job_dir / "job.json"
 
             np.save(raw_path, np.arange(27, dtype=np.float32).reshape(3, 3, 3))
@@ -393,7 +393,7 @@ class HeadlessRunnerTests(unittest.TestCase):
             seg_path = root / "seg.npy"
             bbox_path = root / "boxes.json"
             checkpoint_path = root / "input.cp"
-            job_dir = root / ".headless-job"
+            job_dir = root / "headless-job"
             job_path = job_dir / "job.json"
 
             np.save(raw_path, np.arange(27, dtype=np.float32).reshape(3, 3, 3))
@@ -442,7 +442,7 @@ class HeadlessRunnerTests(unittest.TestCase):
             raw_path = root / "raw.npy"
             bbox_path = root / "boxes.json"
             checkpoint_path = root / "input.cp"
-            job_dir = root / ".headless-job"
+            job_dir = root / "headless-job"
             job_path = job_dir / "job.json"
 
             np.save(raw_path, np.arange(27, dtype=np.float32).reshape(3, 3, 3))
@@ -489,7 +489,7 @@ class HeadlessRunnerTests(unittest.TestCase):
             seg_path = root / "seg.npy"
             bbox_path = root / "boxes.json"
             checkpoint_path = root / "input.cp"
-            job_dir = root / ".headless-job"
+            job_dir = root / "headless-job"
             job_path = job_dir / "job.json"
 
             np.save(raw_path, np.zeros((2, 2, 2), dtype=np.float32))
@@ -665,7 +665,7 @@ class HeadlessRunnerTests(unittest.TestCase):
         self.addCleanup(tmpdir_cm.cleanup)
         root = Path(tmpdir_cm.name)
         output_path = root / "output.zarr"
-        job_dir = root / ".headless-job" / "inference-job"
+        job_dir = root / "headless-job" / "inference-job"
         spec = HeadlessJobSpec(
             kind="inference",
             raw_volume_path="raw.npy",

@@ -55,18 +55,18 @@ python3 open_ui_raw_viewer.py --help
 
 ### Headless Jobs
 
-Headless training and inference jobs are written under `.headless-job/<job>/`. The UI closes, a lightweight launcher waits for the UI process to exit, and the runner starts detached from the terminal so it can continue after you detach `screen` or close the terminal.
+Headless training and inference jobs are written under `headless-job/<job>/`. The UI closes, a lightweight launcher waits for the UI process to exit, and the runner starts detached from the terminal so it can continue after you detach `screen` or close the terminal.
 
-- Structured launcher and runner logs: `.headless-job/<job>/headless.log`
-- Raw runner stdout/stderr: `.headless-job/<job>/runner.log`
-- Detached runner PID: `.headless-job/<job>/runner.pid`
+- Structured launcher and runner logs: `headless-job/<job>/headless.log`
+- Raw runner stdout/stderr: `headless-job/<job>/runner.log`
+- Detached runner PID: `headless-job/<job>/runner.pid`
 - Tiled inference scratch files are written to a hidden directory next to the selected output file and are removed automatically when the Python process completes or fails with a normal exception. If the process is killed by the OS or a native crash, the scratch directory may remain and can be removed manually after confirming the job is no longer running.
 
 Useful commands:
 
 ```bash
-tail -f .headless-job/<job>/headless.log
-tail -f .headless-job/<job>/runner.log
-ps -p "$(cat .headless-job/<job>/runner.pid)"
-kill "$(cat .headless-job/<job>/runner.pid)"
+tail -f headless-job/<job>/headless.log
+tail -f headless-job/<job>/runner.log
+ps -p "$(cat headless-job/<job>/runner.pid)"
+kill "$(cat headless-job/<job>/runner.pid)"
 ```

@@ -19,6 +19,19 @@ from src.ui.main_window import MainWindow
 
 
 class MainWindowHeadlessLaunchTests(unittest.TestCase):
+    def test_create_headless_job_dir_uses_visible_headless_job_directory(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            original_cwd = os.getcwd()
+            os.chdir(tmpdir)
+            try:
+                job_dir = MainWindow._create_headless_job_dir("train")
+            finally:
+                os.chdir(original_cwd)
+
+            self.assertEqual(job_dir.parent.name, "headless-job")
+            self.assertTrue((Path(tmpdir) / "headless-job").is_dir())
+            self.assertFalse((Path(tmpdir) / ".headless-job").exists())
+
     def test_train_headless_close_writes_job_saves_input_checkpoint_and_closes(self) -> None:
         with TemporaryDirectory() as tmpdir:
             root = Path(tmpdir)
@@ -26,7 +39,7 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             seg_path = root / "seg.npy"
             bbox_path = root / "boxes.bbox.txt"
             output_checkpoint_path = root / "trained.cp"
-            job_dir = root / ".headless-job" / "train-job"
+            job_dir = root / "headless-job" / "train-job"
             self._touch_inputs(raw_path, seg_path, bbox_path)
             train_box = self._box("train-box", "train")
             validation_box = self._box("validation-box", "validation", z0=1, z1=2)
@@ -80,7 +93,7 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             seg_path = root / "seg.npy"
             bbox_path = root / "boxes.bbox.txt"
             output_seg_path = root / "out.npy"
-            job_dir = root / ".headless-job" / "inference-job"
+            job_dir = root / "headless-job" / "inference-job"
             self._touch_inputs(raw_path, seg_path, bbox_path)
             inference_box = self._box("infer-box", "inference")
             window = self._make_window_like(
@@ -130,7 +143,7 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             seg_path = root / "seg.npy"
             bbox_path = root / "boxes.bbox.txt"
             output_seg_path = root / "out.npy"
-            job_dir = root / ".headless-job" / "inference-job"
+            job_dir = root / "headless-job" / "inference-job"
             self._touch_inputs(raw_path, seg_path, bbox_path)
             inference_box = self._box("infer-box", "inference")
             window = self._make_window_like(
@@ -178,7 +191,7 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             raw_path = root / "raw.npy"
             seg_path = root / "seg.npy"
             bbox_path = root / "boxes.bbox.txt"
-            job_dir = root / ".headless-job" / "train-job"
+            job_dir = root / "headless-job" / "train-job"
             self._touch_inputs(raw_path, seg_path, bbox_path)
             window = self._make_window_like(
                 raw_path=raw_path,
@@ -215,7 +228,7 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             seg_path = root / "seg.npy"
             bbox_path = root / "boxes.bbox.txt"
             output_seg_path = root / "out.npy"
-            job_dir = root / ".headless-job" / "inference-job"
+            job_dir = root / "headless-job" / "inference-job"
             self._touch_inputs(raw_path, seg_path, bbox_path)
             window = self._make_window_like(
                 raw_path=raw_path,
@@ -257,8 +270,8 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             bbox_path = root / "boxes.bbox.txt"
             train_output_path = root / "trained.cp"
             inference_output_path = root / "out.npy"
-            train_job_dir = root / ".headless-job" / "train-job"
-            inference_job_dir = root / ".headless-job" / "inference-job"
+            train_job_dir = root / "headless-job" / "train-job"
+            inference_job_dir = root / "headless-job" / "inference-job"
             self._touch_inputs(raw_path, seg_path, bbox_path)
             window = self._make_window_like(
                 raw_path=raw_path,
@@ -320,7 +333,7 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
 
     def test_spawn_headless_after_ui_exit_launches_lightweight_process(self) -> None:
         with TemporaryDirectory() as tmpdir:
-            job_path = str(Path(tmpdir) / ".headless-job" / "job.json")
+            job_path = str(Path(tmpdir) / "headless-job" / "job.json")
             popen_calls = []
 
             def fake_popen(command, **kwargs):

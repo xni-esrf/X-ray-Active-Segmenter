@@ -5,6 +5,7 @@ from tempfile import TemporaryDirectory
 import unittest
 
 from src.headless.job_spec import (
+    DEFAULT_HEADLESS_JOB_DIR_NAME,
     HeadlessJobSpec,
     load_headless_job_spec,
     save_headless_job_spec,
@@ -13,6 +14,19 @@ from src.learning import TrainingParameters
 
 
 class HeadlessJobSpecTests(unittest.TestCase):
+    def test_default_job_dir_is_visible_headless_job_directory(self) -> None:
+        spec = HeadlessJobSpec(
+            kind="train",
+            raw_volume_path="raw.npy",
+            segmentation_path="seg.npy",
+            bbox_path="boxes.json",
+            input_checkpoint_path="input.cp",
+            output_checkpoint_path="output.cp",
+        )
+
+        self.assertEqual(DEFAULT_HEADLESS_JOB_DIR_NAME, "headless-job")
+        self.assertEqual(spec.job_dir, DEFAULT_HEADLESS_JOB_DIR_NAME)
+
     def test_roundtrip_training_spec(self) -> None:
         with TemporaryDirectory() as tmpdir:
             job_path = str(Path(tmpdir) / "job.json")
@@ -34,7 +48,7 @@ class HeadlessJobSpecTests(unittest.TestCase):
                 ),
                 input_checkpoint_path="input.cp",
                 output_checkpoint_path="output.cp",
-                job_dir=str(Path(tmpdir) / ".headless-job"),
+                job_dir=str(Path(tmpdir) / "headless-job"),
                 source_pid=42,
             )
 
@@ -93,7 +107,7 @@ class HeadlessJobSpecTests(unittest.TestCase):
                 input_checkpoint_path="input.cp",
                 output_segmentation_path="output.zarr",
                 output_segmentation_format="zarr",
-                job_dir=str(Path(tmpdir) / ".headless-job"),
+                job_dir=str(Path(tmpdir) / "headless-job"),
                 source_pid=123,
             )
 

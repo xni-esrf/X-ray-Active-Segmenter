@@ -1,4 +1,5 @@
 from .job_spec import (
+    DEFAULT_HEADLESS_JOB_DIR_NAME,
     HeadlessJobSpec,
     HeadlessJobKind,
     SegmentationKind,
@@ -7,6 +8,7 @@ from .job_spec import (
 )
 
 __all__ = [
+    "DEFAULT_HEADLESS_JOB_DIR_NAME",
     "HeadlessJobKind",
     "HeadlessJobSpec",
     "SegmentationKind",

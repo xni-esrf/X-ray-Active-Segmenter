@@ -93,7 +93,7 @@ def _parse_args(argv: Optional[Sequence[str]]) -> argparse.Namespace:
         description="Wait for the UI process to exit, then detach a headless job"
     )
     parser.add_argument("--wait-pid", required=True, type=int, help="UI process id to wait for")
-    parser.add_argument("--job", required=True, help="Path to .headless-job job.json")
+    parser.add_argument("--job", required=True, help="Path to headless-job job.json")
     parser.add_argument(
         "--python",
         default=sys.executable,

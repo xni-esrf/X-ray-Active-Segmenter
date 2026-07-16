@@ -16,6 +16,8 @@ from ..learning.training_parameters import (
 HeadlessJobKind = Literal["train", "inference"]
 SegmentationKind = Literal["semantic", "instance"]
 
+DEFAULT_HEADLESS_JOB_DIR_NAME = "headless-job"
+
 
 @dataclass(frozen=True)
 class HeadlessJobSpec:
@@ -31,7 +33,7 @@ class HeadlessJobSpec:
     output_checkpoint_path: Optional[str] = None
     output_segmentation_path: Optional[str] = None
     output_segmentation_format: Optional[str] = None
-    job_dir: str = ".headless-job"
+    job_dir: str = DEFAULT_HEADLESS_JOB_DIR_NAME
     created_at: str = ""
     source_pid: Optional[int] = None
 
