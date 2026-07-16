@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Sequence, Tuple
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -475,14 +475,21 @@ def confirm_replace_inference_bboxes(parent: Optional[QWidget] = None) -> bool:
     return answer == QMessageBox.StandardButton.Yes
 
 
-def open_save_segmentation_dialog(parent: Optional[QWidget] = None) -> SaveDialogResult:
-    filters = (
-        "TIFF (*.tif *.tiff);;"
-        "NumPy (*.npy);;"
-        "NumPy Compressed (*.npz);;"
-        "HDF5 (*.h5 *.hdf5 *.hdf);;"
-        "Zarr (*.zarr)"
-    )
+_SEGMENTATION_SAVE_FILTERS: Tuple[Tuple[str, str], ...] = (
+    ("tiff", "TIFF (*.tif *.tiff)"),
+    ("npy", "NumPy (*.npy)"),
+    ("npz", "NumPy Compressed (*.npz)"),
+    ("hdf5", "HDF5 (*.h5 *.hdf5 *.hdf)"),
+    ("zarr", "Zarr (*.zarr)"),
+)
+
+
+def open_save_segmentation_dialog(
+    parent: Optional[QWidget] = None,
+    *,
+    allowed_formats: Optional[Sequence[str]] = None,
+) -> SaveDialogResult:
+    filters = _build_segmentation_save_filters(allowed_formats)
     path, selected_filter = QFileDialog.getSaveFileName(
         parent,
         "Save Segmentation",
@@ -493,6 +500,17 @@ def open_save_segmentation_dialog(parent: Optional[QWidget] = None) -> SaveDialo
         return SaveDialogResult(accepted=False)
     normalized_path, save_format = _normalize_save_path(path, selected_filter)
     return SaveDialogResult(accepted=True, path=normalized_path, format=save_format)
+
+
+def _build_segmentation_save_filters(allowed_formats: Optional[Sequence[str]]) -> str:
+    if allowed_formats is None:
+        entries = _SEGMENTATION_SAVE_FILTERS
+    else:
+        allowed = {str(fmt).strip().lower() for fmt in allowed_formats}
+        entries = tuple(entry for entry in _SEGMENTATION_SAVE_FILTERS if entry[0] in allowed)
+        if not entries:
+            raise ValueError(f"No matching save filters for allowed_formats={allowed_formats!r}")
+    return ";;".join(filter_str for _, filter_str in entries)
 
 
 def _normalize_save_path(path: str, selected_filter: str) -> Tuple[str, str]:

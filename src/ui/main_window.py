@@ -2040,7 +2040,7 @@ class MainWindow(QMainWindow):
     ) -> HeadlessJobSpec:
         self._require_headless_inference_boxes()
         while True:
-            dialog_result = open_save_segmentation_dialog(self)
+            dialog_result = open_save_segmentation_dialog(self, allowed_formats=("zarr",))
             if not dialog_result.accepted or not dialog_result.path or not dialog_result.format:
                 raise RuntimeError("Headless inference canceled: no output segmentation selected.")
             output_path = str(Path(dialog_result.path).expanduser().with_suffix(".zarr"))
