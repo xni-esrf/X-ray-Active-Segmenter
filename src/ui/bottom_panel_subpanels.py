@@ -28,6 +28,14 @@ from PySide6.QtWidgets import (
 )
 
 
+class _NoWheelComboBox(QComboBox):
+    """QComboBox that ignores wheel events so scrolling a parent view is not
+    hijacked into changing the selection when the cursor passes over it."""
+
+    def wheelEvent(self, event) -> None:
+        event.ignore()
+
+
 @dataclass(frozen=True)
 class BottomPanelSubpanelSpec:
     name: str
@@ -878,7 +886,7 @@ class BoundingBoxesPanel(QGroupBox):
         bbox_header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
 
         self.bbox_label_label = QLabel("Selected Label")
-        self.bbox_label_combo = QComboBox()
+        self.bbox_label_combo = _NoWheelComboBox()
         self.bbox_label_combo.addItem("Train", "train")
         self.bbox_label_combo.addItem("Validation", "validation")
         self.bbox_label_combo.addItem("Inference", "inference")

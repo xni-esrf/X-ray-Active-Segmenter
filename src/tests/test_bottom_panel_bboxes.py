@@ -2,12 +2,28 @@ from __future__ import annotations
 
 import unittest
 
+from PySide6.QtCore import QPoint, QPointF, Qt
+from PySide6.QtGui import QWheelEvent
+
 from src.bbox import BoundingBox
 from src.tests.bottom_panel_test_utils import (
     QApplication,
     BottomPanelTestCase,
     QAbstractItemView,
 )
+
+
+def _make_wheel_event(angle_delta_y: int) -> QWheelEvent:
+    return QWheelEvent(
+        QPointF(5, 5),
+        QPointF(5, 5),
+        QPoint(0, 0),
+        QPoint(0, angle_delta_y),
+        Qt.NoButton,
+        Qt.NoModifier,
+        Qt.ScrollUpdate,
+        False,
+    )
 
 
 class BottomPanelBoundingBoxesTests(BottomPanelTestCase):
@@ -216,6 +232,30 @@ class BottomPanelBoundingBoxesTests(BottomPanelTestCase):
 
         self.assertEqual(label_many_events, [(("bbox_0001",), "validation")])
         self.assertEqual(self.panel.selected_bounding_box_label(), "validation")
+
+    def test_label_combo_ignores_mouse_wheel(self) -> None:
+        label_many_events = []
+        box1, _ = self._boxes()
+        self.panel.set_bounding_boxes((box1,))
+        self.panel.on_bounding_boxes_label_changed(
+            lambda box_ids, label: label_many_events.append((box_ids, label))
+        )
+        self.panel.set_selected_bounding_box("bbox_0001")
+
+        combo = self.panel._bounding_boxes_panel.bbox_label_combo
+        combo.show()
+        combo.setFocus()
+        QApplication.processEvents()
+        train_index = combo.findData("train")
+        self.assertEqual(combo.currentIndex(), train_index)
+
+        event = _make_wheel_event(angle_delta_y=-120)
+        QApplication.sendEvent(combo, event)
+        QApplication.processEvents()
+
+        self.assertFalse(event.isAccepted())
+        self.assertEqual(combo.currentIndex(), train_index)
+        self.assertEqual(label_many_events, [])
 
     def test_bbox_file_and_processing_buttons_emit_callbacks(self) -> None:
         open_events = []
