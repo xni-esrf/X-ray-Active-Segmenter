@@ -173,6 +173,30 @@ class BottomPanelSubpanelTests(unittest.TestCase):
         self.assertEqual(dilation_events, ["dilation"])
         self.assertEqual(erase_events, ["erase"])
 
+    def test_bbox_table_resize_handle_drags_table_height_within_bounds(self) -> None:
+        from PySide6.QtCore import QEvent, QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+
+        panel = BoundingBoxesPanel()
+        table = panel.bbox_table
+        handle = panel.bbox_table_resize_handle
+        self.assertEqual(table.height(), panel._DEFAULT_BBOX_TABLE_HEIGHT)
+
+        def _mouse_event(event_type, y, buttons):
+            point = QPointF(2, y)
+            return QMouseEvent(event_type, point, point, Qt.LeftButton, buttons, Qt.NoModifier)
+
+        handle.mousePressEvent(_mouse_event(QEvent.MouseButtonPress, 2, Qt.LeftButton))
+        handle.mouseMoveEvent(_mouse_event(QEvent.MouseMove, 82, Qt.LeftButton))
+        self.assertEqual(table.height(), panel._DEFAULT_BBOX_TABLE_HEIGHT + 80)
+        handle.mouseReleaseEvent(_mouse_event(QEvent.MouseButtonRelease, 82, Qt.NoButton))
+
+        handle.mousePressEvent(_mouse_event(QEvent.MouseButtonPress, 2, Qt.LeftButton))
+        handle.mouseMoveEvent(_mouse_event(QEvent.MouseMove, -10_000, Qt.LeftButton))
+        self.assertEqual(table.height(), panel._MIN_BBOX_TABLE_HEIGHT)
+        handle.mouseMoveEvent(_mouse_event(QEvent.MouseMove, 10_000, Qt.LeftButton))
+        self.assertEqual(table.height(), panel._MAX_BBOX_TABLE_HEIGHT)
+
 
 if __name__ == "__main__":
     unittest.main()

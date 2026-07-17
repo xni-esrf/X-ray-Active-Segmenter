@@ -36,6 +36,46 @@ class _NoWheelComboBox(QComboBox):
         event.ignore()
 
 
+class _VerticalResizeHandle(QWidget):
+    """Thin draggable strip that resizes a target widget's fixed height."""
+
+    def __init__(self, target: QWidget, min_height: int, max_height: int) -> None:
+        super().__init__()
+        self._target = target
+        self._min_height = min_height
+        self._max_height = max_height
+        self._drag_start_y: Optional[int] = None
+        self._drag_start_height: Optional[int] = None
+        self.setFixedHeight(6)
+        self.setCursor(Qt.SizeVerCursor)
+        self.setToolTip("Drag to resize the bounding-box list")
+        self.setStyleSheet("background-color: palette(mid);")
+
+    def mousePressEvent(self, event) -> None:
+        if event.button() == Qt.LeftButton:
+            self._drag_start_y = event.globalPosition().toPoint().y()
+            self._drag_start_height = self._target.height()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:
+        if self._drag_start_y is None:
+            super().mouseMoveEvent(event)
+            return
+        delta = event.globalPosition().toPoint().y() - self._drag_start_y
+        new_height = max(
+            self._min_height, min(self._max_height, self._drag_start_height + delta)
+        )
+        self._target.setFixedHeight(new_height)
+        event.accept()
+
+    def mouseReleaseEvent(self, event) -> None:
+        self._drag_start_y = None
+        self._drag_start_height = None
+        event.accept()
+
+
 @dataclass(frozen=True)
 class BottomPanelSubpanelSpec:
     name: str
@@ -853,6 +893,10 @@ class AnnotationPanel(QGroupBox):
 
 
 class BoundingBoxesPanel(QGroupBox):
+    _DEFAULT_BBOX_TABLE_HEIGHT = 192
+    _MIN_BBOX_TABLE_HEIGHT = 90
+    _MAX_BBOX_TABLE_HEIGHT = 2000
+
     def __init__(self) -> None:
         super().__init__("Bounding Boxes")
         self._on_bounding_box_mode_changed: Optional[Callable[[bool], None]] = None
@@ -884,6 +928,12 @@ class BoundingBoxesPanel(QGroupBox):
         bbox_header.setSectionResizeMode(2, QHeaderView.ResizeToContents)
         bbox_header.setSectionResizeMode(3, QHeaderView.ResizeToContents)
         bbox_header.setSectionResizeMode(4, QHeaderView.ResizeToContents)
+        self.bbox_table.setFixedHeight(self._DEFAULT_BBOX_TABLE_HEIGHT)
+        self.bbox_table_resize_handle = _VerticalResizeHandle(
+            self.bbox_table,
+            min_height=self._MIN_BBOX_TABLE_HEIGHT,
+            max_height=self._MAX_BBOX_TABLE_HEIGHT,
+        )
 
         self.bbox_label_label = QLabel("Selected Label")
         self.bbox_label_combo = _NoWheelComboBox()
@@ -905,6 +955,7 @@ class BoundingBoxesPanel(QGroupBox):
         layout = QVBoxLayout()
         layout.addWidget(self.bounding_box_mode_toggle)
         layout.addWidget(self.bbox_table)
+        layout.addWidget(self.bbox_table_resize_handle)
 
         label_row = QWidget()
         label_layout = QFormLayout()
