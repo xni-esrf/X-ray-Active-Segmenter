@@ -2039,6 +2039,14 @@ class MainWindow(QMainWindow):
         segmentation_kind: str = "semantic",
     ) -> HeadlessJobSpec:
         self._require_headless_inference_boxes()
+        show_info(
+            (
+                "Choose where the headless inference job should save its output "
+                "segmentation. The job runs after the UI closes, so pick a "
+                "destination now — results will be written there once it finishes."
+            ),
+            parent=self,
+        )
         while True:
             dialog_result = open_save_segmentation_dialog(self, allowed_formats=("zarr",))
             if not dialog_result.accepted or not dialog_result.path or not dialog_result.format:

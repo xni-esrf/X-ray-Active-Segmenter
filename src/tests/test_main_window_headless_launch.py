@@ -108,7 +108,7 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             window._spawn_headless_after_ui_exit = lambda job_path: spawned_jobs.append(job_path)
             window._create_headless_job_dir = lambda _kind: job_dir
 
-            with patch(
+            with patch("src.ui.main_window.show_info"), patch(
                 "src.ui.main_window.open_save_segmentation_dialog",
                 return_value=SaveDialogResult(
                     accepted=True,
@@ -162,7 +162,7 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             window._spawn_headless_after_ui_exit = lambda job_path: spawned_jobs.append(job_path)
             window._create_headless_job_dir = lambda _kind: job_dir
 
-            with patch(
+            with patch("src.ui.main_window.show_info"), patch(
                 "src.ui.main_window.open_save_segmentation_dialog",
                 return_value=SaveDialogResult(
                     accepted=True,
@@ -184,6 +184,55 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             self.assertEqual(spec.segmentation_kind, "semantic")
             self.assertEqual(spec.output_segmentation_path, str(output_seg_path.with_suffix(".zarr")))
             self.assertEqual(spec.output_segmentation_format, "zarr")
+
+    def test_inference_headless_close_shows_output_path_info_once_even_with_retry(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            raw_path = root / "raw.npy"
+            seg_path = root / "seg.npy"
+            bbox_path = root / "boxes.bbox.txt"
+            output_seg_path = root / "out.npy"
+            (root / "out.zarr").mkdir()
+            job_dir = root / "headless-job" / "inference-job"
+            self._touch_inputs(raw_path, seg_path, bbox_path)
+            inference_box = self._box("infer-box", "inference")
+            window = self._make_window_like(
+                raw_path=raw_path,
+                seg_path=seg_path,
+                bbox_path=bbox_path,
+                boxes=(inference_box,),
+            )
+
+            spawned_jobs = []
+            window._save_model_runtime_checkpoint = lambda _runtime, *, checkpoint_path: None
+            window._spawn_headless_after_ui_exit = lambda job_path: spawned_jobs.append(job_path)
+            window._create_headless_job_dir = lambda _kind: job_dir
+
+            info_calls = []
+            with patch(
+                "src.ui.main_window.show_info",
+                side_effect=lambda message, parent=None: info_calls.append(message),
+            ), patch(
+                "src.ui.main_window.open_save_segmentation_dialog",
+                return_value=SaveDialogResult(
+                    accepted=True,
+                    path=str(output_seg_path),
+                    format="npy",
+                ),
+            ), patch(
+                "src.ui.main_window.confirm_overwrite",
+                side_effect=[False, True],
+            ), patch.object(
+                MainWindow,
+                "_get_learning_model_runtime_for",
+                return_value=SimpleNamespace(num_classes=2),
+            ):
+                result = window._launch_headless_learning_job_and_close(kind="inference")
+
+            self.assertTrue(result)
+            self.assertEqual(len(spawned_jobs), 1)
+            self.assertEqual(len(info_calls), 1)
+            self.assertIn("output segmentation", info_calls[0])
 
     def test_train_headless_close_refuses_when_dirty_segmentation_save_is_canceled(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -293,7 +342,7 @@ class MainWindowHeadlessLaunchTests(unittest.TestCase):
             window._create_headless_job_dir = lambda _kind: next(job_dirs)
             window._save_model_runtime_checkpoint = lambda _runtime, *, checkpoint_path: None
 
-            with patch(
+            with patch("src.ui.main_window.show_info"), patch(
                 "src.ui.main_window.open_save_model_checkpoint_dialog",
                 return_value=DialogResult(
                     accepted=True,
