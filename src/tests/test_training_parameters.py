@@ -20,6 +20,7 @@ class TrainingParametersTests(unittest.TestCase):
                 inference_batch_size=16,
                 patches_per_epoch=2000,
                 early_stopping_patience=7,
+                skip_empty_regions=False,
             ),
         )
 
@@ -32,6 +33,7 @@ class TrainingParametersTests(unittest.TestCase):
                 inference_batch_size=6,
                 patches_per_epoch=12,
                 early_stopping_patience=4,
+                skip_empty_regions=True,
             )
         )
 
@@ -41,6 +43,7 @@ class TrainingParametersTests(unittest.TestCase):
         self.assertEqual(parameters.inference_batch_size, 6)
         self.assertEqual(parameters.patches_per_epoch, 12)
         self.assertEqual(parameters.early_stopping_patience, 4)
+        self.assertTrue(parameters.skip_empty_regions)
 
     def test_validate_training_parameters_rejects_invalid_values(self) -> None:
         invalid_cases = (
@@ -51,6 +54,8 @@ class TrainingParametersTests(unittest.TestCase):
             TrainingParameters(inference_batch_size=0),
             TrainingParameters(patches_per_epoch=0),
             TrainingParameters(early_stopping_patience=0),
+            TrainingParameters(skip_empty_regions=1),
+            TrainingParameters(skip_empty_regions="true"),
         )
 
         for parameters in invalid_cases:

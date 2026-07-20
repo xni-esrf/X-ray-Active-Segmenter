@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 import unittest
 
 import numpy as np
@@ -8,6 +9,25 @@ from src.learning.large_crop_inference_plan import (
     LargeCropInferencePlan,
     build_large_crop_inference_plan,
 )
+from src.learning.zero_occupancy import build_zero_occupancy_grid, region_is_definitely_empty
+
+
+class _FakeVolume:
+    def __init__(self, array: np.ndarray) -> None:
+        self.array = np.asarray(array)
+        self.shape = tuple(int(axis) for axis in self.array.shape)
+        self.chunk_shape = None
+
+    def get_chunk(self, zyx_slices: tuple[slice, slice, slice]) -> np.ndarray:
+        return self.array[zyx_slices]
+
+
+def _empty_voxel_count(plan: LargeCropInferencePlan, occupancy) -> int:
+    return sum(
+        math.prod(int(axis) for axis in window.crop_shape)
+        for window in plan.windows
+        if region_is_definitely_empty(occupancy, raw_slices=window.extraction.raw_slices)
+    )
 
 
 def _slice_tuple_to_bounds(axis_slice: slice) -> tuple[int, int]:
@@ -253,6 +273,102 @@ class LargeCropInferencePlanTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises((TypeError, ValueError)):
                     build_large_crop_inference_plan(**kwargs)
+
+
+class ZeroSkipAwareCropGridTests(unittest.TestCase):
+    _SHAPE = (60, 60, 600)
+    _PARAMS = dict(context_margin=4, minivol_size=8, voxel_budget=200_000)
+
+    def _build_worm_occupancy(self):
+        # A single nonzero voxel per z-slice, wandering across the full x/y
+        # footprint, so every default (z-only-split) crop intersects it.
+        array = np.zeros(self._SHAPE, dtype=np.float32)
+        for z in range(self._SHAPE[2]):
+            array[z % self._SHAPE[0], (z * 7) % self._SHAPE[1], z] = 1.0
+        volume = _FakeVolume(array)
+        default_plan = build_large_crop_inference_plan(
+            requested_bounds=tuple((0, s) for s in self._SHAPE),
+            raw_volume_shape=self._SHAPE,
+            **self._PARAMS,
+        )
+        occupancy = build_zero_occupancy_grid(
+            volume,
+            bounds=((0, self._SHAPE[0]), (0, self._SHAPE[1]), (0, self._SHAPE[2])),
+            block_size=default_plan.stride,
+        )
+        return default_plan, occupancy
+
+    def test_occupancy_none_matches_default_selection(self) -> None:
+        without_occupancy = build_large_crop_inference_plan(
+            requested_bounds=tuple((0, s) for s in self._SHAPE),
+            raw_volume_shape=self._SHAPE,
+            occupancy=None,
+            **self._PARAMS,
+        )
+        default_plan, _occupancy = self._build_worm_occupancy()
+        self.assertEqual(without_occupancy.crop_grid_shape, default_plan.crop_grid_shape)
+        self.assertEqual(without_occupancy.total_crop_count, default_plan.total_crop_count)
+        self.assertIsNone(without_occupancy.predicted_skip_crop_count)
+        self.assertIsNone(without_occupancy.predicted_skip_voxel_count)
+
+    def test_zero_skip_aware_grid_stays_within_shortlist_bound(self) -> None:
+        default_plan, occupancy = self._build_worm_occupancy()
+        aware_plan = build_large_crop_inference_plan(
+            requested_bounds=tuple((0, s) for s in self._SHAPE),
+            raw_volume_shape=self._SHAPE,
+            occupancy=occupancy,
+            **self._PARAMS,
+        )
+        self.assertLess(aware_plan.total_crop_count, 2 * default_plan.total_crop_count)
+
+    def test_zero_skip_aware_grid_finds_more_skippable_voxels_than_default(self) -> None:
+        default_plan, occupancy = self._build_worm_occupancy()
+        aware_plan = build_large_crop_inference_plan(
+            requested_bounds=tuple((0, s) for s in self._SHAPE),
+            raw_volume_shape=self._SHAPE,
+            occupancy=occupancy,
+            **self._PARAMS,
+        )
+        default_empty_voxels = _empty_voxel_count(default_plan, occupancy)
+        aware_empty_voxels = _empty_voxel_count(aware_plan, occupancy)
+        self.assertEqual(default_empty_voxels, 0)
+        self.assertGreater(aware_empty_voxels, default_empty_voxels)
+
+        # The plan's predicted counts must exactly match what the grid
+        # selection itself found (they're the same computation, just
+        # surfaced instead of discarded).
+        self.assertEqual(aware_plan.predicted_skip_voxel_count, aware_empty_voxels)
+        expected_skip_crop_count = sum(
+            1
+            for window in aware_plan.windows
+            if region_is_definitely_empty(occupancy, raw_slices=window.extraction.raw_slices)
+        )
+        self.assertEqual(aware_plan.predicted_skip_crop_count, expected_skip_crop_count)
+        self.assertGreater(aware_plan.predicted_skip_crop_count, 0)
+
+    def test_uniformly_nonzero_occupancy_falls_back_to_default_grid(self) -> None:
+        default_plan, _occupancy = self._build_worm_occupancy()
+        array = np.ones(self._SHAPE, dtype=np.float32)
+        volume = _FakeVolume(array)
+        occupancy = build_zero_occupancy_grid(
+            volume,
+            bounds=((0, self._SHAPE[0]), (0, self._SHAPE[1]), (0, self._SHAPE[2])),
+            block_size=default_plan.stride,
+        )
+        aware_plan = build_large_crop_inference_plan(
+            requested_bounds=tuple((0, s) for s in self._SHAPE),
+            raw_volume_shape=self._SHAPE,
+            occupancy=occupancy,
+            **self._PARAMS,
+        )
+        # No candidate can skip anything, so the tie-break should fall back to
+        # the same minimal-crop-count grid as the content-blind selection.
+        self.assertEqual(aware_plan.crop_grid_shape, default_plan.crop_grid_shape)
+        self.assertEqual(aware_plan.total_crop_count, default_plan.total_crop_count)
+        # occupancy was provided (unlike test_occupancy_none_...), so the
+        # predicted counts are real zeros, not None.
+        self.assertEqual(aware_plan.predicted_skip_crop_count, 0)
+        self.assertEqual(aware_plan.predicted_skip_voxel_count, 0)
 
 
 if __name__ == "__main__":

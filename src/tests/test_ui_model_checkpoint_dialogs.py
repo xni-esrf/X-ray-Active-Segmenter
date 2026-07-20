@@ -55,6 +55,7 @@ class TrainingParametersDialogTests(unittest.TestCase):
         dialog._inference_batch_size.setValue(6)
         dialog._patches_per_epoch.setValue(12)
         dialog._early_stopping_patience.setValue(4)
+        dialog._skip_empty_regions.setChecked(True)
 
         parameters = dialog.parameters()
 
@@ -67,6 +68,7 @@ class TrainingParametersDialogTests(unittest.TestCase):
                 inference_batch_size=6,
                 patches_per_epoch=12,
                 early_stopping_patience=4,
+                skip_empty_regions=True,
             ),
         )
 
@@ -79,12 +81,14 @@ class TrainingParametersDialogTests(unittest.TestCase):
                 inference_batch_size=6,
                 patches_per_epoch=12,
                 early_stopping_patience=4,
+                skip_empty_regions=True,
             )
         )
 
         dialog.reset_to_defaults()
 
         self.assertEqual(dialog.parameters(), DEFAULT_TRAINING_PARAMETERS)
+        self.assertFalse(dialog._skip_empty_regions.isChecked())
 
 
 @unittest.skipUnless(open_save_model_checkpoint_dialog is not None, "Dialogs are not available")

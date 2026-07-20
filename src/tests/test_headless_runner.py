@@ -675,7 +675,10 @@ class HeadlessRunnerTests(unittest.TestCase):
             input_checkpoint_path="input.cp",
             output_segmentation_path=str(output_path),
             output_segmentation_format="zarr",
-            training_parameters=TrainingParameters(inference_batch_size=9),
+            training_parameters=TrainingParameters(
+                inference_batch_size=9,
+                skip_empty_regions=True,
+            ),
             job_dir=str(job_dir),
         )
 
@@ -720,6 +723,7 @@ class HeadlessRunnerTests(unittest.TestCase):
         self.assertEqual(inference_mock.call_args.kwargs["output_dtype"], np.dtype(np.uint8))
         self.assertIs(inference_mock.call_args.kwargs["overwrite"], True)
         self.assertEqual(inference_mock.call_args.kwargs["batch_size"], 9)
+        self.assertIs(inference_mock.call_args.kwargs["skip_empty_regions"], True)
 
     def test_headless_inference_output_dtype_uses_label_range_not_segmentation_dtype(self) -> None:
         context = SimpleNamespace(

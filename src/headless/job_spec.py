@@ -134,6 +134,10 @@ class HeadlessJobSpec:
                     "early_stopping_patience",
                     DEFAULT_TRAINING_PARAMETERS.early_stopping_patience,
                 ),
+                skip_empty_regions=raw_training_parameters.get(
+                    "skip_empty_regions",
+                    DEFAULT_TRAINING_PARAMETERS.skip_empty_regions,
+                ),
             )
         else:
             raise TypeError("training_parameters must be a JSON object")

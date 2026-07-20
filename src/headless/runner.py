@@ -389,6 +389,7 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
         ),
         overwrite=True,
         batch_size=int(spec.training_parameters.inference_batch_size),
+        skip_empty_regions=bool(spec.training_parameters.skip_empty_regions),
     )
     LOGGER.info(
         "Large-crop inference completed: crops=%d written=%d output=%s",

@@ -16,6 +16,7 @@ from .inference_geometry import (
     DEFAULT_INFERENCE_MINIVOL_SIZE,
     DEFAULT_INFERENCE_STRIDE,
     DEFAULT_LARGE_CROP_VOXEL_BUDGET,
+    inference_stride_for_minivol_size,
 )
 from .large_crop_extraction import extract_large_crop_from_volume
 from .large_crop_inference_plan import (
@@ -26,6 +27,7 @@ from .large_crop_inference_plan import (
     build_large_crop_inference_plan,
 )
 from .large_crop_zarr_writer import create_large_crop_zarr_output_writer
+from .zero_occupancy import ZeroOccupancyGrid, build_zero_occupancy_grid
 
 
 LOGGER = logging.getLogger(__name__)
@@ -59,6 +61,7 @@ def run_large_crop_inference_to_zarr(
     context_margin: int = DEFAULT_INFERENCE_STRIDE,
     minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
     voxel_budget: int = DEFAULT_LARGE_CROP_VOXEL_BUDGET,
+    skip_empty_regions: bool = False,
     writer_factory: Callable[..., object] = create_large_crop_zarr_output_writer,
     run_learning_inference_func: Callable[..., LearningInferenceBackgroundResult] = (
         run_learning_inference
@@ -73,6 +76,7 @@ def run_large_crop_inference_to_zarr(
         context_margin=context_margin,
         minivol_size=minivol_size,
         voxel_budget=voxel_budget,
+        skip_empty_regions=skip_empty_regions,
     )
     return _run_large_crop_plan_to_zarr(
         plan=plan,
@@ -84,6 +88,7 @@ def run_large_crop_inference_to_zarr(
         output_chunks=output_chunks,
         overwrite=overwrite,
         batch_size=batch_size,
+        skip_empty_regions=skip_empty_regions,
         writer_factory=writer_factory,
         run_learning_inference_func=run_learning_inference_func,
         extract_large_crop_from_volume_func=extract_large_crop_from_volume_func,
@@ -104,6 +109,7 @@ def run_one_crop_large_crop_inference_to_zarr(
     context_margin: int = DEFAULT_INFERENCE_STRIDE,
     minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
     voxel_budget: int = DEFAULT_LARGE_CROP_VOXEL_BUDGET,
+    skip_empty_regions: bool = False,
     writer_factory: Callable[..., object] = create_large_crop_zarr_output_writer,
     run_learning_inference_func: Callable[..., LearningInferenceBackgroundResult] = (
         run_learning_inference
@@ -118,6 +124,7 @@ def run_one_crop_large_crop_inference_to_zarr(
         context_margin=context_margin,
         minivol_size=minivol_size,
         voxel_budget=voxel_budget,
+        skip_empty_regions=skip_empty_regions,
     )
     if plan.requires_cropping:
         raise ValueError(
@@ -135,6 +142,7 @@ def run_one_crop_large_crop_inference_to_zarr(
         output_chunks=output_chunks,
         overwrite=overwrite,
         batch_size=batch_size,
+        skip_empty_regions=skip_empty_regions,
         writer_factory=writer_factory,
         run_learning_inference_func=run_learning_inference_func,
         extract_large_crop_from_volume_func=extract_large_crop_from_volume_func,
@@ -153,14 +161,45 @@ def _build_plan_for_volume(
     context_margin: int,
     minivol_size: int,
     voxel_budget: int,
+    skip_empty_regions: bool,
 ) -> LargeCropInferencePlan:
     raw_volume_shape = _volume_shape(raw_volume)
+    occupancy: Optional[ZeroOccupancyGrid] = None
+    if skip_empty_regions:
+        occupancy = build_zero_occupancy_grid(
+            raw_volume,
+            bounds=_scan_bounds_for_occupancy(
+                requested_bounds,
+                raw_volume_shape=raw_volume_shape,
+                context_margin=context_margin,
+            ),
+            block_size=inference_stride_for_minivol_size(minivol_size),
+        )
     return build_large_crop_inference_plan(
         requested_bounds=requested_bounds,
         raw_volume_shape=raw_volume_shape,
         context_margin=context_margin,
         minivol_size=minivol_size,
         voxel_budget=voxel_budget,
+        occupancy=occupancy,
+    )
+
+
+def _scan_bounds_for_occupancy(
+    requested_bounds: BoundsZYX,
+    *,
+    raw_volume_shape: ShapeZYX,
+    context_margin: int,
+) -> BoundsZYX:
+    return tuple(
+        (
+            max(0, int(requested_bounds[axis][0]) - int(context_margin)),
+            min(
+                int(raw_volume_shape[axis]),
+                int(requested_bounds[axis][1]) + int(context_margin),
+            ),
+        )
+        for axis in range(3)
     )
 
 
@@ -175,6 +214,7 @@ def _run_large_crop_plan_to_zarr(
     output_chunks: Optional[Sequence[object]],
     overwrite: bool,
     batch_size: int,
+    skip_empty_regions: bool,
     writer_factory: Callable[..., object],
     run_learning_inference_func: Callable[..., LearningInferenceBackgroundResult],
     extract_large_crop_from_volume_func: Callable[..., np.ndarray],
@@ -235,6 +275,13 @@ def _run_large_crop_plan_to_zarr(
             str(crop_array.dtype),
             int(crop_array.nbytes),
         )
+        if skip_empty_regions and not np.any(crop_array):
+            LOGGER.info(
+                "Skipping empty large crop %d/%d (all-zero)",
+                int(crop_number),
+                total_crops,
+            )
+            continue
         inference_result = _run_dense_inference_for_window(
             model_runtime=model_runtime,
             window=window,
@@ -440,6 +487,24 @@ def _log_large_crop_plan(
         str(output_dtype),
         "auto" if output_chunks is None else tuple(output_chunks),
     )
+    if plan.predicted_skip_crop_count is not None:
+        total_crop_voxels = sum(
+            int(np.prod(window.crop_shape)) for window in plan.windows
+        )
+        skip_voxel_fraction = (
+            100.0 * float(plan.predicted_skip_voxel_count) / float(total_crop_voxels)
+            if total_crop_voxels > 0
+            else 0.0
+        )
+        LOGGER.info(
+            "Zero-skip prediction (guaranteed lower bound; actual may be higher): "
+            "crops>=%d/%d voxels>=%d/%d (%.1f%%)",
+            int(plan.predicted_skip_crop_count),
+            int(plan.total_crop_count),
+            int(plan.predicted_skip_voxel_count),
+            total_crop_voxels,
+            skip_voxel_fraction,
+        )
 
 
 def _log_dense_inference_progress(

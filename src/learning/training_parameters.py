@@ -14,6 +14,7 @@ class TrainingParameters:
     inference_batch_size: int = 16
     patches_per_epoch: int = 2000
     early_stopping_patience: int = 7
+    skip_empty_regions: bool = False
 
 
 DEFAULT_TRAINING_PARAMETERS = TrainingParameters()
@@ -37,6 +38,12 @@ def _coerce_positive_int(value: object, *, name: str) -> int:
     if integer < 1:
         raise ValueError(f"{name} must be >= 1")
     return integer
+
+
+def _coerce_bool(value: object, *, name: str) -> bool:
+    if not isinstance(value, bool):
+        raise TypeError(f"{name} must be a bool, got {type(value).__name__}")
+    return value
 
 
 def validate_training_parameters(parameters: TrainingParameters) -> TrainingParameters:
@@ -69,5 +76,9 @@ def validate_training_parameters(parameters: TrainingParameters) -> TrainingPara
         early_stopping_patience=_coerce_positive_int(
             parameters.early_stopping_patience,
             name="early_stopping_patience",
+        ),
+        skip_empty_regions=_coerce_bool(
+            parameters.skip_empty_regions,
+            name="skip_empty_regions",
         ),
     )

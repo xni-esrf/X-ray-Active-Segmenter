@@ -10,6 +10,7 @@ from src.learning.large_crop_inference import (
     run_large_crop_inference_to_zarr,
     run_one_crop_large_crop_inference_to_zarr,
 )
+from src.learning.large_crop_inference_plan import build_large_crop_inference_plan
 
 
 class _FakeVolume:
@@ -468,6 +469,223 @@ class LargeCropInferenceTests(unittest.TestCase):
             )
 
         self.assertEqual(writer_holder["writer"].write_calls, [])
+
+    def test_skip_empty_regions_skips_all_zero_crops_and_preserves_zero_output(
+        self,
+    ) -> None:
+        raw_shape = (16, 4, 4)
+        requested_bounds = ((0, 16), (0, 4), (0, 4))
+        context_margin = 0
+        minivol_size = 4
+        voxel_budget = 10 * 4 * 4
+
+        reference_plan = build_large_crop_inference_plan(
+            requested_bounds=requested_bounds,
+            raw_volume_shape=raw_shape,
+            context_margin=context_margin,
+            minivol_size=minivol_size,
+            voxel_budget=voxel_budget,
+        )
+        self.assertEqual(reference_plan.total_crop_count, 3)
+
+        raw = np.zeros(raw_shape, dtype=np.float32)
+        raw[reference_plan.windows[-1].requested_output_slices_in_raw] = 5.0
+
+        run_calls: list[dict[str, object]] = []
+        writer_holder: dict[str, _FakeWriter] = {}
+
+        def fake_writer_factory(path: str, **kwargs: object) -> _FakeWriter:
+            writer = _FakeWriter(path, **kwargs)
+            writer_holder["writer"] = writer
+            return writer
+
+        def fake_run_inference(**kwargs: object) -> object:
+            run_calls.append(dict(kwargs))
+            raw_array = np.asarray(kwargs["raw_array"])
+            box = tuple(kwargs["inference_boxes"])[0]
+            return SimpleNamespace(
+                total_count=1,
+                predictions=(
+                    LearningInferencePrediction(
+                        box=box,
+                        predicted_bbox=np.full(raw_array.shape, 9, dtype=np.uint8),
+                    ),
+                ),
+                failure_by_box_id={},
+                cleanup_errors_by_box_id={},
+            )
+
+        result = run_large_crop_inference_to_zarr(
+            model_runtime=object(),
+            raw_volume=_FakeVolume(raw),
+            requested_bounds=requested_bounds,
+            label_values=(0, 1),
+            output_path="/tmp/out.zarr",
+            context_margin=context_margin,
+            minivol_size=minivol_size,
+            voxel_budget=voxel_budget,
+            skip_empty_regions=True,
+            writer_factory=fake_writer_factory,
+            run_learning_inference_func=fake_run_inference,
+        )
+
+        # Content-aware grid selection is free to pick a different (but no
+        # more than 2x larger) grid than the content-blind default in order
+        # to skip more voxels, so derive expectations from the actual plan
+        # rather than assuming the reference (content-blind) grid was kept.
+        self.assertLess(
+            result.plan.total_crop_count, 2 * reference_plan.total_crop_count
+        )
+        non_empty_windows = [
+            window
+            for window in result.plan.windows
+            if np.any(raw[window.extraction.raw_slices])
+        ]
+        self.assertLess(len(non_empty_windows), result.plan.total_crop_count)
+        self.assertEqual(len(run_calls), len(non_empty_windows))
+
+        writer = writer_holder["writer"]
+        expected = np.zeros(raw_shape, dtype=np.uint8)
+        for window in non_empty_windows:
+            expected[window.requested_output_slices_in_raw] = 9
+        np.testing.assert_array_equal(writer.output, expected)
+        self.assertEqual(result.written_crop_count, len(non_empty_windows))
+
+    def test_skip_empty_regions_false_keeps_default_behavior(self) -> None:
+        raw_shape = (16, 4, 4)
+        requested_bounds = ((0, 16), (0, 4), (0, 4))
+        raw = np.zeros(raw_shape, dtype=np.float32)
+        run_calls: list[dict[str, object]] = []
+
+        def fake_run_inference(**kwargs: object) -> object:
+            run_calls.append(dict(kwargs))
+            raw_array = np.asarray(kwargs["raw_array"])
+            box = tuple(kwargs["inference_boxes"])[0]
+            return SimpleNamespace(
+                total_count=1,
+                predictions=(
+                    LearningInferencePrediction(
+                        box=box,
+                        predicted_bbox=np.zeros(raw_array.shape, dtype=np.uint8),
+                    ),
+                ),
+                failure_by_box_id={},
+                cleanup_errors_by_box_id={},
+            )
+
+        result = run_large_crop_inference_to_zarr(
+            model_runtime=object(),
+            raw_volume=_FakeVolume(raw),
+            requested_bounds=requested_bounds,
+            label_values=(0, 1),
+            output_path="/tmp/out.zarr",
+            context_margin=0,
+            minivol_size=4,
+            voxel_budget=10 * 4 * 4,
+            writer_factory=lambda path, **kwargs: _FakeWriter(path, **kwargs),
+            run_learning_inference_func=fake_run_inference,
+        )
+
+        # An all-zero raw volume with skip_empty_regions left at its default
+        # (False) must still run inference on every crop, unchanged.
+        self.assertEqual(result.plan.total_crop_count, 3)
+        self.assertEqual(len(run_calls), 3)
+
+    def test_skip_empty_regions_logs_predicted_skip_counts_before_first_crop(
+        self,
+    ) -> None:
+        raw_shape = (16, 4, 4)
+        requested_bounds = ((0, 16), (0, 4), (0, 4))
+        raw = np.zeros(raw_shape, dtype=np.float32)
+        raw[0, :, :] = 5.0  # keep just the first slab non-empty
+
+        def fake_run_inference(**kwargs: object) -> object:
+            raw_array = np.asarray(kwargs["raw_array"])
+            box = tuple(kwargs["inference_boxes"])[0]
+            return SimpleNamespace(
+                total_count=1,
+                predictions=(
+                    LearningInferencePrediction(
+                        box=box,
+                        predicted_bbox=np.zeros(raw_array.shape, dtype=np.uint8),
+                    ),
+                ),
+                failure_by_box_id={},
+                cleanup_errors_by_box_id={},
+            )
+
+        with self.assertLogs("src.learning.large_crop_inference", level="INFO") as logs:
+            run_large_crop_inference_to_zarr(
+                model_runtime=object(),
+                raw_volume=_FakeVolume(raw),
+                requested_bounds=requested_bounds,
+                label_values=(0, 1),
+                output_path="/tmp/out.zarr",
+                context_margin=0,
+                minivol_size=4,
+                voxel_budget=10 * 4 * 4,
+                skip_empty_regions=True,
+                writer_factory=lambda path, **kwargs: _FakeWriter(path, **kwargs),
+                run_learning_inference_func=fake_run_inference,
+            )
+
+        prediction_index = next(
+            index
+            for index, line in enumerate(logs.output)
+            if "Zero-skip prediction" in line
+        )
+        first_crop_index = next(
+            index
+            for index, line in enumerate(logs.output)
+            if "Processing large crop 1/" in line
+        )
+        self.assertLess(
+            prediction_index,
+            first_crop_index,
+            "predicted skip counts must be logged before the first crop is processed",
+        )
+        self.assertRegex(
+            logs.output[prediction_index],
+            r"crops>=\d+/\d+ voxels>=\d+/\d+",
+        )
+
+    def test_skip_empty_regions_false_omits_predicted_skip_log(self) -> None:
+        raw_shape = (16, 4, 4)
+        requested_bounds = ((0, 16), (0, 4), (0, 4))
+        raw = np.zeros(raw_shape, dtype=np.float32)
+
+        def fake_run_inference(**kwargs: object) -> object:
+            raw_array = np.asarray(kwargs["raw_array"])
+            box = tuple(kwargs["inference_boxes"])[0]
+            return SimpleNamespace(
+                total_count=1,
+                predictions=(
+                    LearningInferencePrediction(
+                        box=box,
+                        predicted_bbox=np.zeros(raw_array.shape, dtype=np.uint8),
+                    ),
+                ),
+                failure_by_box_id={},
+                cleanup_errors_by_box_id={},
+            )
+
+        with self.assertLogs("src.learning.large_crop_inference", level="INFO") as logs:
+            run_large_crop_inference_to_zarr(
+                model_runtime=object(),
+                raw_volume=_FakeVolume(raw),
+                requested_bounds=requested_bounds,
+                label_values=(0, 1),
+                output_path="/tmp/out.zarr",
+                context_margin=0,
+                minivol_size=4,
+                voxel_budget=10 * 4 * 4,
+                writer_factory=lambda path, **kwargs: _FakeWriter(path, **kwargs),
+                run_learning_inference_func=fake_run_inference,
+            )
+
+        self.assertFalse(
+            any("Zero-skip prediction" in line for line in logs.output)
+        )
 
 
 if __name__ == "__main__":

@@ -7,6 +7,7 @@ from typing import Optional, Sequence, Tuple
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
+    QCheckBox,
     QDialog,
     QDialogButtonBox,
     QDoubleSpinBox,
@@ -165,12 +166,17 @@ class TrainingParametersDialog(QDialog):
         self._early_stopping_patience = QSpinBox()
         self._early_stopping_patience.setRange(1, 1_000_000)
 
+        self._skip_empty_regions = QCheckBox(
+            "Skip empty (all-zero) crop regions (headless inference only)"
+        )
+
         form.addRow("Learning rate", self._learning_rate)
         form.addRow("Training batch size", self._training_batch_size)
         form.addRow("Validation batch size", self._validation_batch_size)
         form.addRow("Inference batch size", self._inference_batch_size)
         form.addRow("Patches per epoch", self._patches_per_epoch)
         form.addRow("Early stopping patience", self._early_stopping_patience)
+        form.addRow(self._skip_empty_regions)
         layout.addLayout(form)
 
         self._buttons = QDialogButtonBox(
@@ -195,6 +201,7 @@ class TrainingParametersDialog(QDialog):
         self._inference_batch_size.setValue(int(normalized.inference_batch_size))
         self._patches_per_epoch.setValue(int(normalized.patches_per_epoch))
         self._early_stopping_patience.setValue(int(normalized.early_stopping_patience))
+        self._skip_empty_regions.setChecked(bool(normalized.skip_empty_regions))
 
     def reset_to_defaults(self) -> None:
         self.set_parameters(DEFAULT_TRAINING_PARAMETERS)
@@ -208,6 +215,7 @@ class TrainingParametersDialog(QDialog):
                 inference_batch_size=int(self._inference_batch_size.value()),
                 patches_per_epoch=int(self._patches_per_epoch.value()),
                 early_stopping_patience=int(self._early_stopping_patience.value()),
+                skip_empty_regions=bool(self._skip_empty_regions.isChecked()),
             )
         )
 

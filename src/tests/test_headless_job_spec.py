@@ -107,6 +107,7 @@ class HeadlessJobSpecTests(unittest.TestCase):
                 input_checkpoint_path="input.cp",
                 output_segmentation_path="output.zarr",
                 output_segmentation_format="zarr",
+                training_parameters=TrainingParameters(skip_empty_regions=True),
                 job_dir=str(Path(tmpdir) / "headless-job"),
                 source_pid=123,
             )
@@ -122,6 +123,7 @@ class HeadlessJobSpecTests(unittest.TestCase):
             self.assertEqual(loaded.output_segmentation_path, "output.zarr")
             self.assertEqual(loaded.output_segmentation_format, "zarr")
             self.assertEqual(loaded.source_pid, 123)
+            self.assertTrue(loaded.training_parameters.skip_empty_regions)
 
     def test_inference_spec_allows_missing_input_segmentation(self) -> None:
         spec = HeadlessJobSpec(
@@ -155,6 +157,30 @@ class HeadlessJobSpecTests(unittest.TestCase):
             with self.subTest(kwargs=kwargs):
                 with self.assertRaises(ValueError):
                     HeadlessJobSpec(**kwargs)
+
+    def test_from_json_dict_defaults_skip_empty_regions_for_legacy_specs(self) -> None:
+        legacy_data = {
+            "kind": "inference",
+            "raw_volume_path": "raw.npy",
+            "bbox_path": "boxes.json",
+            "input_checkpoint_path": "input.cp",
+            "output_segmentation_path": "output.zarr",
+            "output_segmentation_format": "zarr",
+            "training_parameters": {
+                "learning_rate": 5e-5,
+                "training_batch_size": 4,
+                "validation_batch_size": 16,
+                "inference_batch_size": 16,
+                "patches_per_epoch": 2000,
+                "early_stopping_patience": 7,
+                # No "skip_empty_regions" key, mimicking a job spec saved
+                # before this field existed.
+            },
+        }
+
+        spec = HeadlessJobSpec.from_json_dict(legacy_data)
+
+        self.assertFalse(spec.training_parameters.skip_empty_regions)
 
 
 if __name__ == "__main__":

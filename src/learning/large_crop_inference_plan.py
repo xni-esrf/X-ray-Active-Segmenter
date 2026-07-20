@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from itertools import product
 from numbers import Integral
-from typing import Sequence, Tuple
+from typing import List, Optional, Sequence, Tuple
 
 from .inference_geometry import (
     DEFAULT_INFERENCE_MINIVOL_SIZE,
@@ -14,6 +14,7 @@ from .inference_geometry import (
     inference_internal_crop_discard_margin_for_minivol_size,
     inference_stride_for_minivol_size,
 )
+from .zero_occupancy import ZeroOccupancyGrid, region_is_definitely_empty
 
 
 AxisBounds = Tuple[int, int]
@@ -70,6 +71,8 @@ class LargeCropInferencePlan:
     crop_grid_shape: ShapeZYX
     valid_step_shape: ShapeZYX
     windows: Tuple[LargeCropWindow, ...]
+    predicted_skip_crop_count: Optional[int] = None
+    predicted_skip_voxel_count: Optional[int] = None
 
     @property
     def requires_cropping(self) -> bool:
@@ -98,6 +101,7 @@ def build_large_crop_inference_plan(
     minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
     voxel_budget: int = DEFAULT_LARGE_CROP_VOXEL_BUDGET,
     preferred_max_crop_edge: int = DEFAULT_LARGE_CROP_EDGE_VOXELS,
+    occupancy: Optional[ZeroOccupancyGrid] = None,
 ) -> LargeCropInferencePlan:
     normalized_raw_shape = _coerce_shape(raw_volume_shape, name="raw_volume_shape")
     normalized_requested_bounds = _coerce_bounds(
@@ -147,20 +151,11 @@ def build_large_crop_inference_plan(
         )
         for axis in range(3)
     )
-    selected_candidates = _select_crop_grid(
+    best_candidates, feasible_candidates = _select_crop_grid(
         axis_candidates=axis_candidates,
         voxel_budget=int(normalized_voxel_budget),
     )
 
-    normalized_shape = tuple(
-        int(candidate.normalized_size) for candidate in selected_candidates
-    )
-    crop_grid_shape = tuple(
-        int(candidate.split_count) for candidate in selected_candidates
-    )
-    valid_step_shape = tuple(
-        int(candidate.valid_step) for candidate in selected_candidates
-    )
     normalized_origin_in_raw = tuple(
         int(normalized_requested_bounds[axis][0]) - int(normalized_context_margin)
         for axis in range(3)
@@ -172,6 +167,38 @@ def build_large_crop_inference_plan(
         )
         for axis in range(3)
     )
+    requested_bounds_origin = tuple(
+        int(normalized_requested_bounds[axis][0]) for axis in range(3)
+    )
+
+    selected_candidates = best_candidates
+    predicted_skip_crop_count: Optional[int] = None
+    predicted_skip_voxel_count: Optional[int] = None
+    if occupancy is not None:
+        (
+            selected_candidates,
+            predicted_skip_crop_count,
+            predicted_skip_voxel_count,
+        ) = _select_zero_skip_aware_crop_grid(
+            feasible_candidates,
+            occupancy=occupancy,
+            requested_shape=requested_shape,
+            raw_volume_shape=normalized_raw_shape,
+            normalized_origin_in_raw=normalized_origin_in_raw,
+            requested_slices_in_normalized=requested_slices_in_normalized,
+            internal_margin=int(internal_margin),
+            requested_bounds_origin=requested_bounds_origin,
+        )
+
+    normalized_shape = tuple(
+        int(candidate.normalized_size) for candidate in selected_candidates
+    )
+    crop_grid_shape = tuple(
+        int(candidate.split_count) for candidate in selected_candidates
+    )
+    valid_step_shape = tuple(
+        int(candidate.valid_step) for candidate in selected_candidates
+    )
 
     windows = _build_crop_windows(
         requested_shape=requested_shape,
@@ -182,9 +209,7 @@ def build_large_crop_inference_plan(
         crop_grid_shape=crop_grid_shape,
         valid_step_shape=valid_step_shape,
         internal_margin=int(internal_margin),
-        requested_bounds_origin=tuple(
-            int(normalized_requested_bounds[axis][0]) for axis in range(3)
-        ),
+        requested_bounds_origin=requested_bounds_origin,
     )
 
     return LargeCropInferencePlan(
@@ -202,6 +227,8 @@ def build_large_crop_inference_plan(
         crop_grid_shape=crop_grid_shape,
         valid_step_shape=valid_step_shape,
         windows=windows,
+        predicted_skip_crop_count=predicted_skip_crop_count,
+        predicted_skip_voxel_count=predicted_skip_voxel_count,
     )
 
 
@@ -248,6 +275,29 @@ def _axis_candidates(
     )
 
 
+_AxisCandidateCombo = Tuple[_AxisCandidate, _AxisCandidate, _AxisCandidate]
+
+
+def _candidate_grid_secondary_score(
+    candidates: _AxisCandidateCombo,
+) -> Tuple[int, int, int]:
+    split_small_axis_penalty = sum(
+        1
+        for candidate in candidates
+        if int(candidate.minimum_size) <= DEFAULT_LARGE_CROP_EDGE_VOXELS
+        and int(candidate.split_count) > 1
+    )
+    extra_padding = sum(
+        int(candidate.normalized_size) - int(candidate.minimum_size)
+        for candidate in candidates
+    )
+    preferred_edge_excess = sum(
+        max(0, int(candidate.max_crop_size) - DEFAULT_LARGE_CROP_EDGE_VOXELS)
+        for candidate in candidates
+    )
+    return split_small_axis_penalty, extra_padding, preferred_edge_excess
+
+
 def _select_crop_grid(
     *,
     axis_candidates: Tuple[
@@ -256,9 +306,10 @@ def _select_crop_grid(
         Tuple[_AxisCandidate, ...],
     ],
     voxel_budget: int,
-) -> Tuple[_AxisCandidate, _AxisCandidate, _AxisCandidate]:
-    best: Tuple[_AxisCandidate, _AxisCandidate, _AxisCandidate] | None = None
+) -> Tuple[_AxisCandidateCombo, Tuple[Tuple[int, _AxisCandidateCombo], ...]]:
+    best: _AxisCandidateCombo | None = None
     best_score: Tuple[int, int, int, int, int] | None = None
+    feasible: List[Tuple[int, _AxisCandidateCombo]] = []
     for candidates in product(*axis_candidates):
         crop_voxels = _product(
             int(candidate.max_crop_size) for candidate in candidates
@@ -268,19 +319,9 @@ def _select_crop_grid(
         split_count_product = _product(
             int(candidate.split_count) for candidate in candidates
         )
-        split_small_axis_penalty = sum(
-            1
-            for candidate in candidates
-            if int(candidate.minimum_size) <= DEFAULT_LARGE_CROP_EDGE_VOXELS
-            and int(candidate.split_count) > 1
-        )
-        extra_padding = sum(
-            int(candidate.normalized_size) - int(candidate.minimum_size)
-            for candidate in candidates
-        )
-        preferred_edge_excess = sum(
-            max(0, int(candidate.max_crop_size) - DEFAULT_LARGE_CROP_EDGE_VOXELS)
-            for candidate in candidates
+        feasible.append((int(split_count_product), candidates))
+        split_small_axis_penalty, extra_padding, preferred_edge_excess = (
+            _candidate_grid_secondary_score(candidates)
         )
         score = (
             int(split_count_product),
@@ -296,7 +337,86 @@ def _select_crop_grid(
         raise ValueError(
             "Could not find a crop grid within the configured voxel budget."
         )
-    return best
+    return best, tuple(feasible)
+
+
+def _select_zero_skip_aware_crop_grid(
+    feasible: Tuple[Tuple[int, _AxisCandidateCombo], ...],
+    *,
+    occupancy: ZeroOccupancyGrid,
+    requested_shape: ShapeZYX,
+    raw_volume_shape: ShapeZYX,
+    normalized_origin_in_raw: ShapeZYX,
+    requested_slices_in_normalized: SliceZYX,
+    internal_margin: int,
+    requested_bounds_origin: ShapeZYX,
+) -> Tuple[_AxisCandidateCombo, int, int]:
+    best_count = min(split_count_product for split_count_product, _combo in feasible)
+    shortlist = [
+        (split_count_product, combo)
+        for split_count_product, combo in feasible
+        if split_count_product < 2 * best_count
+    ]
+
+    best_combo: _AxisCandidateCombo | None = None
+    best_score: Tuple[int, int, int, int, int, int] | None = None
+    best_skipped_crop_count = 0
+    best_skipped_voxels = 0
+    for split_count_product, combo in shortlist:
+        normalized_shape = tuple(int(candidate.normalized_size) for candidate in combo)
+        crop_grid_shape = tuple(int(candidate.split_count) for candidate in combo)
+        valid_step_shape = tuple(int(candidate.valid_step) for candidate in combo)
+        windows = _build_crop_windows(
+            requested_shape=requested_shape,
+            raw_volume_shape=raw_volume_shape,
+            normalized_origin_in_raw=normalized_origin_in_raw,
+            normalized_shape=normalized_shape,
+            requested_slices_in_normalized=requested_slices_in_normalized,
+            crop_grid_shape=crop_grid_shape,
+            valid_step_shape=valid_step_shape,
+            internal_margin=int(internal_margin),
+            requested_bounds_origin=requested_bounds_origin,
+        )
+        if any(
+            axis_slice.stop <= axis_slice.start
+            for window in windows
+            for axis_slice in window.extraction.raw_slices
+        ):
+            # An over-split candidate can produce crops that fall entirely
+            # beyond the real volume (degenerate/reversed raw_slices), which
+            # would fail at extraction time. The content-blind selection
+            # never picks such candidates; skip them here too.
+            continue
+        empty_flags = tuple(
+            region_is_definitely_empty(occupancy, raw_slices=window.extraction.raw_slices)
+            for window in windows
+        )
+        skipped_voxels = sum(
+            _product(int(axis) for axis in window.crop_shape)
+            for window, is_empty in zip(windows, empty_flags)
+            if is_empty
+        )
+        skipped_crop_count = sum(1 for is_empty in empty_flags if is_empty)
+        crop_voxels = _product(int(candidate.max_crop_size) for candidate in combo)
+        split_small_axis_penalty, extra_padding, preferred_edge_excess = (
+            _candidate_grid_secondary_score(combo)
+        )
+        score = (
+            -int(skipped_voxels),
+            int(split_count_product),
+            int(split_small_axis_penalty),
+            int(extra_padding),
+            int(preferred_edge_excess),
+            -int(crop_voxels),
+        )
+        if best_score is None or score < best_score:
+            best_combo = combo
+            best_score = score
+            best_skipped_crop_count = skipped_crop_count
+            best_skipped_voxels = skipped_voxels
+    if best_combo is None:
+        raise ValueError("Could not select a zero-skip-aware crop grid.")
+    return best_combo, int(best_skipped_crop_count), int(best_skipped_voxels)
 
 
 def _build_crop_windows(
