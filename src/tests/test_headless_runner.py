@@ -7,6 +7,7 @@ from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
 import numpy as np
+import torch
 
 from src.bbox import BoundingBox, save_bounding_boxes
 from src.headless.job_spec import HeadlessJobSpec, save_headless_job_spec
@@ -446,7 +447,15 @@ class HeadlessRunnerTests(unittest.TestCase):
             job_path = job_dir / "job.json"
 
             np.save(raw_path, np.arange(27, dtype=np.float32).reshape(3, 3, 3))
-            checkpoint_path.write_bytes(b"checkpoint")
+            torch.save(
+                {
+                    "metadata": {
+                        "num_classes": 3,
+                        "hyperparameters": {"label_values": [0, 1, 2]},
+                    },
+                },
+                checkpoint_path,
+            )
             save_bounding_boxes(
                 str(bbox_path),
                 volume_shape=(3, 3, 3),

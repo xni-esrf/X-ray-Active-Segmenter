@@ -14,6 +14,7 @@ from ..io.loader import InMemoryVolumeLoader
 from ..learning import (
     LearningSourceBundle,
     LearningSession,
+    inspect_foundation_checkpoint_metadata,
     instantiate_model_runtime_from_checkpoint,
     load_learning_sources_from_paths,
     prepare_learning_state_from_sources,
@@ -226,7 +227,12 @@ def _load_inference_sources_without_segmentation(spec: HeadlessJobSpec) -> Learn
         spec.bbox_path,
         expected_shape=raw.volume.shape,
     )
-    empty_segmentation = np.zeros(raw.volume.shape, dtype=np.int32)
+    checkpoint_metadata = inspect_foundation_checkpoint_metadata(spec.input_checkpoint_path)
+    placeholder_dtype = _headless_inference_output_dtype(
+        tuple(checkpoint_metadata.label_values),
+        context=None,
+    )
+    empty_segmentation = np.zeros(raw.volume.shape, dtype=placeholder_dtype)
     segmentation_volume = open_volume(
         InMemoryVolumeLoader(
             path="<generated-empty-semantic-segmentation>",
@@ -435,7 +441,7 @@ def _inference_boxes_from_sources(sources: object) -> Tuple[object, ...]:
 def _headless_inference_output_dtype(
     label_values: Sequence[object],
     *,
-    context: _HeadlessInputContext,
+    context: Optional[_HeadlessInputContext],
 ) -> np.dtype:
     del context
 
