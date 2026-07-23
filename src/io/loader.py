@@ -118,6 +118,45 @@ class InMemoryVolumeLoader(VolumeLoader):
         return np.asarray(self._array[zyx_slices])
 
 
+class ZeroVolumeLoader(VolumeLoader):
+    """Virtual all-zeros volume that never materializes the full array.
+
+    Reports the requested shape/dtype but allocates only the region asked for by
+    each ``get_chunk`` call, so it can stand in for a full-volume placeholder
+    (e.g. an empty segmentation during inference) without the memory cost of a
+    dense array.
+    """
+
+    def __init__(
+        self,
+        *,
+        path: str,
+        shape: Tuple[int, int, int],
+        dtype: str = "uint8",
+        voxel_spacing: VoxelSpacing = (1.0, 1.0, 1.0),
+        axes: str = "zyx",
+    ) -> None:
+        super().__init__(path)
+        self._info = VolumeInfo(
+            shape=tuple(int(size) for size in shape),
+            dtype=str(np.dtype(dtype)),
+            voxel_spacing=voxel_spacing,
+            chunk_shape=None,
+            axes=axes,
+        )
+
+    @property
+    def info(self) -> VolumeInfo:
+        return self._info
+
+    def get_chunk(self, zyx_slices: Tuple[slice, slice, slice]) -> np.ndarray:
+        region_shape = tuple(
+            len(range(*zyx_slices[axis].indices(self._info.shape[axis])))
+            for axis in range(3)
+        )
+        return np.zeros(region_shape, dtype=np.dtype(self._info.dtype))
+
+
 def cast_float32_to_float16(loader: VolumeLoader) -> VolumeLoader:
     if np.dtype(loader.info.dtype) == np.dtype(np.float32):
         return Float16Loader(loader)

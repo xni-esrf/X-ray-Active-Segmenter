@@ -10,7 +10,7 @@ import numpy as np
 
 from ..bbox import load_bounding_boxes
 from ..data import open_volume
-from ..io.loader import InMemoryVolumeLoader
+from ..io.loader import ZeroVolumeLoader
 from ..learning import (
     LearningSourceBundle,
     LearningSession,
@@ -232,11 +232,14 @@ def _load_inference_sources_without_segmentation(spec: HeadlessJobSpec) -> Learn
         tuple(checkpoint_metadata.label_values),
         context=None,
     )
-    empty_segmentation = np.zeros(raw.volume.shape, dtype=placeholder_dtype)
+    # Inference writes its output crop-by-crop to Zarr and never reads this
+    # placeholder, so back it with a lazy all-zeros loader rather than a dense
+    # full-volume array (which would OOM on very large volumes).
     segmentation_volume = open_volume(
-        InMemoryVolumeLoader(
+        ZeroVolumeLoader(
             path="<generated-empty-semantic-segmentation>",
-            array=empty_segmentation,
+            shape=raw.volume.shape,
+            dtype=str(placeholder_dtype),
             voxel_spacing=raw.volume.info.voxel_spacing,
             axes=raw.volume.info.axes,
         )
