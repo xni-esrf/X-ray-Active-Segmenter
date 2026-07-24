@@ -12,13 +12,18 @@ from ..bbox import load_bounding_boxes
 from ..data import open_volume
 from ..io.loader import ZeroVolumeLoader
 from ..learning import (
+    DEFAULT_INFERENCE_MINIVOL_SIZE,
     LearningSourceBundle,
     LearningSession,
+    build_streaming_inference_plan,
+    build_torch_minivol_forward,
+    create_streaming_zarr_writer,
     inspect_foundation_checkpoint_metadata,
     instantiate_model_runtime_from_checkpoint,
     load_learning_sources_from_paths,
     prepare_learning_state_from_sources,
-    run_large_crop_inference_to_zarr,
+    prepare_streaming_occupancy_and_stats,
+    run_streaming_inference,
     save_foundation_model_checkpoint,
     train_learning_model_with_validation_loop,
     validate_foundation_checkpoint_load_preconditions,
@@ -350,16 +355,16 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
     if spec.output_segmentation_format is None:
         raise ValueError("Inference jobs require output_segmentation_format.")
     if str(spec.output_segmentation_format).strip().lower() != "zarr":
-        raise ValueError("Headless large-crop inference requires Zarr output.")
+        raise ValueError("Headless streaming inference requires Zarr output.")
 
     inference_boxes = _inference_boxes_from_sources(context.sources)
     if len(inference_boxes) != 1:
         raise ValueError(
-            "Headless large-crop inference currently requires exactly one inference bbox; "
+            "Headless streaming inference requires exactly one inference bbox; "
             f"got {len(inference_boxes)}."
         )
     LOGGER.info(
-        "Preparing headless inference: inference_boxes=%d checkpoint=%s",
+        "Preparing headless streaming inference: inference_boxes=%d checkpoint=%s",
         len(inference_boxes),
         spec.input_checkpoint_path,
     )
@@ -367,6 +372,10 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
         spec.input_checkpoint_path,
         require_min_gpu_count=2,
     )
+    label_values = tuple(int(value) for value in tuple(checkpoint_preconditions.label_values))
+    background_label = _assert_streaming_background_label(label_values)
+    output_dtype = _headless_inference_output_dtype(label_values, context=None)
+
     runtime = instantiate_model_runtime_from_checkpoint(
         checkpoint_path=spec.input_checkpoint_path,
         num_classes=int(checkpoint_preconditions.num_classes),
@@ -379,33 +388,87 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
         (int(inference_box.y0), int(inference_box.y1)),
         (int(inference_box.x0), int(inference_box.x1)),
     )
+    raw_volume_shape = tuple(int(dim) for dim in context.raw_volume.shape)
+    skip_empty_regions = bool(spec.training_parameters.skip_empty_regions)
     LOGGER.info(
-        "Large-crop inference started: boxes=%d label_values=%s requested_bounds=%s",
-        len(inference_boxes),
-        tuple(int(value) for value in tuple(checkpoint_preconditions.label_values)),
+        "Streaming inference started: label_values=%s requested_bounds=%s raw_shape=%s "
+        "skip_empty_regions=%s batch_size=%d",
+        label_values,
         requested_bounds,
+        raw_volume_shape,
+        skip_empty_regions,
+        int(spec.training_parameters.inference_batch_size),
     )
 
-    result = run_large_crop_inference_to_zarr(
-        model_runtime=runtime,
-        raw_volume=context.raw_volume,
+    prepass = prepare_streaming_occupancy_and_stats(
+        context.raw_volume,
         requested_bounds=requested_bounds,
-        label_values=tuple(checkpoint_preconditions.label_values),
-        output_path=spec.output_segmentation_path,
-        output_dtype=_headless_inference_output_dtype(
-            tuple(checkpoint_preconditions.label_values),
-            context=context,
-        ),
-        overwrite=True,
-        batch_size=int(spec.training_parameters.inference_batch_size),
-        skip_empty_regions=bool(spec.training_parameters.skip_empty_regions),
+        raw_volume_shape=raw_volume_shape,
+        minivol_size=DEFAULT_INFERENCE_MINIVOL_SIZE,
+        skip_empty_regions=skip_empty_regions,
     )
     LOGGER.info(
-        "Large-crop inference completed: crops=%d written=%d output=%s",
-        int(result.plan.total_crop_count),
-        int(result.written_crop_count),
-        result.output_path,
+        "Streaming normalization: mean=%.6g std=%.6g domain_voxels=%d",
+        float(prepass.normalization.mean),
+        float(prepass.normalization.std),
+        int(prepass.normalization.voxel_count),
     )
+
+    plan = build_streaming_inference_plan(
+        requested_bounds=requested_bounds,
+        raw_volume_shape=raw_volume_shape,
+        minivol_size=DEFAULT_INFERENCE_MINIVOL_SIZE,
+        occupancy=prepass.grid,
+    )
+
+    writer = create_streaming_zarr_writer(
+        spec.output_segmentation_path,
+        shape=raw_volume_shape,
+        dtype=output_dtype,
+        chunks=(int(plan.chunk_size),) * 3,
+        fill_value=int(background_label),
+        overwrite=True,
+    )
+    forward = build_torch_minivol_forward(runtime)
+    result = run_streaming_inference(
+        plan=plan,
+        raw_volume=context.raw_volume,
+        normalization=prepass.normalization,
+        label_values=label_values,
+        output_dtype=output_dtype,
+        forward_minivol_batch=forward,
+        writer=writer,
+        batch_size=int(spec.training_parameters.inference_batch_size),
+    )
+    LOGGER.info(
+        "Streaming inference completed: run_cells=%d processed_minivols=%d "
+        "written_chunks=%d/%d output=%s",
+        int(plan.run_cell_count),
+        int(result.processed_minivol_count),
+        int(result.written_chunk_count),
+        int(plan.written_chunk_count),
+        spec.output_segmentation_path,
+    )
+
+
+def _assert_streaming_background_label(label_values: Sequence[int]) -> int:
+    """Return the background label (label_values[0]) used as the Zarr fill value.
+
+    Streaming inference writes ``label_values[0]`` as the fill value for every
+    skipped/background region, so it must be the background label.  Label spaces
+    are stored sorted ascending with background 0 first, so we require
+    ``label_values[0] == 0`` and fail loudly on any other ordering.
+    """
+    if not label_values:
+        raise ValueError("Inference requires at least one label value.")
+    background_label = int(label_values[0])
+    if background_label != 0:
+        raise ValueError(
+            "Streaming inference writes label_values[0] as the Zarr fill value and "
+            "requires it to be the background label 0, but got "
+            f"label_values[0]={background_label} (label_values={tuple(int(v) for v in label_values)})."
+        )
+    return background_label
 
 
 def _log_training_epoch_progress(progress: object) -> None:

@@ -628,7 +628,7 @@ class HeadlessRunnerTests(unittest.TestCase):
         self.assertTrue(runtime.hyperparameters["trained_in_app"])
         self.assertEqual(runtime.hyperparameters["training_run_count"], 1)
 
-    def test_inference_job_orchestration_runs_large_crop_zarr_inference(self) -> None:
+    def test_inference_job_orchestration_runs_streaming_zarr_inference(self) -> None:
         inference_box = BoundingBox.from_bounds(
             box_id="infer-box",
             z0=0,
@@ -691,6 +691,14 @@ class HeadlessRunnerTests(unittest.TestCase):
             job_dir=str(job_dir),
         )
 
+        grid_sentinel = object()
+        normalization = SimpleNamespace(mean=1.5, std=2.0, voxel_count=100)
+        plan_sentinel = SimpleNamespace(
+            chunk_size=200, run_cell_count=3, written_chunk_count=2
+        )
+        writer_sentinel = object()
+        forward_sentinel = object()
+
         with patch.object(
             runner_module,
             "validate_foundation_checkpoint_load_preconditions",
@@ -705,12 +713,24 @@ class HeadlessRunnerTests(unittest.TestCase):
             return_value=runtime,
         ) as instantiate_mock, patch.object(
             runner_module,
-            "run_large_crop_inference_to_zarr",
-            return_value=SimpleNamespace(
-                output_path=str(output_path),
-                plan=SimpleNamespace(total_crop_count=1),
-                written_crop_count=1,
-            ),
+            "prepare_streaming_occupancy_and_stats",
+            return_value=SimpleNamespace(grid=grid_sentinel, normalization=normalization),
+        ) as prepass_mock, patch.object(
+            runner_module,
+            "build_streaming_inference_plan",
+            return_value=plan_sentinel,
+        ) as plan_mock, patch.object(
+            runner_module,
+            "create_streaming_zarr_writer",
+            return_value=writer_sentinel,
+        ) as writer_mock, patch.object(
+            runner_module,
+            "build_torch_minivol_forward",
+            return_value=forward_sentinel,
+        ) as forward_mock, patch.object(
+            runner_module,
+            "run_streaming_inference",
+            return_value=SimpleNamespace(processed_minivol_count=3, written_chunk_count=2),
         ) as inference_mock:
             runner_module._run_inference_job(spec, context)
 
@@ -720,19 +740,49 @@ class HeadlessRunnerTests(unittest.TestCase):
             num_classes=2,
             device_ids=(0, 1),
         )
-        inference_mock.assert_called_once()
-        self.assertEqual(inference_mock.call_args.kwargs["model_runtime"], runtime)
-        self.assertIs(inference_mock.call_args.kwargs["raw_volume"], raw_volume)
+
+        # pre-pass: occupancy + normalization over the raw volume
+        prepass_mock.assert_called_once()
+        self.assertIs(prepass_mock.call_args.args[0], raw_volume)
         self.assertEqual(
-            inference_mock.call_args.kwargs["requested_bounds"],
-            ((0, 1), (0, 2), (0, 2)),
+            prepass_mock.call_args.kwargs["requested_bounds"], ((0, 1), (0, 2), (0, 2))
         )
+        self.assertEqual(prepass_mock.call_args.kwargs["raw_volume_shape"], (2, 2, 2))
+        self.assertIs(prepass_mock.call_args.kwargs["skip_empty_regions"], True)
+        self.assertEqual(
+            prepass_mock.call_args.kwargs["minivol_size"],
+            runner_module.DEFAULT_INFERENCE_MINIVOL_SIZE,
+        )
+
+        # plan uses the pre-pass occupancy grid
+        plan_mock.assert_called_once()
+        self.assertEqual(
+            plan_mock.call_args.kwargs["requested_bounds"], ((0, 1), (0, 2), (0, 2))
+        )
+        self.assertEqual(plan_mock.call_args.kwargs["raw_volume_shape"], (2, 2, 2))
+        self.assertIs(plan_mock.call_args.kwargs["occupancy"], grid_sentinel)
+
+        # writer: full-volume zarr, chunk = plan.chunk_size, fill = background label 0
+        writer_mock.assert_called_once()
+        self.assertEqual(writer_mock.call_args.args[0], str(output_path))
+        self.assertEqual(writer_mock.call_args.kwargs["shape"], (2, 2, 2))
+        self.assertEqual(writer_mock.call_args.kwargs["dtype"], np.dtype(np.uint8))
+        self.assertEqual(writer_mock.call_args.kwargs["chunks"], (200, 200, 200))
+        self.assertEqual(writer_mock.call_args.kwargs["fill_value"], 0)
+        self.assertIs(writer_mock.call_args.kwargs["overwrite"], True)
+
+        forward_mock.assert_called_once_with(runtime)
+
+        # executor wiring
+        inference_mock.assert_called_once()
+        self.assertIs(inference_mock.call_args.kwargs["plan"], plan_sentinel)
+        self.assertIs(inference_mock.call_args.kwargs["raw_volume"], raw_volume)
+        self.assertIs(inference_mock.call_args.kwargs["normalization"], normalization)
         self.assertEqual(inference_mock.call_args.kwargs["label_values"], (0, 1))
-        self.assertEqual(inference_mock.call_args.kwargs["output_path"], str(output_path))
         self.assertEqual(inference_mock.call_args.kwargs["output_dtype"], np.dtype(np.uint8))
-        self.assertIs(inference_mock.call_args.kwargs["overwrite"], True)
+        self.assertIs(inference_mock.call_args.kwargs["forward_minivol_batch"], forward_sentinel)
+        self.assertIs(inference_mock.call_args.kwargs["writer"], writer_sentinel)
         self.assertEqual(inference_mock.call_args.kwargs["batch_size"], 9)
-        self.assertIs(inference_mock.call_args.kwargs["skip_empty_regions"], True)
 
     def test_headless_inference_output_dtype_uses_label_range_not_segmentation_dtype(self) -> None:
         context = SimpleNamespace(
