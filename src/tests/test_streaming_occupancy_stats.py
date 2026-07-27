@@ -289,6 +289,24 @@ class StreamingSkipEmptyRegionsTest(unittest.TestCase):
         )
 
 
+class StreamingComputeNormalizationFlagTest(unittest.TestCase):
+    def test_compute_normalization_false_returns_identity_and_keeps_grid(self):
+        raw_shape = (80, 80, 80)
+        bounds = ((5, 75), (5, 75), (5, 75))
+        arr = _blobby_volume(raw_shape)
+        prepass = prepare_streaming_occupancy_and_stats(
+            _FakeVolume(arr), requested_bounds=bounds, raw_volume_shape=raw_shape,
+            minivol_size=MINIVOL, compute_normalization=False,
+        )
+        # identity normalization, no domain voxels counted
+        self.assertEqual(prepass.normalization.mean, 0.0)
+        self.assertEqual(prepass.normalization.std, 1.0)
+        self.assertEqual(prepass.normalization.voxel_count, 0)
+        # the occupancy grid is still produced (default skip_empty_regions=True)
+        self.assertEqual(prepass.grid.occupied.dtype, np.dtype(bool))
+        self.assertTrue(bool(prepass.grid.occupied.any()))
+
+
 class StreamingNormalizationFromSumsTest(unittest.TestCase):
     def test_negative_variance_rounding_is_clamped(self):
         # sum_x2/n - mean^2 slightly negative due to rounding -> std falls back to 1.

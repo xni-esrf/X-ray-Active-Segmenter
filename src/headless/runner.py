@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 from pathlib import Path
 import sys
 import time
@@ -16,6 +17,7 @@ from ..learning import (
     DEFAULT_INFERENCE_MINIVOL_SIZE,
     LearningSourceBundle,
     LearningSession,
+    StreamingNormalizationStats,
     build_streaming_inference_plan,
     build_torch_minivol_forward,
     create_streaming_zarr_writer,
@@ -348,6 +350,22 @@ def _run_training_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) -> 
     )
 
 
+def _headless_skip_normalization() -> bool:
+    """Whether to skip the (slow) normalization pre-pass for headless inference.
+
+    Controlled by the ``XRAY_HEADLESS_SKIP_NORMALIZATION`` environment variable
+    (``1``/``true``/``yes``/``on``).  A diagnostic/throughput switch only: with
+    normalization disabled the model receives un-normalized inputs, so the
+    segmentation output is not meaningful.
+    """
+    return os.environ.get("XRAY_HEADLESS_SKIP_NORMALIZATION", "").strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "on",
+    }
+
+
 class _ReadTimingVolume:
     """Wraps a volume to time ``get_chunk`` calls during the pre-pass.
 
@@ -418,45 +436,67 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
     )
     raw_volume_shape = tuple(int(dim) for dim in context.raw_volume.shape)
     skip_empty_regions = bool(spec.training_parameters.skip_empty_regions)
+    skip_normalization = _headless_skip_normalization()
     LOGGER.info(
         "Streaming inference started: label_values=%s requested_bounds=%s raw_shape=%s "
-        "skip_empty_regions=%s batch_size=%d",
+        "skip_empty_regions=%s skip_normalization=%s batch_size=%d",
         label_values,
         requested_bounds,
         raw_volume_shape,
         skip_empty_regions,
+        skip_normalization,
         int(spec.training_parameters.inference_batch_size),
     )
 
-    # Time the pre-pass (a full-volume occupancy + intensity scan before the
-    # streaming loop): a timing proxy isolates its disk read time from wall time.
-    prepass_volume = _ReadTimingVolume(context.raw_volume)
-    prepass_start = time.perf_counter()
-    prepass = prepare_streaming_occupancy_and_stats(
-        prepass_volume,
-        requested_bounds=requested_bounds,
-        raw_volume_shape=raw_volume_shape,
-        minivol_size=DEFAULT_INFERENCE_MINIVOL_SIZE,
-        skip_empty_regions=skip_empty_regions,
-    )
-    LOGGER.info(
-        "Pre-pass (occupancy+stats): wall=%.2fs read=%.2fs get_chunk_calls=%d",
-        time.perf_counter() - prepass_start,
-        prepass_volume.read_seconds,
-        prepass_volume.calls,
-    )
-    LOGGER.info(
-        "Streaming normalization: mean=%.6g std=%.6g domain_voxels=%d",
-        float(prepass.normalization.mean),
-        float(prepass.normalization.std),
-        int(prepass.normalization.voxel_count),
-    )
+    if skip_normalization and not skip_empty_regions:
+        # Neither occupancy (skip off) nor stats (normalization off) are needed,
+        # so the full-volume pre-pass is skipped entirely: every minivolume runs
+        # with identity normalization.  Diagnostic/throughput mode only.
+        LOGGER.warning(
+            "Skipping the streaming pre-pass: normalization disabled and "
+            "skip_empty_regions off -> identity normalization (mean=0, std=1), "
+            "all minivolumes run. Segmentation output is NOT meaningful."
+        )
+        occupancy_grid = None
+        normalization = StreamingNormalizationStats(mean=0.0, std=1.0, voxel_count=0)
+    else:
+        # Time the pre-pass (full-volume occupancy + intensity scan before the
+        # streaming loop): a timing proxy isolates disk read time from wall time.
+        prepass_volume = _ReadTimingVolume(context.raw_volume)
+        prepass_start = time.perf_counter()
+        prepass = prepare_streaming_occupancy_and_stats(
+            prepass_volume,
+            requested_bounds=requested_bounds,
+            raw_volume_shape=raw_volume_shape,
+            minivol_size=DEFAULT_INFERENCE_MINIVOL_SIZE,
+            skip_empty_regions=skip_empty_regions,
+            compute_normalization=not skip_normalization,
+        )
+        LOGGER.info(
+            "Pre-pass (occupancy+stats): wall=%.2fs read=%.2fs get_chunk_calls=%d",
+            time.perf_counter() - prepass_start,
+            prepass_volume.read_seconds,
+            prepass_volume.calls,
+        )
+        if skip_normalization:
+            LOGGER.warning(
+                "Normalization disabled: identity normalization (mean=0, std=1); "
+                "segmentation output is NOT meaningful."
+            )
+        LOGGER.info(
+            "Streaming normalization: mean=%.6g std=%.6g domain_voxels=%d",
+            float(prepass.normalization.mean),
+            float(prepass.normalization.std),
+            int(prepass.normalization.voxel_count),
+        )
+        occupancy_grid = prepass.grid
+        normalization = prepass.normalization
 
     plan = build_streaming_inference_plan(
         requested_bounds=requested_bounds,
         raw_volume_shape=raw_volume_shape,
         minivol_size=DEFAULT_INFERENCE_MINIVOL_SIZE,
-        occupancy=prepass.grid,
+        occupancy=occupancy_grid,
     )
 
     writer = create_streaming_zarr_writer(
@@ -471,7 +511,7 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
     result = run_streaming_inference(
         plan=plan,
         raw_volume=context.raw_volume,
-        normalization=prepass.normalization,
+        normalization=normalization,
         label_values=label_values,
         output_dtype=output_dtype,
         forward_minivol_batch=forward,

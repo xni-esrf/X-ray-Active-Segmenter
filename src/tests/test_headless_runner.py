@@ -788,6 +788,82 @@ class HeadlessRunnerTests(unittest.TestCase):
         self.assertIs(inference_mock.call_args.kwargs["writer"], writer_sentinel)
         self.assertEqual(inference_mock.call_args.kwargs["batch_size"], 9)
 
+    def test_inference_job_skips_prepass_when_normalization_disabled(self) -> None:
+        # With normalization disabled and skip_empty_regions off, the full-volume
+        # pre-pass is skipped entirely: no prepass call, occupancy=None (all cells
+        # run), and identity normalization is handed to the executor.
+        inference_box = BoundingBox.from_bounds(
+            box_id="infer-box", z0=0, z1=1, y0=0, y1=2, x0=0, x1=2,
+            label="inference", volume_shape=(2, 2, 2),
+        )
+        train_box = BoundingBox.from_bounds(
+            box_id="train-box", z0=1, z1=2, y0=0, y1=1, x0=0, x1=1,
+            label="train", volume_shape=(2, 2, 2),
+        )
+        raw_volume = _FakeVolume(np.arange(8, dtype=np.float32).reshape(2, 2, 2), axes="zyx")
+        segmentation_volume = _FakeVolume(np.zeros((2, 2, 2), dtype=np.uint8), axes="zyx")
+        sources = SimpleNamespace(
+            raw_volume=raw_volume,
+            segmentation_volume=segmentation_volume,
+            boxes_by_id={"train-box": train_box, "infer-box": inference_box},
+            ordered_box_ids=("train-box", "infer-box"),
+        )
+        context = SimpleNamespace(
+            sources=sources, raw_volume=raw_volume, segmentation_volume=segmentation_volume,
+        )
+        runtime = SimpleNamespace(model=object())
+        tmpdir_cm = TemporaryDirectory()
+        self.addCleanup(tmpdir_cm.cleanup)
+        root = Path(tmpdir_cm.name)
+        spec = HeadlessJobSpec(
+            kind="inference",
+            raw_volume_path="raw.npy",
+            segmentation_path="seg.npy",
+            segmentation_kind="semantic",
+            bbox_path="boxes.json",
+            input_checkpoint_path="input.cp",
+            output_segmentation_path=str(root / "output.zarr"),
+            output_segmentation_format="zarr",
+            training_parameters=TrainingParameters(
+                inference_batch_size=9,
+                skip_empty_regions=False,
+            ),
+            job_dir=str(root / "headless-job" / "inference-job"),
+        )
+        plan_sentinel = SimpleNamespace(
+            chunk_size=200, run_cell_count=3, written_chunk_count=2
+        )
+
+        with patch.object(
+            runner_module, "_headless_skip_normalization", return_value=True,
+        ), patch.object(
+            runner_module,
+            "validate_foundation_checkpoint_load_preconditions",
+            return_value=SimpleNamespace(num_classes=2, label_values=(0, 1), device_ids=(0, 1)),
+        ), patch.object(
+            runner_module, "instantiate_model_runtime_from_checkpoint", return_value=runtime,
+        ), patch.object(
+            runner_module, "prepare_streaming_occupancy_and_stats", autospec=True,
+        ) as prepass_mock, patch.object(
+            runner_module, "build_streaming_inference_plan", return_value=plan_sentinel,
+        ) as plan_mock, patch.object(
+            runner_module, "create_streaming_zarr_writer", return_value=object(),
+        ), patch.object(
+            runner_module, "build_torch_minivol_forward", return_value=object(),
+        ), patch.object(
+            runner_module,
+            "run_streaming_inference",
+            return_value=SimpleNamespace(processed_minivol_count=3, written_chunk_count=2),
+        ) as inference_mock:
+            runner_module._run_inference_job(spec, context)
+
+        prepass_mock.assert_not_called()
+        self.assertIsNone(plan_mock.call_args.kwargs["occupancy"])
+        norm = inference_mock.call_args.kwargs["normalization"]
+        self.assertIsInstance(norm, runner_module.StreamingNormalizationStats)
+        self.assertEqual(norm.mean, 0.0)
+        self.assertEqual(norm.std, 1.0)
+
     def test_headless_inference_output_dtype_uses_label_range_not_segmentation_dtype(self) -> None:
         context = SimpleNamespace(
             segmentation_volume=SimpleNamespace(dtype=np.dtype(np.int32))

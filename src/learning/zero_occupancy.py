@@ -456,6 +456,7 @@ def prepare_streaming_occupancy_and_stats(
     stride: Optional[int] = None,
     margin_blocks: int = 2,
     skip_empty_regions: bool = True,
+    compute_normalization: bool = True,
 ) -> StreamingPrePassResult:
     """Run the whole pre-pass: one read -> occupancy grid + global normalization.
 
@@ -466,6 +467,11 @@ def prepare_streaming_occupancy_and_stats(
     and normalization spans only the occupied run domain.  When it is ``False``
     the scanned grid is marked fully occupied, so the planner runs every
     minivolume and normalization spans all voxels in the bbox.
+
+    With ``compute_normalization`` (the default) the global ``(mean, std)`` is
+    computed from the scanned intensity sums.  When it is ``False`` an identity
+    normalization ``(mean=0, std=1)`` is returned instead (the model then sees
+    un-normalized inputs, so the output is not meaningful — a diagnostic mode).
     """
     normalized_minivol_size = _coerce_positive_int(minivol_size, name="minivol_size")
     normalized_stride = (
@@ -490,13 +496,16 @@ def prepare_streaming_occupancy_and_stats(
         # just the occupied ones).  The intensity sums are unaffected.
         grid = replace(scan.grid, occupied=np.ones_like(scan.grid.occupied))
         scan = replace(scan, grid=grid)
-    normalization = compute_streaming_normalization_stats(
-        scan,
-        requested_bounds=requested_bounds,
-        raw_volume_shape=raw_volume_shape,
-        minivol_size=normalized_minivol_size,
-        stride=normalized_stride,
-    )
+    if compute_normalization:
+        normalization = compute_streaming_normalization_stats(
+            scan,
+            requested_bounds=requested_bounds,
+            raw_volume_shape=raw_volume_shape,
+            minivol_size=normalized_minivol_size,
+            stride=normalized_stride,
+        )
+    else:
+        normalization = StreamingNormalizationStats(mean=0.0, std=1.0, voxel_count=0)
     return StreamingPrePassResult(grid=scan.grid, normalization=normalization)
 
 
