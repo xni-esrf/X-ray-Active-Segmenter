@@ -241,6 +241,54 @@ class StreamingPrePassPlanConsistencyTest(unittest.TestCase):
         self.assertLess(plan.run_cell_count, plan.total_cell_count)
 
 
+class StreamingSkipEmptyRegionsTest(unittest.TestCase):
+    def test_skip_off_runs_all_cells_and_normalizes_over_whole_bbox(self):
+        raw_shape = (80, 80, 80)
+        bounds = ((5, 75), (5, 75), (5, 75))
+        arr = _blobby_volume(raw_shape)
+
+        skip_on = prepare_streaming_occupancy_and_stats(
+            _FakeVolume(arr), requested_bounds=bounds, raw_volume_shape=raw_shape,
+            minivol_size=MINIVOL, skip_empty_regions=True,
+        )
+        skip_off = prepare_streaming_occupancy_and_stats(
+            _FakeVolume(arr), requested_bounds=bounds, raw_volume_shape=raw_shape,
+            minivol_size=MINIVOL, skip_empty_regions=False,
+        )
+
+        # skip off marks the whole scanned grid occupied.
+        self.assertTrue(bool(np.all(skip_off.grid.occupied)))
+        self.assertFalse(bool(np.all(skip_on.grid.occupied)))
+
+        plan_on = build_streaming_inference_plan(
+            requested_bounds=bounds, raw_volume_shape=raw_shape,
+            minivol_size=MINIVOL, occupancy=skip_on.grid,
+        )
+        plan_off = build_streaming_inference_plan(
+            requested_bounds=bounds, raw_volume_shape=raw_shape,
+            minivol_size=MINIVOL, occupancy=skip_off.grid,
+        )
+        # skip on: genuine mix; skip off: every cell runs.
+        self.assertGreater(plan_on.run_cell_count, 0)
+        self.assertLess(plan_on.run_cell_count, plan_on.total_cell_count)
+        self.assertEqual(plan_off.run_cell_count, plan_off.total_cell_count)
+
+        # skip-off normalization spans strictly more voxels than skip-on, and
+        # matches a direct reduction over the (now whole-bbox) run domain.
+        self.assertGreater(
+            skip_off.normalization.voxel_count, skip_on.normalization.voxel_count
+        )
+        domain_off = _run_domain_mask_from_grid(
+            skip_off.grid, bounds=bounds, raw_shape=raw_shape,
+            minivol_size=MINIVOL, stride=STRIDE,
+        )
+        voxels_off = arr[domain_off].astype(np.float64)
+        self.assertEqual(skip_off.normalization.voxel_count, int(voxels_off.size))
+        self.assertAlmostEqual(
+            skip_off.normalization.mean, float(voxels_off.mean()), places=4
+        )
+
+
 class StreamingNormalizationFromSumsTest(unittest.TestCase):
     def test_negative_variance_rounding_is_clamped(self):
         # sum_x2/n - mean^2 slightly negative due to rounding -> std falls back to 1.

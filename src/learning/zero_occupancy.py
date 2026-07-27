@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from numbers import Integral
 from typing import Iterable, List, Optional, Sequence, Tuple
 
@@ -455,11 +455,17 @@ def prepare_streaming_occupancy_and_stats(
     minivol_size: int = DEFAULT_INFERENCE_MINIVOL_SIZE,
     stride: Optional[int] = None,
     margin_blocks: int = 2,
+    skip_empty_regions: bool = True,
 ) -> StreamingPrePassResult:
     """Run the whole pre-pass: one read -> occupancy grid + global normalization.
 
     The returned ``grid`` feeds the geometry planner; ``normalization`` feeds the
     streaming reader.
+
+    With ``skip_empty_regions`` (the default) background minivolumes are skipped
+    and normalization spans only the occupied run domain.  When it is ``False``
+    the scanned grid is marked fully occupied, so the planner runs every
+    minivolume and normalization spans all voxels in the bbox.
     """
     normalized_minivol_size = _coerce_positive_int(minivol_size, name="minivol_size")
     normalized_stride = (
@@ -478,6 +484,12 @@ def prepare_streaming_occupancy_and_stats(
         bounds=scan_bounds,
         block_size=normalized_stride,
     )
+    if not skip_empty_regions:
+        # No skipping: treat the whole scanned domain as occupied so the planner
+        # runs every minivolume and the normalization spans all bbox voxels (not
+        # just the occupied ones).  The intensity sums are unaffected.
+        grid = replace(scan.grid, occupied=np.ones_like(scan.grid.occupied))
+        scan = replace(scan, grid=grid)
     normalization = compute_streaming_normalization_stats(
         scan,
         requested_bounds=requested_bounds,

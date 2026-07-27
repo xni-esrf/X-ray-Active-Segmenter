@@ -714,6 +714,7 @@ class HeadlessRunnerTests(unittest.TestCase):
         ) as instantiate_mock, patch.object(
             runner_module,
             "prepare_streaming_occupancy_and_stats",
+            autospec=True,
             return_value=SimpleNamespace(grid=grid_sentinel, normalization=normalization),
         ) as prepass_mock, patch.object(
             runner_module,
