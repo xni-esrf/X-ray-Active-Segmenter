@@ -741,9 +741,12 @@ class HeadlessRunnerTests(unittest.TestCase):
             device_ids=(0, 1),
         )
 
-        # pre-pass: occupancy + normalization over the raw volume
+        # pre-pass: occupancy + normalization over the raw volume, wrapped in a
+        # read-timing proxy that forwards get_chunk to the underlying volume
         prepass_mock.assert_called_once()
-        self.assertIs(prepass_mock.call_args.args[0], raw_volume)
+        prepass_arg = prepass_mock.call_args.args[0]
+        self.assertIsInstance(prepass_arg, runner_module._ReadTimingVolume)
+        self.assertIs(prepass_arg._inner, raw_volume)
         self.assertEqual(
             prepass_mock.call_args.kwargs["requested_bounds"], ((0, 1), (0, 2), (0, 2))
         )

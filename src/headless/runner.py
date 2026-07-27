@@ -4,6 +4,7 @@ import argparse
 import logging
 from pathlib import Path
 import sys
+import time
 from typing import Optional, Sequence, Tuple
 
 import numpy as np
@@ -347,6 +348,29 @@ def _run_training_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) -> 
     )
 
 
+class _ReadTimingVolume:
+    """Wraps a volume to time ``get_chunk`` calls during the pre-pass.
+
+    All other attributes/methods forward to the wrapped volume, so it is a
+    transparent stand-in wherever only ``get_chunk`` (and metadata) is used.
+    """
+
+    def __init__(self, inner: object) -> None:
+        self._inner = inner
+        self.read_seconds = 0.0
+        self.calls = 0
+
+    def get_chunk(self, zyx_slices):
+        start = time.perf_counter()
+        chunk = self._inner.get_chunk(zyx_slices)
+        self.read_seconds += time.perf_counter() - start
+        self.calls += 1
+        return chunk
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._inner, name)
+
+
 def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) -> None:
     if spec.input_checkpoint_path is None:
         raise ValueError("Inference jobs require input_checkpoint_path.")
@@ -376,10 +400,14 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
     background_label = _assert_streaming_background_label(label_values)
     output_dtype = _headless_inference_output_dtype(label_values, context=None)
 
+    model_load_start = time.perf_counter()
     runtime = instantiate_model_runtime_from_checkpoint(
         checkpoint_path=spec.input_checkpoint_path,
         num_classes=int(checkpoint_preconditions.num_classes),
         device_ids=tuple(checkpoint_preconditions.device_ids),
+    )
+    LOGGER.info(
+        "Model instantiation: wall=%.2fs", time.perf_counter() - model_load_start
     )
 
     inference_box = inference_boxes[0]
@@ -400,12 +428,22 @@ def _run_inference_job(spec: HeadlessJobSpec, context: _HeadlessInputContext) ->
         int(spec.training_parameters.inference_batch_size),
     )
 
+    # Time the pre-pass (a full-volume occupancy + intensity scan before the
+    # streaming loop): a timing proxy isolates its disk read time from wall time.
+    prepass_volume = _ReadTimingVolume(context.raw_volume)
+    prepass_start = time.perf_counter()
     prepass = prepare_streaming_occupancy_and_stats(
-        context.raw_volume,
+        prepass_volume,
         requested_bounds=requested_bounds,
         raw_volume_shape=raw_volume_shape,
         minivol_size=DEFAULT_INFERENCE_MINIVOL_SIZE,
         skip_empty_regions=skip_empty_regions,
+    )
+    LOGGER.info(
+        "Pre-pass (occupancy+stats): wall=%.2fs read=%.2fs get_chunk_calls=%d",
+        time.perf_counter() - prepass_start,
+        prepass_volume.read_seconds,
+        prepass_volume.calls,
     )
     LOGGER.info(
         "Streaming normalization: mean=%.6g std=%.6g domain_voxels=%d",

@@ -24,6 +24,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import time
 from queue import Empty, Full, Queue
 from threading import Event, Lock, Thread
 from typing import Callable, Optional, Protocol, Sequence, Tuple
@@ -102,6 +103,13 @@ class _StreamingAccumulator:
         self._processed = 0
         self._events_upto = -1
 
+        # Diagnostic timers (seconds).  Written on the accumulator worker thread;
+        # read cross-thread only for logging (a stale value is harmless).
+        self.stat_batches = 0
+        self.stat_accumulate_seconds = 0.0
+        self.stat_finalize_seconds = 0.0
+        self.stat_write_seconds = 0.0
+
     def process_batch(
         self, cells: Sequence, logits: np.ndarray, last_index: int
     ) -> None:
@@ -110,11 +118,14 @@ class _StreamingAccumulator:
         ``cells`` are the run cells of the batch (in raster order); ``logits`` is
         the ``[B, C, m, m, m]`` array returned by the model forward.
         """
+        t0 = time.perf_counter()
         for index_in_batch, cell in enumerate(cells):
             self._accumulate(
                 cell, logits[index_in_batch].astype(np.float32, copy=False)
             )
+        self.stat_accumulate_seconds += time.perf_counter() - t0
         self._processed += len(cells)
+        self.stat_batches += 1
         self._drain_events(int(last_index))
 
     def finish(self) -> Tuple[int, int]:
@@ -184,6 +195,7 @@ class _StreamingAccumulator:
             # No covering cell ran: the block is pure background and stays at the
             # writer's fill value (label_values[0]).
             return
+        t0 = time.perf_counter()
         channel = np.argmax(buffer, axis=0)
         labels = self._label_lookup[channel]
         chunk = self._plan.chunks[block.chunk_id]
@@ -197,6 +209,7 @@ class _StreamingAccumulator:
             self._open_chunks[block.chunk_id] = chunk_buffer
         sic = block.slices_in_chunk
         chunk_buffer[sic[0], sic[1], sic[2]] = labels
+        self.stat_finalize_seconds += time.perf_counter() - t0
 
     def _flush_chunk(self, chunk_id: int) -> None:
         chunk = self._plan.chunks[chunk_id]
@@ -210,7 +223,9 @@ class _StreamingAccumulator:
                 self._fill_value,
                 dtype=self._output_dtype_np,
             )
+        t0 = time.perf_counter()
         self._writer.write_chunk(chunk_buffer, chunk_slices=chunk.chunk_slices)
+        self.stat_write_seconds += time.perf_counter() - t0
         self._written += 1
         if self._progress_callback is not None:
             self._progress_callback(self._written, self._total_data_chunks)
@@ -258,6 +273,9 @@ class _AsyncStreamingAccumulator:
         self._result: Optional[Tuple[int, int]] = None
         self._lock = Lock()
         self._closed = False
+        # Time the worker spends idle waiting for batches; high => accumulation
+        # is not the bottleneck (the GPU can't feed it fast enough).
+        self.stat_get_wait_seconds = 0.0
         self._worker = Thread(
             target=self._run,
             name="xray-streaming-accumulator",
@@ -299,7 +317,9 @@ class _AsyncStreamingAccumulator:
 
     def _run(self) -> None:
         while True:
+            t0 = time.perf_counter()
             job = self._queue.get()
+            self.stat_get_wait_seconds += time.perf_counter() - t0
             try:
                 if job is _STREAMING_ACCUMULATOR_ABORT:
                     return
@@ -366,6 +386,12 @@ class _AsyncBatchReader:
         self._lock = Lock()
         self._closed = Event()
         self._put_timeout = 0.2
+        # Diagnostic timers (seconds).  ``put_wait`` is time blocked on a full
+        # queue: high => the reader outruns the GPU (reads are not the
+        # bottleneck).
+        self.stat_batches = 0
+        self.stat_read_seconds = 0.0
+        self.stat_put_wait_seconds = 0.0
         self._worker = Thread(
             target=self._run,
             name="xray-streaming-reader",
@@ -402,8 +428,14 @@ class _AsyncBatchReader:
             for cells in self._batches:
                 if self._closed.is_set():
                     return
+                t0 = time.perf_counter()
                 input_batch = self._read_batch(cells)
-                if not self._put((cells, input_batch, int(cells[-1].index))):
+                t1 = time.perf_counter()
+                delivered = self._put((cells, input_batch, int(cells[-1].index)))
+                self.stat_read_seconds += t1 - t0
+                self.stat_put_wait_seconds += time.perf_counter() - t1
+                self.stat_batches += 1
+                if not delivered:
                     return  # closed mid-put during teardown
         except BaseException as exc:  # noqa: BLE001 - surfaced to consumer
             with self._lock:
@@ -506,21 +538,62 @@ def run_streaming_inference(
         for start in range(0, len(run_cells), batch_capacity)
     ]
 
+    # Split of the reader's work: disk I/O (get_chunk) vs CPU normalize+stack.
+    # Written on the reader thread, read cross-thread for logging (benign).
+    read_split = {"io": 0.0, "normalize": 0.0}
+    mean32 = np.float32(mean)
+    std32 = np.float32(std)
+
     def read_batch(cells: Sequence) -> np.ndarray:
-        return np.stack(
-            [
-                _read_and_normalize(raw_volume, cell.extraction, minivol_size, mean, std)
-                for cell in cells
-            ],
-            axis=0,
-        )
+        minivols = []
+        io_seconds = 0.0
+        normalize_seconds = 0.0
+        for cell in cells:
+            r0 = time.perf_counter()
+            extracted = _extract_minivol(raw_volume, cell.extraction, minivol_size)
+            r1 = time.perf_counter()
+            minivols.append((extracted.astype(np.float32, copy=False) - mean32) / std32)
+            io_seconds += r1 - r0
+            normalize_seconds += time.perf_counter() - r1
+        r2 = time.perf_counter()
+        stacked = np.stack(minivols, axis=0)
+        read_split["io"] += io_seconds
+        read_split["normalize"] += normalize_seconds + (time.perf_counter() - r2)
+        return stacked
 
     reader = _AsyncBatchReader(batches, read_batch, max_queue_size=read_prefetch_size)
+
+    # Diagnostic timers for the GPU (main) thread; the reader and accumulator
+    # keep their own.  Together they localize the bottleneck: high main.read_wait
+    # => reads starve the GPU; high main.submit_wait => accumulation/write is the
+    # long pole; forward dominating with low waits => GPU-bound (then the
+    # forward h2d/compute/d2h split says which part).
+    read_wait_s = 0.0
+    forward_s = 0.0
+    submit_wait_s = 0.0
+    batches_done = 0
+    total_batches = len(batches)
+    # Progress logging is time-based (not count-based) so a run stopped early
+    # still leaves several timing lines on disk regardless of total size.
+    log_interval_s = 30.0
+    forward_stats = getattr(forward_minivol_batch, "timing_stats", None)
+    wall_start = time.perf_counter()
+    last_log_wall = wall_start
     try:
-        for cells, input_batch, last_index in reader:
+        reader_iter = iter(reader)
+        while True:
+            wait0 = time.perf_counter()
+            try:
+                item = next(reader_iter)
+            except StopIteration:
+                break
+            read_wait_s += time.perf_counter() - wait0
+            cells, input_batch, last_index = item
             if should_stop is not None and should_stop():
                 raise StreamingInferenceStopRequested()
+            fwd0 = time.perf_counter()
             logits = np.asarray(forward_minivol_batch(input_batch))
+            forward_s += time.perf_counter() - fwd0
             expected = (
                 len(cells),
                 num_classes,
@@ -532,7 +605,19 @@ def run_streaming_inference(
                 raise ValueError(
                     f"forward_minivol_batch must return {expected}; got {logits.shape}"
                 )
+            sub0 = time.perf_counter()
             sink.submit(cells, logits, last_index)
+            submit_wait_s += time.perf_counter() - sub0
+            batches_done += 1
+            now = time.perf_counter()
+            if now - last_log_wall >= log_interval_s:
+                _log_streaming_timing(
+                    "progress", batches_done, total_batches,
+                    now - wall_start,
+                    read_wait_s, forward_s, submit_wait_s,
+                    reader, accumulator, sink, read_split, forward_stats,
+                )
+                last_log_wall = now
         processed, written = sink.finish()
     finally:
         # On a stop request or any producer/worker error, stop reading ahead and
@@ -540,6 +625,12 @@ def run_streaming_inference(
         # no-op joins.
         reader.close()
         sink.close()
+        _log_streaming_timing(
+            "final", batches_done, total_batches,
+            time.perf_counter() - wall_start,
+            read_wait_s, forward_s, submit_wait_s,
+            reader, accumulator, sink, read_split, forward_stats,
+        )
 
     LOGGER.info(
         "Streaming inference completed: processed_minivols=%d written_chunks=%d/%d",
@@ -554,6 +645,69 @@ def run_streaming_inference(
     )
 
 
+def _fmt_stage(total_seconds: float, count: int) -> str:
+    per_ms = (total_seconds / count * 1000.0) if count else 0.0
+    return f"{total_seconds:.2f}s ({per_ms:.1f}ms/b)"
+
+
+def _log_streaming_timing(
+    phase: str,
+    batches_done: int,
+    total_batches: int,
+    wall_seconds: float,
+    read_wait_s: float,
+    forward_s: float,
+    submit_wait_s: float,
+    reader: "_AsyncBatchReader",
+    accumulator: "_StreamingAccumulator",
+    sink: "_AsyncStreamingAccumulator",
+    read_split: dict,
+    forward_stats: Optional[dict],
+) -> None:
+    """Emit one consolidated per-stage timing line for bottleneck diagnosis.
+
+    Cross-thread counters (reader/accumulator/sink) are read without locking; a
+    slightly stale value in a diagnostic log is harmless.
+    """
+    main_n = max(1, batches_done)
+    reader_n = reader.stat_batches
+    parts = [
+        f"main.read_wait={_fmt_stage(read_wait_s, main_n)}",
+        f"main.forward={_fmt_stage(forward_s, main_n)}",
+        f"main.submit_wait={_fmt_stage(submit_wait_s, main_n)}",
+        f"reader.read={_fmt_stage(reader.stat_read_seconds, reader_n)}",
+        f"reader.read_io={_fmt_stage(read_split['io'], reader_n)}",
+        f"reader.normalize={_fmt_stage(read_split['normalize'], reader_n)}",
+        f"reader.put_wait={_fmt_stage(reader.stat_put_wait_seconds, reader_n)}",
+        f"acc.accumulate="
+        f"{_fmt_stage(accumulator.stat_accumulate_seconds, accumulator.stat_batches)}",
+        f"acc.finalize="
+        f"{_fmt_stage(accumulator.stat_finalize_seconds, accumulator.stat_batches)}",
+        f"acc.write={_fmt_stage(accumulator.stat_write_seconds, accumulator.stat_batches)}",
+        f"acc.get_wait="
+        f"{_fmt_stage(sink.stat_get_wait_seconds, accumulator.stat_batches)}",
+    ]
+    if forward_stats and int(forward_stats.get("count", 0)) > 0:
+        count = int(forward_stats["count"])
+        parts.append(f"fwd.h2d={_fmt_stage(float(forward_stats['h2d']), count)}")
+        parts.append(f"fwd.compute={_fmt_stage(float(forward_stats['compute']), count)}")
+        parts.append(f"fwd.d2h={_fmt_stage(float(forward_stats['d2h']), count)}")
+        mem = forward_stats.get("max_mem_bytes") or {}
+        if mem:
+            mem_str = " ".join(
+                f"cuda:{dev}={mem[dev] / (1024 * 1024):.0f}MB" for dev in sorted(mem)
+            )
+            parts.append(f"fwd.max_mem=[{mem_str}]")
+    LOGGER.info(
+        "Streaming timing (%s) %d/%d wall=%.2fs | %s",
+        phase,
+        batches_done,
+        total_batches,
+        wall_seconds,
+        "  ".join(parts),
+    )
+
+
 def build_torch_minivol_forward(
     model_runtime: object,
     *,
@@ -565,25 +719,91 @@ def build_torch_minivol_forward(
     Adds the channel dim, moves the batch to the model device (float16 on CUDA),
     runs the forward under ``no_grad`` (and bfloat16 autocast on CUDA), and
     returns float32 CPU class scores.  Torch is imported lazily.
+
+    For bottleneck troubleshooting the returned callable carries a
+    ``timing_stats`` dict accumulating per-batch H2D / compute / D2H seconds
+    (CUDA events on GPU, wall-clock on CPU) plus per-device peak memory; the
+    executor folds these into its consolidated timing log.
     """
     import torch
 
     model = getattr(model_runtime, "model", model_runtime)
     resolved = _resolve_torch_device(model_runtime, model, device, torch)
     input_dtype = torch.float16 if resolved.type == "cuda" else torch.float32
+    on_cuda = resolved.type == "cuda"
 
-    def forward(batch: np.ndarray) -> np.ndarray:
+    is_data_parallel = isinstance(model, torch.nn.DataParallel)
+    dp_device_ids = [int(d) for d in (getattr(model, "device_ids", None) or [])]
+    if on_cuda and not dp_device_ids and resolved.index is not None:
+        mem_devices = [int(resolved.index)]
+    else:
+        mem_devices = list(dp_device_ids)
+    LOGGER.info(
+        "Torch forward: device=%s input_dtype=%s autocast=%s data_parallel=%s "
+        "device_ids=%s cuda_device_count=%d torch=%s",
+        str(resolved),
+        str(input_dtype).replace("torch.", ""),
+        bool(autocast) and on_cuda,
+        is_data_parallel,
+        dp_device_ids,
+        int(torch.cuda.device_count()) if on_cuda else 0,
+        torch.__version__,
+    )
+
+    stats: dict = {
+        "h2d": 0.0,
+        "compute": 0.0,
+        "d2h": 0.0,
+        "count": 0,
+        "max_mem_bytes": {},
+    }
+
+    def _forward_cuda(batch: np.ndarray) -> np.ndarray:
         with torch.no_grad():
+            ev_start = torch.cuda.Event(enable_timing=True)
+            ev_h2d = torch.cuda.Event(enable_timing=True)
+            ev_compute = torch.cuda.Event(enable_timing=True)
+            ev_d2h = torch.cuda.Event(enable_timing=True)
+            ev_start.record()
             tensor = torch.from_numpy(np.ascontiguousarray(batch, dtype=np.float32))
             tensor = tensor.to(device=resolved, dtype=input_dtype).unsqueeze(1)
+            ev_h2d.record()
             with torch.autocast(
-                device_type=resolved.type,
-                enabled=bool(autocast) and resolved.type == "cuda",
-                dtype=torch.bfloat16,
+                device_type="cuda", enabled=bool(autocast), dtype=torch.bfloat16
             ):
                 output = model(tensor)
-            return output.detach().to(dtype=torch.float32).cpu().numpy()
+            ev_compute.record()
+            host = output.detach().to(dtype=torch.float32).cpu().numpy()
+            ev_d2h.record()
+            torch.cuda.synchronize(resolved)
+            # elapsed_time measures device time between stream markers, so the
+            # copy/compute split is clean even without host syncs between them.
+            stats["h2d"] += ev_start.elapsed_time(ev_h2d) / 1000.0
+            stats["compute"] += ev_h2d.elapsed_time(ev_compute) / 1000.0
+            stats["d2h"] += ev_compute.elapsed_time(ev_d2h) / 1000.0
+            stats["count"] += 1
+            for dev in mem_devices:
+                stats["max_mem_bytes"][dev] = int(torch.cuda.max_memory_allocated(dev))
+            return host
 
+    def _forward_cpu(batch: np.ndarray) -> np.ndarray:
+        with torch.no_grad():
+            t0 = time.perf_counter()
+            tensor = torch.from_numpy(np.ascontiguousarray(batch, dtype=np.float32))
+            tensor = tensor.to(device=resolved, dtype=input_dtype).unsqueeze(1)
+            t1 = time.perf_counter()
+            output = model(tensor)
+            t2 = time.perf_counter()
+            host = output.detach().to(dtype=torch.float32).cpu().numpy()
+            t3 = time.perf_counter()
+            stats["h2d"] += t1 - t0
+            stats["compute"] += t2 - t1
+            stats["d2h"] += t3 - t2
+            stats["count"] += 1
+            return host
+
+    forward = _forward_cuda if on_cuda else _forward_cpu
+    forward.timing_stats = stats
     return forward
 
 
@@ -599,18 +819,6 @@ def _resolve_torch_device(model_runtime, model, device, torch):
         return next(model.parameters()).device
     except StopIteration:
         return torch.device("cpu")
-
-
-def _read_and_normalize(
-    raw_volume: object,
-    extraction: MinivolExtractionPlan,
-    minivol_size: int,
-    mean: float,
-    std: float,
-) -> np.ndarray:
-    extracted = _extract_minivol(raw_volume, extraction, minivol_size)
-    normalized = (extracted.astype(np.float32, copy=False) - np.float32(mean)) / np.float32(std)
-    return normalized
 
 
 def _extract_minivol(
