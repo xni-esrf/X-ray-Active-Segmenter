@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 import unittest
 
 import numpy as np
@@ -42,6 +43,44 @@ class _ArrayWriter:
         self.array[chunk_slices] = array
 
 
+class _RaisingWriter:
+    """Writer whose first ``write_chunk`` raises, to test error propagation."""
+
+    def __init__(self, message="boom write") -> None:
+        self.message = message
+        self.calls = 0
+
+    def write_chunk(self, array, *, chunk_slices):
+        self.calls += 1
+        raise RuntimeError(self.message)
+
+
+def _call_with_timeout(fn, timeout=15.0):
+    """Run ``fn`` on a worker thread; fail on hang, else return/re-raise.
+
+    Guards against a deadlock in the accumulation worker silently turning into a
+    hung process: a stuck worker surfaces as an explicit AssertionError.
+    """
+    box: dict = {}
+
+    def run():
+        try:
+            box["value"] = fn()
+        except BaseException as exc:  # noqa: BLE001 - re-raised on caller thread
+            box["error"] = exc
+
+    worker = threading.Thread(target=run, daemon=True)
+    worker.start()
+    worker.join(timeout)
+    if worker.is_alive():
+        raise AssertionError(
+            f"run_streaming_inference did not return within {timeout}s (deadlock)"
+        )
+    if "error" in box:
+        raise box["error"]
+    return box.get("value")
+
+
 def _mock_forward(batch: np.ndarray) -> np.ndarray:
     # Deterministic, per-sample-independent, well varied across channels so the
     # argmax genuinely depends on position and value.
@@ -69,7 +108,8 @@ def _dense_reference(plan, array, *, mean, std, forward, minivol_size, label_val
     """Straightforward dense overlap-add over the bbox, respecting run flags.
 
     Accumulates run minivolumes in raster (cell) order so the per-voxel float32
-    sum order matches the streaming executor exactly.
+    sum order matches the streaming executor exactly.  Independent of the
+    executor's implementation, so it validates the accumulation worker's output.
     """
     bounds = plan.requested_bounds
     bshape = tuple(bounds[a][1] - bounds[a][0] for a in range(3))
@@ -148,19 +188,19 @@ class StreamingInferenceDenseEquivalenceTest(unittest.TestCase):
         for raw_shape, bounds in self.CONFIGS:
             with self.subTest(bounds=bounds):
                 arr = _random_volume(raw_shape, seed=hash(bounds) % 1000)
-                vol = _FakeVolume(arr)
                 plan = build_streaming_inference_plan(
                     requested_bounds=bounds,
                     raw_volume_shape=raw_shape,
                     minivol_size=MINIVOL,
                     occupancy=None,
                 )
-                norm = StreamingNormalizationStats(mean=6.0, std=3.0, voxel_count=1)
                 writer = _ArrayWriter(raw_shape, np.uint8, fill=LABEL_VALUES[0])
                 result = run_streaming_inference(
                     plan=plan,
-                    raw_volume=vol,
-                    normalization=norm,
+                    raw_volume=_FakeVolume(arr),
+                    normalization=StreamingNormalizationStats(
+                        mean=6.0, std=3.0, voxel_count=1
+                    ),
                     label_values=LABEL_VALUES,
                     output_dtype=np.uint8,
                     forward_minivol_batch=_mock_forward,
@@ -183,9 +223,9 @@ class StreamingInferenceDenseEquivalenceTest(unittest.TestCase):
         raw_shape = (80, 80, 80)
         bounds = ((5, 75), (5, 75), (5, 75))
         arr = _blobby_volume(raw_shape)
-        vol = _FakeVolume(arr)
         prepass = prepare_streaming_occupancy_and_stats(
-            vol, requested_bounds=bounds, raw_volume_shape=raw_shape, minivol_size=MINIVOL
+            _FakeVolume(arr), requested_bounds=bounds, raw_volume_shape=raw_shape,
+            minivol_size=MINIVOL,
         )
         plan = build_streaming_inference_plan(
             requested_bounds=bounds,
@@ -201,7 +241,7 @@ class StreamingInferenceDenseEquivalenceTest(unittest.TestCase):
         writer = _ArrayWriter(raw_shape, np.uint8, fill=LABEL_VALUES[0])
         run_streaming_inference(
             plan=plan,
-            raw_volume=vol,
+            raw_volume=_FakeVolume(arr),
             normalization=norm,
             label_values=LABEL_VALUES,
             output_dtype=np.uint8,
@@ -321,6 +361,38 @@ class StreamingInferenceWriteBehaviourTest(unittest.TestCase):
         )
         self.assertEqual(writer.array.dtype, np.uint16)
 
+    def test_zero_run_cell_box_writes_nothing(self):
+        # An all-background box skips every minivolume: no forwards, no writes,
+        # result counts are zero, and the store stays at the fill value.
+        raw_shape = (80, 80, 80)
+        bounds = ((5, 75), (5, 75), (5, 75))
+        arr = np.zeros(raw_shape, dtype=np.float32)
+        prepass = prepare_streaming_occupancy_and_stats(
+            _FakeVolume(arr), requested_bounds=bounds, raw_volume_shape=raw_shape,
+            minivol_size=MINIVOL,
+        )
+        plan = build_streaming_inference_plan(
+            requested_bounds=bounds, raw_volume_shape=raw_shape, minivol_size=MINIVOL,
+            occupancy=prepass.grid,
+        )
+        self.assertEqual(plan.run_cell_count, 0)
+        writer = _ArrayWriter(raw_shape, np.uint8, fill=LABEL_VALUES[0])
+        result = _call_with_timeout(
+            lambda: run_streaming_inference(
+                plan=plan,
+                raw_volume=_FakeVolume(arr),
+                normalization=prepass.normalization,
+                label_values=LABEL_VALUES,
+                output_dtype=np.uint8,
+                forward_minivol_batch=_mock_forward,
+                writer=writer,
+            )
+        )
+        self.assertEqual(result.processed_minivol_count, 0)
+        self.assertEqual(result.written_chunk_count, 0)
+        self.assertEqual(len(writer.writes), 0)
+        self.assertTrue(bool(np.all(writer.array == LABEL_VALUES[0])))
+
 
 class StreamingInferenceStopTest(unittest.TestCase):
     def test_stop_request_aborts(self):
@@ -331,17 +403,48 @@ class StreamingInferenceStopTest(unittest.TestCase):
             requested_bounds=bounds, raw_volume_shape=raw_shape, minivol_size=MINIVOL
         )
         writer = _ArrayWriter(raw_shape, np.uint8, fill=LABEL_VALUES[0])
+        # Timeout-guarded: a stop that fails to join the worker would otherwise
+        # hang the test process rather than fail it.
         with self.assertRaises(StreamingInferenceStopRequested):
-            run_streaming_inference(
-                plan=plan,
-                raw_volume=_FakeVolume(arr),
-                normalization=StreamingNormalizationStats(0.0, 1.0, 1),
-                label_values=LABEL_VALUES,
-                output_dtype=np.uint8,
-                forward_minivol_batch=_mock_forward,
-                writer=writer,
-                should_stop=lambda: True,
+            _call_with_timeout(
+                lambda: run_streaming_inference(
+                    plan=plan,
+                    raw_volume=_FakeVolume(arr),
+                    normalization=StreamingNormalizationStats(0.0, 1.0, 1),
+                    label_values=LABEL_VALUES,
+                    output_dtype=np.uint8,
+                    forward_minivol_batch=_mock_forward,
+                    writer=writer,
+                    should_stop=lambda: True,
+                )
             )
+
+
+class StreamingInferenceWorkerErrorTest(unittest.TestCase):
+    def test_worker_write_exception_propagates_without_hang(self):
+        # A writer failure happens on the accumulation worker thread; it must be
+        # re-raised on the caller thread (as a RuntimeError) and never deadlock.
+        raw_shape = (60, 60, 60)
+        bounds = ((0, 60), (0, 60), (0, 60))
+        arr = _random_volume(raw_shape, seed=5)
+        plan = build_streaming_inference_plan(
+            requested_bounds=bounds, raw_volume_shape=raw_shape, minivol_size=MINIVOL
+        )
+        writer = _RaisingWriter(message="boom write")
+        with self.assertRaises(RuntimeError) as ctx:
+            _call_with_timeout(
+                lambda: run_streaming_inference(
+                    plan=plan,
+                    raw_volume=_FakeVolume(arr),
+                    normalization=StreamingNormalizationStats(3.0, 2.0, 1),
+                    label_values=LABEL_VALUES,
+                    output_dtype=np.uint8,
+                    forward_minivol_batch=_mock_forward,
+                    writer=writer,
+                )
+            )
+        self.assertIn("boom write", str(ctx.exception))
+        self.assertGreaterEqual(writer.calls, 1)
 
 
 class TorchMinivolForwardTest(unittest.TestCase):

@@ -24,6 +24,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+from queue import Queue
+from threading import Lock, Thread
 from typing import Callable, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
@@ -56,6 +58,282 @@ class StreamingInferenceResult:
     written_chunk_count: int
 
 
+class _StreamingAccumulator:
+    """Owns all mutable accumulation state for a streaming inference run.
+
+    Batches of forwarded logits are fed in raster order via
+    :meth:`process_batch`; after the last batch, :meth:`finish` drains the
+    remaining finalize/flush events.  The class carries no threading of its own,
+    so it can be driven either inline (synchronous path) or from a single worker
+    thread (async path) with bit-identical results: a single owner processing
+    batches in order preserves the per-block accumulation sequence.
+    """
+
+    def __init__(
+        self,
+        plan: StreamingInferencePlan,
+        *,
+        label_values: Sequence[int],
+        output_dtype: object,
+        writer: StreamingChunkWriter,
+        progress_callback: Optional[Callable[[int, int], None]] = None,
+    ) -> None:
+        self._plan = plan
+        self._writer = writer
+        self._progress_callback = progress_callback
+
+        self._output_dtype_np = np.dtype(output_dtype)
+        self._label_lookup = np.asarray(
+            [int(v) for v in label_values], dtype=self._output_dtype_np
+        )
+        self.num_classes = int(self._label_lookup.shape[0])
+        if self.num_classes == 0:
+            raise ValueError("label_values must be non-empty")
+        self._fill_value = self._label_lookup[0]
+
+        self.minivol_size = int(plan.minivol_size)
+        self._hann = _hann_window_3d(self.minivol_size)
+        self._total_data_chunks = int(plan.written_chunk_count)
+
+        self._block_id_by_grid = {block.grid_index: block.id for block in plan.blocks}
+        self._open_blocks: dict = {}
+        self._open_chunks: dict = {}
+        self._written = 0
+        self._processed = 0
+        self._events_upto = -1
+
+    def process_batch(
+        self, cells: Sequence, logits: np.ndarray, last_index: int
+    ) -> None:
+        """Accumulate one forwarded batch and drain events up to ``last_index``.
+
+        ``cells`` are the run cells of the batch (in raster order); ``logits`` is
+        the ``[B, C, m, m, m]`` array returned by the model forward.
+        """
+        for index_in_batch, cell in enumerate(cells):
+            self._accumulate(
+                cell, logits[index_in_batch].astype(np.float32, copy=False)
+            )
+        self._processed += len(cells)
+        self._drain_events(int(last_index))
+
+    def finish(self) -> Tuple[int, int]:
+        """Drain all remaining events; return ``(processed, written)``."""
+        self._drain_events(self._plan.total_cell_count - 1)
+        if self._open_blocks or self._open_chunks:
+            LOGGER.warning(
+                "Streaming inference ended with %d open blocks and %d open chunks",
+                len(self._open_blocks),
+                len(self._open_chunks),
+            )
+        return int(self._processed), int(self._written)
+
+    def _accumulate(self, cell, logits: np.ndarray) -> None:
+        weighted = logits * self._hann[np.newaxis, :, :, :]
+        grid = cell.grid_index
+        start = cell.start
+        for block_z in (grid[0], grid[0] + 1):
+            for block_y in (grid[1], grid[1] + 1):
+                for block_x in (grid[2], grid[2] + 1):
+                    block_id = self._block_id_by_grid.get((block_z, block_y, block_x))
+                    if block_id is None:
+                        continue
+                    block = self._plan.blocks[block_id]
+                    write_slices = block.write_slices
+                    minivol_local = []
+                    block_local = []
+                    ok = True
+                    for axis in range(3):
+                        lo = max(int(start[axis]), int(write_slices[axis].start))
+                        hi = min(
+                            int(start[axis]) + self.minivol_size,
+                            int(write_slices[axis].stop),
+                        )
+                        if hi <= lo:
+                            ok = False
+                            break
+                        minivol_local.append(
+                            slice(lo - int(start[axis]), hi - int(start[axis]))
+                        )
+                        block_local.append(
+                            slice(
+                                lo - int(write_slices[axis].start),
+                                hi - int(write_slices[axis].start),
+                            )
+                        )
+                    if not ok:
+                        continue
+                    buffer = self._open_blocks.get(block_id)
+                    if buffer is None:
+                        write_shape = tuple(
+                            int(write_slices[axis].stop) - int(write_slices[axis].start)
+                            for axis in range(3)
+                        )
+                        buffer = np.zeros(
+                            (self.num_classes,) + write_shape, dtype=np.float32
+                        )
+                        self._open_blocks[block_id] = buffer
+                    buffer[:, block_local[0], block_local[1], block_local[2]] += weighted[
+                        :, minivol_local[0], minivol_local[1], minivol_local[2]
+                    ]
+
+    def _finalize_block(self, block_id: int) -> None:
+        block = self._plan.blocks[block_id]
+        buffer = self._open_blocks.pop(block_id, None)
+        if buffer is None:
+            # No covering cell ran: the block is pure background and stays at the
+            # writer's fill value (label_values[0]).
+            return
+        channel = np.argmax(buffer, axis=0)
+        labels = self._label_lookup[channel]
+        chunk = self._plan.chunks[block.chunk_id]
+        chunk_buffer = self._open_chunks.get(block.chunk_id)
+        if chunk_buffer is None:
+            chunk_buffer = np.full(
+                _slices_shape(chunk.chunk_slices),
+                self._fill_value,
+                dtype=self._output_dtype_np,
+            )
+            self._open_chunks[block.chunk_id] = chunk_buffer
+        sic = block.slices_in_chunk
+        chunk_buffer[sic[0], sic[1], sic[2]] = labels
+
+    def _flush_chunk(self, chunk_id: int) -> None:
+        chunk = self._plan.chunks[chunk_id]
+        chunk_buffer = self._open_chunks.pop(chunk_id, None)
+        if not chunk.has_data:
+            # Entirely background: leave the region at the store's fill value.
+            return
+        if chunk_buffer is None:
+            chunk_buffer = np.full(
+                _slices_shape(chunk.chunk_slices),
+                self._fill_value,
+                dtype=self._output_dtype_np,
+            )
+        self._writer.write_chunk(chunk_buffer, chunk_slices=chunk.chunk_slices)
+        self._written += 1
+        if self._progress_callback is not None:
+            self._progress_callback(self._written, self._total_data_chunks)
+
+    def _drain_events(self, upto_index: int) -> None:
+        for index in range(self._events_upto + 1, upto_index + 1):
+            cell = self._plan.cells[index]
+            if cell.finalizes_block_id is not None:
+                self._finalize_block(cell.finalizes_block_id)
+            for chunk_id in cell.completes_chunk_ids:
+                self._flush_chunk(chunk_id)
+        self._events_upto = upto_index
+
+
+_STREAMING_ACCUMULATOR_FINISH = object()
+_STREAMING_ACCUMULATOR_ABORT = object()
+
+
+class _AsyncStreamingAccumulator:
+    """Runs a :class:`_StreamingAccumulator` on a single background thread.
+
+    The producer thread submits forwarded batches via :meth:`submit`; a bounded
+    queue provides back-pressure, capping in-flight logits at ``max_queue_size``
+    batches.  The worker owns the accumulator exclusively and consumes batches
+    in submission (raster) order, so the output is bit-identical to driving the
+    accumulator inline.  Exceptions raised inside the worker are captured and
+    re-raised on the producer thread at the next :meth:`submit`/:meth:`finish`.
+
+    :meth:`finish` drains all queued batches, finalizes the tail and returns the
+    ``(processed, written)`` counts; :meth:`close` aborts without finalizing (for
+    stop requests and error unwinding) and never raises.  Note that any
+    ``progress_callback`` held by the inner accumulator fires on the worker
+    thread in this mode.
+    """
+
+    def __init__(
+        self,
+        accumulator: "_StreamingAccumulator",
+        *,
+        max_queue_size: int = 2,
+    ) -> None:
+        self._inner = accumulator
+        self._queue: "Queue[object]" = Queue(maxsize=max(1, int(max_queue_size)))
+        self._error: Optional[BaseException] = None
+        self._result: Optional[Tuple[int, int]] = None
+        self._lock = Lock()
+        self._closed = False
+        self._worker = Thread(
+            target=self._run,
+            name="xray-streaming-accumulator",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def submit(self, cells: Sequence, logits: np.ndarray, last_index: int) -> None:
+        """Hand one forwarded batch to the worker (blocks if the queue is full)."""
+        self._raise_if_failed()
+        if self._closed:
+            raise RuntimeError("Async streaming accumulator is closed")
+        self._queue.put((cells, logits, int(last_index)))
+        self._raise_if_failed()
+
+    def finish(self) -> Tuple[int, int]:
+        """Drain queued batches, finalize the tail, return ``(processed, written)``."""
+        if not self._closed:
+            self._closed = True
+            self._queue.put(_STREAMING_ACCUMULATOR_FINISH)
+        self._worker.join()
+        self._raise_if_failed()
+        if self._result is None:
+            raise RuntimeError("Async streaming accumulator produced no result")
+        return self._result
+
+    def close(self) -> None:
+        """Abort without finalizing and join the worker.  Never raises."""
+        if not self._closed:
+            self._closed = True
+            try:
+                self._queue.put(_STREAMING_ACCUMULATOR_ABORT)
+            except Exception:
+                return
+        try:
+            self._worker.join()
+        except RuntimeError:
+            return
+
+    def _run(self) -> None:
+        while True:
+            job = self._queue.get()
+            try:
+                if job is _STREAMING_ACCUMULATOR_ABORT:
+                    return
+                if job is _STREAMING_ACCUMULATOR_FINISH:
+                    if self._error is None:
+                        try:
+                            self._result = self._inner.finish()
+                        except BaseException as exc:  # noqa: BLE001
+                            with self._lock:
+                                if self._error is None:
+                                    self._error = exc
+                    return
+                if self._error is not None:
+                    # A previous batch failed: drain the backlog without work so
+                    # the producer's next submit/finish can surface the error.
+                    continue
+                cells, logits, last_index = job
+                self._inner.process_batch(cells, logits, last_index)
+            except BaseException as exc:  # noqa: BLE001 - surfaced to producer
+                with self._lock:
+                    if self._error is None:
+                        self._error = exc
+            finally:
+                self._queue.task_done()
+
+    def _raise_if_failed(self) -> None:
+        with self._lock:
+            error = self._error
+        if error is not None:
+            raise RuntimeError(
+                f"Async streaming accumulation failed: {error}"
+            ) from error
+
+
 def run_streaming_inference(
     *,
     plan: StreamingInferencePlan,
@@ -68,31 +346,43 @@ def run_streaming_inference(
     batch_size: int = 16,
     should_stop: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
+    accumulation_queue_size: int = 2,
 ) -> StreamingInferenceResult:
     """Execute the streaming plan, writing the segmentation crop-by-chunk.
 
     ``forward_minivol_batch`` maps a ``[B, m, m, m]`` float32 batch to a
     ``[B, C, m, m, m]`` float32 array of per-voxel class scores.  ``writer`` is
     any object with ``write_chunk(array, *, chunk_slices)``.
-    """
-    output_dtype_np = np.dtype(output_dtype)
-    label_lookup = np.asarray([int(v) for v in label_values], dtype=output_dtype_np)
-    num_classes = int(label_lookup.shape[0])
-    if num_classes == 0:
-        raise ValueError("label_values must be non-empty")
-    fill_value = label_lookup[0]
 
-    minivol_size = int(plan.minivol_size)
-    hann = _hann_window_3d(minivol_size)
+    The Hann-weight/accumulate/finalize/write work runs on a single background
+    worker so it overlaps the next batch's read+forward+transfer;
+    ``accumulation_queue_size`` bounds the in-flight logits (and thus host RAM).
+    The worker consumes batches in raster order, so the output is deterministic.
+    ``progress_callback`` fires on the worker thread.
+    """
     mean = float(normalization.mean)
     std = float(normalization.std)
     if std == 0.0:
         std = 1.0
 
+    accumulator = _StreamingAccumulator(
+        plan,
+        label_values=label_values,
+        output_dtype=output_dtype,
+        writer=writer,
+        progress_callback=progress_callback,
+    )
+    minivol_size = accumulator.minivol_size
+    num_classes = accumulator.num_classes
     total_data_chunks = int(plan.written_chunk_count)
+
+    sink = _AsyncStreamingAccumulator(
+        accumulator, max_queue_size=accumulation_queue_size
+    )
+
     LOGGER.info(
         "Streaming inference: cells=%d run=%d write_blocks=%d chunks=%d "
-        "data_chunks=%d scan_axis=%d batch_size=%d",
+        "data_chunks=%d scan_axis=%d batch_size=%d queue=%d",
         plan.total_cell_count,
         plan.run_cell_count,
         plan.write_block_count,
@@ -100,96 +390,10 @@ def run_streaming_inference(
         total_data_chunks,
         plan.scan_axis,
         int(batch_size),
+        int(accumulation_queue_size),
     )
 
-    block_id_by_grid = {block.grid_index: block.id for block in plan.blocks}
-    open_blocks: dict = {}
-    open_chunks: dict = {}
-    state = {"written": 0, "processed": 0, "events_upto": -1}
     batch_capacity = max(1, int(batch_size))
-
-    def accumulate(cell, logits: np.ndarray) -> None:
-        weighted = logits * hann[np.newaxis, :, :, :]
-        grid = cell.grid_index
-        start = cell.start
-        for block_z in (grid[0], grid[0] + 1):
-            for block_y in (grid[1], grid[1] + 1):
-                for block_x in (grid[2], grid[2] + 1):
-                    block_id = block_id_by_grid.get((block_z, block_y, block_x))
-                    if block_id is None:
-                        continue
-                    block = plan.blocks[block_id]
-                    write_slices = block.write_slices
-                    minivol_local = []
-                    block_local = []
-                    ok = True
-                    for axis in range(3):
-                        lo = max(int(start[axis]), int(write_slices[axis].start))
-                        hi = min(int(start[axis]) + minivol_size, int(write_slices[axis].stop))
-                        if hi <= lo:
-                            ok = False
-                            break
-                        minivol_local.append(slice(lo - int(start[axis]), hi - int(start[axis])))
-                        block_local.append(
-                            slice(lo - int(write_slices[axis].start), hi - int(write_slices[axis].start))
-                        )
-                    if not ok:
-                        continue
-                    buffer = open_blocks.get(block_id)
-                    if buffer is None:
-                        write_shape = tuple(
-                            int(write_slices[axis].stop) - int(write_slices[axis].start)
-                            for axis in range(3)
-                        )
-                        buffer = np.zeros((num_classes,) + write_shape, dtype=np.float32)
-                        open_blocks[block_id] = buffer
-                    buffer[:, block_local[0], block_local[1], block_local[2]] += weighted[
-                        :, minivol_local[0], minivol_local[1], minivol_local[2]
-                    ]
-
-    def finalize_block(block_id: int) -> None:
-        block = plan.blocks[block_id]
-        buffer = open_blocks.pop(block_id, None)
-        if buffer is None:
-            # No covering cell ran: the block is pure background and stays at the
-            # writer's fill value (label_values[0]).
-            return
-        channel = np.argmax(buffer, axis=0)
-        labels = label_lookup[channel]
-        chunk = plan.chunks[block.chunk_id]
-        chunk_buffer = open_chunks.get(block.chunk_id)
-        if chunk_buffer is None:
-            chunk_buffer = np.full(
-                _slices_shape(chunk.chunk_slices), fill_value, dtype=output_dtype_np
-            )
-            open_chunks[block.chunk_id] = chunk_buffer
-        sic = block.slices_in_chunk
-        chunk_buffer[sic[0], sic[1], sic[2]] = labels
-
-    def flush_chunk(chunk_id: int) -> None:
-        chunk = plan.chunks[chunk_id]
-        chunk_buffer = open_chunks.pop(chunk_id, None)
-        if not chunk.has_data:
-            # Entirely background: leave the region at the store's fill value.
-            return
-        if chunk_buffer is None:
-            chunk_buffer = np.full(
-                _slices_shape(chunk.chunk_slices), fill_value, dtype=output_dtype_np
-            )
-        writer.write_chunk(chunk_buffer, chunk_slices=chunk.chunk_slices)
-        state["written"] += 1
-        if progress_callback is not None:
-            progress_callback(state["written"], total_data_chunks)
-
-    def drain_events(upto_index: int) -> None:
-        for index in range(state["events_upto"] + 1, upto_index + 1):
-            cell = plan.cells[index]
-            if cell.finalizes_block_id is not None:
-                finalize_block(cell.finalizes_block_id)
-            for chunk_id in cell.completes_chunk_ids:
-                flush_chunk(chunk_id)
-        state["events_upto"] = upto_index
-
     pending: list = []
 
     def forward_pending() -> None:
@@ -210,37 +414,33 @@ def run_streaming_inference(
             raise ValueError(
                 f"forward_minivol_batch must return {expected}; got {logits.shape}"
             )
-        for index_in_batch, cell in enumerate(pending):
-            accumulate(cell, logits[index_in_batch].astype(np.float32, copy=False))
-        state["processed"] += len(pending)
         last_index = pending[-1].index
+        sink.submit(list(pending), logits, last_index)
         pending.clear()
-        drain_events(last_index)
 
-    for cell in plan.cells:
-        if cell.run:
-            pending.append(cell)
-            if len(pending) >= batch_capacity:
-                forward_pending()
-    forward_pending()
-    drain_events(plan.total_cell_count - 1)
+    try:
+        for cell in plan.cells:
+            if cell.run:
+                pending.append(cell)
+                if len(pending) >= batch_capacity:
+                    forward_pending()
+        forward_pending()
+        processed, written = sink.finish()
+    finally:
+        # On a stop request or any producer/worker error, abort the worker
+        # without finalizing; on the normal path this is a no-op join.
+        sink.close()
 
-    if open_blocks or open_chunks:
-        LOGGER.warning(
-            "Streaming inference ended with %d open blocks and %d open chunks",
-            len(open_blocks),
-            len(open_chunks),
-        )
     LOGGER.info(
         "Streaming inference completed: processed_minivols=%d written_chunks=%d/%d",
-        state["processed"],
-        state["written"],
+        processed,
+        written,
         total_data_chunks,
     )
     return StreamingInferenceResult(
         plan=plan,
-        processed_minivol_count=int(state["processed"]),
-        written_chunk_count=int(state["written"]),
+        processed_minivol_count=processed,
+        written_chunk_count=written,
     )
 
 
