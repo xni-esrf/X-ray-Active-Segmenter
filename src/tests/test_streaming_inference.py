@@ -28,8 +28,10 @@ class _FakeVolume:
     def __init__(self, array: np.ndarray) -> None:
         self.array = np.asarray(array)
         self.chunk_shape = None
+        self.get_chunk_calls = 0
 
     def get_chunk(self, zyx_slices):
+        self.get_chunk_calls += 1
         return self.array[zyx_slices]
 
 
@@ -53,6 +55,22 @@ class _RaisingWriter:
     def write_chunk(self, array, *, chunk_slices):
         self.calls += 1
         raise RuntimeError(self.message)
+
+
+class _ReadBoom(RuntimeError):
+    """Distinctive read error, to check the original type propagates unwrapped."""
+
+
+class _RaisingVolume:
+    """Volume whose ``get_chunk`` raises, to test reader error propagation."""
+
+    def __init__(self, message="boom read") -> None:
+        self.message = message
+        self.calls = 0
+
+    def get_chunk(self, zyx_slices):
+        self.calls += 1
+        raise _ReadBoom(self.message)
 
 
 def _call_with_timeout(fn, timeout=15.0):
@@ -284,6 +302,31 @@ class StreamingInferenceDenseEquivalenceTest(unittest.TestCase):
         for other in outputs[1:]:
             np.testing.assert_array_equal(outputs[0], other)
 
+    def test_result_is_prefetch_size_invariant(self):
+        raw_shape = (80, 80, 80)
+        bounds = ((7, 73), (11, 69), (5, 75))
+        arr = _random_volume(raw_shape, seed=4)
+        outputs = []
+        for read_prefetch_size in (1, 2, 4):
+            plan = build_streaming_inference_plan(
+                requested_bounds=bounds, raw_volume_shape=raw_shape, minivol_size=MINIVOL
+            )
+            writer = _ArrayWriter(raw_shape, np.uint8, fill=LABEL_VALUES[0])
+            run_streaming_inference(
+                plan=plan,
+                raw_volume=_FakeVolume(arr),
+                normalization=StreamingNormalizationStats(4.0, 2.0, 1),
+                label_values=LABEL_VALUES,
+                output_dtype=np.uint8,
+                forward_minivol_batch=_mock_forward,
+                writer=writer,
+                batch_size=5,
+                read_prefetch_size=read_prefetch_size,
+            )
+            outputs.append(writer.array.copy())
+        for other in outputs[1:]:
+            np.testing.assert_array_equal(outputs[0], other)
+
 
 class StreamingInferenceWriteBehaviourTest(unittest.TestCase):
     def test_each_chunk_written_exactly_once(self):
@@ -377,10 +420,11 @@ class StreamingInferenceWriteBehaviourTest(unittest.TestCase):
         )
         self.assertEqual(plan.run_cell_count, 0)
         writer = _ArrayWriter(raw_shape, np.uint8, fill=LABEL_VALUES[0])
+        inference_volume = _FakeVolume(arr)
         result = _call_with_timeout(
             lambda: run_streaming_inference(
                 plan=plan,
-                raw_volume=_FakeVolume(arr),
+                raw_volume=inference_volume,
                 normalization=prepass.normalization,
                 label_values=LABEL_VALUES,
                 output_dtype=np.uint8,
@@ -392,6 +436,8 @@ class StreamingInferenceWriteBehaviourTest(unittest.TestCase):
         self.assertEqual(result.written_chunk_count, 0)
         self.assertEqual(len(writer.writes), 0)
         self.assertTrue(bool(np.all(writer.array == LABEL_VALUES[0])))
+        # the reader must not touch the volume when there is nothing to run
+        self.assertEqual(inference_volume.get_chunk_calls, 0)
 
 
 class StreamingInferenceStopTest(unittest.TestCase):
@@ -416,6 +462,38 @@ class StreamingInferenceStopTest(unittest.TestCase):
                     forward_minivol_batch=_mock_forward,
                     writer=writer,
                     should_stop=lambda: True,
+                )
+            )
+
+    def test_stop_request_midflight_aborts(self):
+        # Stop after a couple of batches (reader running ahead): must raise and
+        # join both background threads without hanging.
+        raw_shape = (80, 80, 80)
+        bounds = ((5, 75), (5, 75), (5, 75))
+        arr = _random_volume(raw_shape, seed=2)
+        plan = build_streaming_inference_plan(
+            requested_bounds=bounds, raw_volume_shape=raw_shape, minivol_size=MINIVOL
+        )
+        self.assertGreater(plan.run_cell_count, 8)  # several batches at batch_size=4
+        writer = _ArrayWriter(raw_shape, np.uint8, fill=LABEL_VALUES[0])
+        calls = {"n": 0}
+
+        def should_stop():
+            calls["n"] += 1
+            return calls["n"] > 2  # let two forwards through, then stop
+
+        with self.assertRaises(StreamingInferenceStopRequested):
+            _call_with_timeout(
+                lambda: run_streaming_inference(
+                    plan=plan,
+                    raw_volume=_FakeVolume(arr),
+                    normalization=StreamingNormalizationStats(0.0, 1.0, 1),
+                    label_values=LABEL_VALUES,
+                    output_dtype=np.uint8,
+                    forward_minivol_batch=_mock_forward,
+                    writer=writer,
+                    should_stop=should_stop,
+                    batch_size=4,
                 )
             )
 
@@ -445,6 +523,32 @@ class StreamingInferenceWorkerErrorTest(unittest.TestCase):
             )
         self.assertIn("boom write", str(ctx.exception))
         self.assertGreaterEqual(writer.calls, 1)
+
+    def test_reader_read_exception_propagates_without_hang(self):
+        # A get_chunk failure happens on the reader thread; it must be re-raised
+        # on the caller thread with its ORIGINAL type (unwrapped) and never hang.
+        raw_shape = (60, 60, 60)
+        bounds = ((0, 60), (0, 60), (0, 60))
+        plan = build_streaming_inference_plan(
+            requested_bounds=bounds, raw_volume_shape=raw_shape, minivol_size=MINIVOL
+        )
+        volume = _RaisingVolume(message="boom read")
+        writer = _ArrayWriter(raw_shape, np.uint8, fill=LABEL_VALUES[0])
+        with self.assertRaises(_ReadBoom) as ctx:
+            _call_with_timeout(
+                lambda: run_streaming_inference(
+                    plan=plan,
+                    raw_volume=volume,
+                    normalization=StreamingNormalizationStats(3.0, 2.0, 1),
+                    label_values=LABEL_VALUES,
+                    output_dtype=np.uint8,
+                    forward_minivol_batch=_mock_forward,
+                    writer=writer,
+                )
+            )
+        self.assertIn("boom read", str(ctx.exception))
+        self.assertGreaterEqual(volume.calls, 1)
+        self.assertEqual(len(writer.writes), 0)
 
 
 class TorchMinivolForwardTest(unittest.TestCase):

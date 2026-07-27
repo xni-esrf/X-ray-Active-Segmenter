@@ -24,8 +24,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
-from queue import Queue
-from threading import Lock, Thread
+from queue import Empty, Full, Queue
+from threading import Event, Lock, Thread
 from typing import Callable, Optional, Protocol, Sequence, Tuple
 
 import numpy as np
@@ -334,6 +334,107 @@ class _AsyncStreamingAccumulator:
             ) from error
 
 
+_READER_DONE = object()
+
+
+class _AsyncBatchReader:
+    """Reads and normalizes minivolume batches ahead of the GPU.
+
+    A single daemon thread iterates ``batches`` (lists of run cells in raster
+    order), builds each input batch via ``read_batch`` and enqueues it; the
+    consumer pulls ready batches by iterating this object.  The bounded queue
+    keeps the reader at most ``max_queue_size`` batches ahead, so read-ahead is
+    back-pressured (capping host RAM).  A single ordered reader means the
+    downstream accumulation order — and thus the output — is unchanged.
+
+    Read failures are captured and re-raised on the consumer thread (with their
+    original type) at the next iteration; :meth:`close` stops the read-ahead
+    promptly and never raises.
+    """
+
+    def __init__(
+        self,
+        batches: Sequence[Sequence],
+        read_batch: Callable[[Sequence], np.ndarray],
+        *,
+        max_queue_size: int = 2,
+    ) -> None:
+        self._batches = batches
+        self._read_batch = read_batch
+        self._queue: "Queue[object]" = Queue(maxsize=max(1, int(max_queue_size)))
+        self._error: Optional[BaseException] = None
+        self._lock = Lock()
+        self._closed = Event()
+        self._put_timeout = 0.2
+        self._worker = Thread(
+            target=self._run,
+            name="xray-streaming-reader",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def __iter__(self) -> "_AsyncBatchReader":
+        return self
+
+    def __next__(self):
+        item = self._queue.get()
+        if item is _READER_DONE:
+            self._raise_if_failed()
+            raise StopIteration
+        return item
+
+    def close(self) -> None:
+        """Stop reading ahead and join the reader.  Never raises."""
+        self._closed.set()
+        # Free a slot so a reader blocked in put() returns promptly.
+        try:
+            while True:
+                self._queue.get_nowait()
+        except Empty:
+            pass
+        try:
+            self._worker.join()
+        except RuntimeError:
+            return
+
+    def _run(self) -> None:
+        try:
+            for cells in self._batches:
+                if self._closed.is_set():
+                    return
+                input_batch = self._read_batch(cells)
+                if not self._put((cells, input_batch, int(cells[-1].index))):
+                    return  # closed mid-put during teardown
+        except BaseException as exc:  # noqa: BLE001 - surfaced to consumer
+            with self._lock:
+                if self._error is None:
+                    self._error = exc
+        finally:
+            # Signal end-of-stream so a waiting consumer unblocks; skipped when
+            # closed (the consumer that closed us is no longer iterating).
+            self._put(_READER_DONE)
+
+    def _put(self, item: object) -> bool:
+        """Enqueue ``item`` with back-pressure; abandon it if closed.
+
+        Returns True if delivered, False if the reader was closed first.  The
+        timed put lets :meth:`close` interrupt a full-queue wait.
+        """
+        while not self._closed.is_set():
+            try:
+                self._queue.put(item, timeout=self._put_timeout)
+                return True
+            except Full:
+                continue
+        return False
+
+    def _raise_if_failed(self) -> None:
+        with self._lock:
+            error = self._error
+        if error is not None:
+            raise error
+
+
 def run_streaming_inference(
     *,
     plan: StreamingInferencePlan,
@@ -347,6 +448,7 @@ def run_streaming_inference(
     should_stop: Optional[Callable[[], bool]] = None,
     progress_callback: Optional[Callable[[int, int], None]] = None,
     accumulation_queue_size: int = 2,
+    read_prefetch_size: int = 2,
 ) -> StreamingInferenceResult:
     """Execute the streaming plan, writing the segmentation crop-by-chunk.
 
@@ -354,11 +456,14 @@ def run_streaming_inference(
     ``[B, C, m, m, m]`` float32 array of per-voxel class scores.  ``writer`` is
     any object with ``write_chunk(array, *, chunk_slices)``.
 
-    The Hann-weight/accumulate/finalize/write work runs on a single background
-    worker so it overlaps the next batch's read+forward+transfer;
-    ``accumulation_queue_size`` bounds the in-flight logits (and thus host RAM).
-    The worker consumes batches in raster order, so the output is deterministic.
-    ``progress_callback`` fires on the worker thread.
+    Reading (``get_chunk`` + normalize + stack) runs on a background reader that
+    stays ``read_prefetch_size`` batches ahead of the GPU, and the Hann-weight/
+    accumulate/finalize/write work runs on a background accumulator so it
+    overlaps the next batch's forward+transfer.  ``read_prefetch_size`` and
+    ``accumulation_queue_size`` bound the in-flight input batches and logits
+    respectively (and thus host RAM).  Both stages preserve raster order, so the
+    output is deterministic.  ``progress_callback`` fires on the accumulator
+    worker thread.
     """
     mean = float(normalization.mean)
     std = float(normalization.std)
@@ -382,7 +487,7 @@ def run_streaming_inference(
 
     LOGGER.info(
         "Streaming inference: cells=%d run=%d write_blocks=%d chunks=%d "
-        "data_chunks=%d scan_axis=%d batch_size=%d queue=%d",
+        "data_chunks=%d scan_axis=%d batch_size=%d queue=%d read_prefetch=%d",
         plan.total_cell_count,
         plan.run_cell_count,
         plan.write_block_count,
@@ -391,44 +496,49 @@ def run_streaming_inference(
         plan.scan_axis,
         int(batch_size),
         int(accumulation_queue_size),
+        int(read_prefetch_size),
     )
 
     batch_capacity = max(1, int(batch_size))
-    pending: list = []
+    run_cells = [cell for cell in plan.cells if cell.run]
+    batches = [
+        run_cells[start : start + batch_capacity]
+        for start in range(0, len(run_cells), batch_capacity)
+    ]
 
-    def forward_pending() -> None:
-        if not pending:
-            return
-        if should_stop is not None and should_stop():
-            raise StreamingInferenceStopRequested()
-        batch = np.stack(
+    def read_batch(cells: Sequence) -> np.ndarray:
+        return np.stack(
             [
                 _read_and_normalize(raw_volume, cell.extraction, minivol_size, mean, std)
-                for cell in pending
+                for cell in cells
             ],
             axis=0,
         )
-        logits = np.asarray(forward_minivol_batch(batch))
-        expected = (len(pending), num_classes, minivol_size, minivol_size, minivol_size)
-        if logits.shape != expected:
-            raise ValueError(
-                f"forward_minivol_batch must return {expected}; got {logits.shape}"
-            )
-        last_index = pending[-1].index
-        sink.submit(list(pending), logits, last_index)
-        pending.clear()
 
+    reader = _AsyncBatchReader(batches, read_batch, max_queue_size=read_prefetch_size)
     try:
-        for cell in plan.cells:
-            if cell.run:
-                pending.append(cell)
-                if len(pending) >= batch_capacity:
-                    forward_pending()
-        forward_pending()
+        for cells, input_batch, last_index in reader:
+            if should_stop is not None and should_stop():
+                raise StreamingInferenceStopRequested()
+            logits = np.asarray(forward_minivol_batch(input_batch))
+            expected = (
+                len(cells),
+                num_classes,
+                minivol_size,
+                minivol_size,
+                minivol_size,
+            )
+            if logits.shape != expected:
+                raise ValueError(
+                    f"forward_minivol_batch must return {expected}; got {logits.shape}"
+                )
+            sink.submit(cells, logits, last_index)
         processed, written = sink.finish()
     finally:
-        # On a stop request or any producer/worker error, abort the worker
-        # without finalizing; on the normal path this is a no-op join.
+        # On a stop request or any producer/worker error, stop reading ahead and
+        # abort the accumulator without finalizing; on the normal path these are
+        # no-op joins.
+        reader.close()
         sink.close()
 
     LOGGER.info(
