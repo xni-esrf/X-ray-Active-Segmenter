@@ -692,6 +692,9 @@ def _log_streaming_timing(
         parts.append(f"fwd.h2d={_fmt_stage(float(forward_stats['h2d']), count)}")
         parts.append(f"fwd.compute={_fmt_stage(float(forward_stats['compute']), count)}")
         parts.append(f"fwd.d2h={_fmt_stage(float(forward_stats['d2h']), count)}")
+        parts.append(
+            f"fwd.host_copy={_fmt_stage(float(forward_stats.get('host_copy', 0.0)), count)}"
+        )
         mem = forward_stats.get("max_mem_bytes") or {}
         if mem:
             mem_str = " ".join(
@@ -719,12 +722,14 @@ def build_torch_minivol_forward(
     Adds the channel dim, moves the batch to the model device (float16 on CUDA),
     runs the forward under ``no_grad`` (and bfloat16 autocast on CUDA), and
     returns CPU class scores (float16 on CUDA to halve the device->host copy,
-    float32 on CPU); the accumulator upcasts to float32.  Torch is imported lazily.
+    float32 on CPU); the accumulator upcasts to float32.  On CUDA the copy lands
+    in a reused pinned host buffer (full-PCIe bandwidth) and a private copy is
+    returned so the buffer can be reused.  Torch is imported lazily.
 
     For bottleneck troubleshooting the returned callable carries a
-    ``timing_stats`` dict accumulating per-batch H2D / compute / D2H seconds
-    (CUDA events on GPU, wall-clock on CPU) plus per-device peak memory; the
-    executor folds these into its consolidated timing log.
+    ``timing_stats`` dict accumulating per-batch H2D / compute / D2H / host-copy
+    seconds (CUDA events on GPU, wall-clock on CPU) plus per-device peak memory;
+    the executor folds these into its consolidated timing log.
     """
     import torch
 
@@ -755,9 +760,20 @@ def build_torch_minivol_forward(
         "h2d": 0.0,
         "compute": 0.0,
         "d2h": 0.0,
+        "host_copy": 0.0,
         "count": 0,
         "max_mem_bytes": {},
     }
+    # Reused pinned (page-locked) host buffer for the D2H copy; (re)allocated
+    # only when the batch shape changes (i.e. once, plus the final partial batch).
+    pinned_holder: dict = {"buf": None}
+
+    def _ensure_pinned(shape):
+        buf = pinned_holder["buf"]
+        if buf is None or tuple(buf.shape) != tuple(shape):
+            buf = torch.empty(tuple(shape), dtype=torch.float16, pin_memory=True)
+            pinned_holder["buf"] = buf
+        return buf
 
     def _forward_cuda(batch: np.ndarray) -> np.ndarray:
         with torch.no_grad():
@@ -774,17 +790,27 @@ def build_torch_minivol_forward(
             ):
                 output = model(tensor)
             ev_compute.record()
-            # fp16 device->host transfer halves the copy; the accumulator
-            # upcasts to float32.  Model logits are bf16 (autocast), which fp16
-            # represents exactly in range, so this is argmax-identical.
-            host = output.detach().to(dtype=torch.float16).cpu().numpy()
+            # Copy fp16 logits into a reused pinned host buffer: pinned memory
+            # gives full-PCIe D2H bandwidth vs a pageable .cpu().  The buffer is
+            # touched only on this (main) thread; the accumulator gets a private
+            # copy below, so a single reused buffer is race-free.  Logits are bf16
+            # (autocast), which fp16 represents exactly in range -> argmax-identical.
+            host_gpu = output.detach().to(dtype=torch.float16)
+            pinned = _ensure_pinned(host_gpu.shape)
+            pinned.copy_(host_gpu, non_blocking=True)
             ev_d2h.record()
             torch.cuda.synchronize(resolved)
+            # Private copy so the pinned buffer is free to reuse for the next
+            # batch; the accumulator upcasts this fp16 array to float32.
+            host_copy_start = time.perf_counter()
+            host = pinned.numpy().copy()
+            host_copy_seconds = time.perf_counter() - host_copy_start
             # elapsed_time measures device time between stream markers, so the
             # copy/compute split is clean even without host syncs between them.
             stats["h2d"] += ev_start.elapsed_time(ev_h2d) / 1000.0
             stats["compute"] += ev_h2d.elapsed_time(ev_compute) / 1000.0
             stats["d2h"] += ev_compute.elapsed_time(ev_d2h) / 1000.0
+            stats["host_copy"] += host_copy_seconds
             stats["count"] += 1
             for dev in mem_devices:
                 stats["max_mem_bytes"][dev] = int(torch.cuda.max_memory_allocated(dev))
