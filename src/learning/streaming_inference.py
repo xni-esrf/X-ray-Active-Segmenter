@@ -718,7 +718,8 @@ def build_torch_minivol_forward(
 
     Adds the channel dim, moves the batch to the model device (float16 on CUDA),
     runs the forward under ``no_grad`` (and bfloat16 autocast on CUDA), and
-    returns float32 CPU class scores.  Torch is imported lazily.
+    returns CPU class scores (float16 on CUDA to halve the device->host copy,
+    float32 on CPU); the accumulator upcasts to float32.  Torch is imported lazily.
 
     For bottleneck troubleshooting the returned callable carries a
     ``timing_stats`` dict accumulating per-batch H2D / compute / D2H seconds
@@ -773,7 +774,10 @@ def build_torch_minivol_forward(
             ):
                 output = model(tensor)
             ev_compute.record()
-            host = output.detach().to(dtype=torch.float32).cpu().numpy()
+            # fp16 device->host transfer halves the copy; the accumulator
+            # upcasts to float32.  Model logits are bf16 (autocast), which fp16
+            # represents exactly in range, so this is argmax-identical.
+            host = output.detach().to(dtype=torch.float16).cpu().numpy()
             ev_d2h.record()
             torch.cuda.synchronize(resolved)
             # elapsed_time measures device time between stream markers, so the
