@@ -266,8 +266,13 @@ class _AsyncStreamingAccumulator:
         accumulator: "_StreamingAccumulator",
         *,
         max_queue_size: int = 2,
+        on_batch_done: Optional[Callable[[], None]] = None,
     ) -> None:
         self._inner = accumulator
+        # Called once per processed batch (after process_batch), used to return
+        # that batch's output buffer to the producer's pool.  Invoked on the
+        # error-drain path too, so a blocked producer acquire can't deadlock.
+        self._on_batch_done = on_batch_done
         self._queue: "Queue[object]" = Queue(maxsize=max(1, int(max_queue_size)))
         self._error: Optional[BaseException] = None
         self._result: Optional[Tuple[int, int]] = None
@@ -332,16 +337,21 @@ class _AsyncStreamingAccumulator:
                                 if self._error is None:
                                     self._error = exc
                     return
-                if self._error is not None:
-                    # A previous batch failed: drain the backlog without work so
-                    # the producer's next submit/finish can surface the error.
-                    continue
-                cells, logits, last_index = job
-                self._inner.process_batch(cells, logits, last_index)
-            except BaseException as exc:  # noqa: BLE001 - surfaced to producer
-                with self._lock:
+                # Data job: process it unless a previous batch already failed
+                # (then just drain).  Its output buffer is released in the finally
+                # regardless -- even on error/drain -- so the producer's buffer
+                # acquire can never deadlock waiting on a batch we skipped.
+                try:
                     if self._error is None:
-                        self._error = exc
+                        cells, logits, last_index = job
+                        self._inner.process_batch(cells, logits, last_index)
+                except BaseException as exc:  # noqa: BLE001 - surfaced to producer
+                    with self._lock:
+                        if self._error is None:
+                            self._error = exc
+                finally:
+                    if self._on_batch_done is not None:
+                        self._on_batch_done()
             finally:
                 self._queue.task_done()
 
@@ -467,6 +477,49 @@ class _AsyncBatchReader:
             raise error
 
 
+class _OutputBufferPool:
+    """Fixed pool of output buffers with FIFO lease/return across two threads.
+
+    The single producer thread calls :meth:`acquire` (blocking when no buffer is
+    free); the single consumer thread calls :meth:`release` once it has finished
+    the batch it was handed.  Because both acquire and release happen in batch
+    order, ``release`` always returns the oldest leased buffer -- i.e. the one
+    whose batch just finished.
+
+    A buffer is never handed out again until it has been released, so a leased
+    buffer can never be overwritten while still in use.  This safety holds for
+    *any* pool size >= 1; the size only affects throughput (how many batches can
+    be in flight before the producer blocks on :meth:`acquire`).
+    """
+
+    def __init__(self, buffers: Sequence) -> None:
+        buffers = list(buffers)
+        if not buffers:
+            raise ValueError("_OutputBufferPool requires at least one buffer")
+        self._free: "Queue" = Queue()
+        self._leased: "Queue" = Queue()
+        for buf in buffers:
+            self._free.put(buf)
+
+    def acquire(self) -> object:
+        """Return a free buffer, blocking until one is available."""
+        buf = self._free.get()
+        self._leased.put(buf)
+        return buf
+
+    def release(self) -> None:
+        """Return the oldest leased buffer to the free pool (FIFO)."""
+        self._free.put(self._leased.get())
+
+    @property
+    def free_count(self) -> int:
+        return self._free.qsize()
+
+    @property
+    def leased_count(self) -> int:
+        return self._leased.qsize()
+
+
 def run_streaming_inference(
     *,
     plan: StreamingInferencePlan,
@@ -513,8 +566,11 @@ def run_streaming_inference(
     num_classes = accumulator.num_classes
     total_data_chunks = int(plan.written_chunk_count)
 
+    release_output_buffer = getattr(forward_minivol_batch, "release_output_buffer", None)
     sink = _AsyncStreamingAccumulator(
-        accumulator, max_queue_size=accumulation_queue_size
+        accumulator,
+        max_queue_size=accumulation_queue_size,
+        on_batch_done=release_output_buffer,
     )
 
     LOGGER.info(
@@ -693,7 +749,7 @@ def _log_streaming_timing(
         parts.append(f"fwd.compute={_fmt_stage(float(forward_stats['compute']), count)}")
         parts.append(f"fwd.d2h={_fmt_stage(float(forward_stats['d2h']), count)}")
         parts.append(
-            f"fwd.host_copy={_fmt_stage(float(forward_stats.get('host_copy', 0.0)), count)}"
+            f"fwd.buffer_wait={_fmt_stage(float(forward_stats.get('buffer_wait', 0.0)), count)}"
         )
         mem = forward_stats.get("max_mem_bytes") or {}
         if mem:
@@ -716,18 +772,25 @@ def build_torch_minivol_forward(
     *,
     device: object = None,
     autocast: bool = True,
+    output_buffer_pool_size: int = 4,
 ) -> ForwardMinivolBatch:
     """Wrap a torch model runtime as a ``forward_minivol_batch`` callable.
 
     Adds the channel dim, moves the batch to the model device (float16 on CUDA),
     runs the forward under ``no_grad`` (and bfloat16 autocast on CUDA), and
     returns CPU class scores (float16 on CUDA to halve the device->host copy,
-    float32 on CPU); the accumulator upcasts to float32.  On CUDA the copy lands
-    in a reused pinned host buffer (full-PCIe bandwidth) and a private copy is
-    returned so the buffer can be reused.  Torch is imported lazily.
+    float32 on CPU); the accumulator upcasts to float32.
+
+    On CUDA the copy lands directly in one of a small pool of pinned host buffers
+    (full-PCIe bandwidth) and the pinned view is returned with no extra copy; the
+    returned callable exposes ``release_output_buffer`` for the accumulator to
+    return each buffer once it has finished the batch.  ``output_buffer_pool_size``
+    should be >= ``accumulation_queue_size + 2`` for smooth throughput;
+    correctness is independent of it (a leased buffer is never reused until
+    released).  Torch is imported lazily.
 
     For bottleneck troubleshooting the returned callable carries a
-    ``timing_stats`` dict accumulating per-batch H2D / compute / D2H / host-copy
+    ``timing_stats`` dict accumulating per-batch H2D / compute / D2H / buffer-wait
     seconds (CUDA events on GPU, wall-clock on CPU) plus per-device peak memory;
     the executor folds these into its consolidated timing log.
     """
@@ -760,20 +823,31 @@ def build_torch_minivol_forward(
         "h2d": 0.0,
         "compute": 0.0,
         "d2h": 0.0,
-        "host_copy": 0.0,
+        "buffer_wait": 0.0,
         "count": 0,
         "max_mem_bytes": {},
     }
-    # Reused pinned (page-locked) host buffer for the D2H copy; (re)allocated
-    # only when the batch shape changes (i.e. once, plus the final partial batch).
-    pinned_holder: dict = {"buf": None}
+    pool_size = max(1, int(output_buffer_pool_size))
+    # Pool of pinned (page-locked) host buffers, lazily allocated on the first
+    # forward to the (max) batch output shape; smaller final batches use a
+    # sub-view.  The accumulator returns each buffer via release_output_buffer.
+    pool_holder: dict = {"pool": None}
 
-    def _ensure_pinned(shape):
-        buf = pinned_holder["buf"]
-        if buf is None or tuple(buf.shape) != tuple(shape):
-            buf = torch.empty(tuple(shape), dtype=torch.float16, pin_memory=True)
-            pinned_holder["buf"] = buf
-        return buf
+    def _ensure_pool(shape):
+        pool = pool_holder["pool"]
+        if pool is None:
+            buffers = [
+                torch.empty(tuple(shape), dtype=torch.float16, pin_memory=True)
+                for _ in range(pool_size)
+            ]
+            pool = _OutputBufferPool(buffers)
+            pool_holder["pool"] = pool
+        return pool
+
+    def _release_output_buffer() -> None:
+        pool = pool_holder["pool"]
+        if pool is not None:
+            pool.release()
 
     def _forward_cuda(batch: np.ndarray) -> np.ndarray:
         with torch.no_grad():
@@ -790,31 +864,29 @@ def build_torch_minivol_forward(
             ):
                 output = model(tensor)
             ev_compute.record()
-            # Copy fp16 logits into a reused pinned host buffer: pinned memory
-            # gives full-PCIe D2H bandwidth vs a pageable .cpu().  The buffer is
-            # touched only on this (main) thread; the accumulator gets a private
-            # copy below, so a single reused buffer is race-free.  Logits are bf16
-            # (autocast), which fp16 represents exactly in range -> argmax-identical.
+            # Copy fp16 logits straight into a pooled pinned host buffer (full-PCIe
+            # bandwidth vs a pageable .cpu()).  The pinned view is handed to the
+            # accumulator directly -- no private copy -- and returned to the pool
+            # by it via release_output_buffer once the batch is processed.  Logits
+            # are bf16 (autocast); fp16 holds them exactly in range -> argmax-identical.
             host_gpu = output.detach().to(dtype=torch.float16)
-            pinned = _ensure_pinned(host_gpu.shape)
-            pinned.copy_(host_gpu, non_blocking=True)
+            pool = _ensure_pool(host_gpu.shape)
+            wait_start = time.perf_counter()
+            buf = pool.acquire()  # blocks if the accumulator hasn't freed one yet
+            stats["buffer_wait"] += time.perf_counter() - wait_start
+            view = buf[: int(host_gpu.shape[0])]
+            view.copy_(host_gpu, non_blocking=True)
             ev_d2h.record()
             torch.cuda.synchronize(resolved)
-            # Private copy so the pinned buffer is free to reuse for the next
-            # batch; the accumulator upcasts this fp16 array to float32.
-            host_copy_start = time.perf_counter()
-            host = pinned.numpy().copy()
-            host_copy_seconds = time.perf_counter() - host_copy_start
             # elapsed_time measures device time between stream markers, so the
             # copy/compute split is clean even without host syncs between them.
             stats["h2d"] += ev_start.elapsed_time(ev_h2d) / 1000.0
             stats["compute"] += ev_h2d.elapsed_time(ev_compute) / 1000.0
             stats["d2h"] += ev_compute.elapsed_time(ev_d2h) / 1000.0
-            stats["host_copy"] += host_copy_seconds
             stats["count"] += 1
             for dev in mem_devices:
                 stats["max_mem_bytes"][dev] = int(torch.cuda.max_memory_allocated(dev))
-            return host
+            return view.numpy()
 
     def _forward_cpu(batch: np.ndarray) -> np.ndarray:
         with torch.no_grad():
@@ -834,6 +906,8 @@ def build_torch_minivol_forward(
 
     forward = _forward_cuda if on_cuda else _forward_cpu
     forward.timing_stats = stats
+    if on_cuda:
+        forward.release_output_buffer = _release_output_buffer
     return forward
 
 

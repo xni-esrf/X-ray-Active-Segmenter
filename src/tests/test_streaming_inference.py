@@ -9,6 +9,8 @@ from src.learning.streaming_inference import (
     StreamingInferenceStopRequested,
     build_torch_minivol_forward,
     run_streaming_inference,
+    _AsyncStreamingAccumulator,
+    _OutputBufferPool,
     _hann_window_3d,
 )
 from src.learning.streaming_inference_plan import build_streaming_inference_plan
@@ -549,6 +551,198 @@ class StreamingInferenceWorkerErrorTest(unittest.TestCase):
         self.assertIn("boom read", str(ctx.exception))
         self.assertGreaterEqual(volume.calls, 1)
         self.assertEqual(len(writer.writes), 0)
+
+
+class _FakeInner:
+    """Duck-typed stand-in for _StreamingAccumulator for release-wiring tests."""
+
+    def __init__(self) -> None:
+        self.batches = []
+        self.finished = False
+
+    def process_batch(self, cells, logits, last_index):
+        self.batches.append(int(last_index))
+
+    def finish(self):
+        self.finished = True
+        return (len(self.batches), 0)
+
+
+class AsyncStreamingAccumulatorReleaseTest(unittest.TestCase):
+    def test_on_batch_done_called_once_per_batch_in_order(self):
+        inner = _FakeInner()
+        releases = []
+        acc = _AsyncStreamingAccumulator(
+            inner, max_queue_size=2, on_batch_done=lambda: releases.append(1)
+        )
+        for i in range(5):
+            acc.submit(["c"], None, i)
+        processed, written = _call_with_timeout(acc.finish)
+        self.assertEqual((processed, written), (5, 0))
+        self.assertEqual(inner.batches, [0, 1, 2, 3, 4])
+        self.assertTrue(inner.finished)
+        # one release per data batch, and NOT for the FINISH sentinel
+        self.assertEqual(len(releases), 5)
+
+    def test_on_batch_done_called_without_callback_is_safe(self):
+        inner = _FakeInner()
+        acc = _AsyncStreamingAccumulator(inner, max_queue_size=2, on_batch_done=None)
+        for i in range(3):
+            acc.submit(["c"], None, i)
+        processed, _ = _call_with_timeout(acc.finish)
+        self.assertEqual(processed, 3)
+
+    def test_on_batch_done_released_on_error_and_drain(self):
+        # Batch 0 blocks until batches 1 and 2 are enqueued, then raises.  The
+        # worker must release batch 0 (raise path) AND batches 1, 2 (error-drain
+        # path), so every enqueued buffer is returned and nothing deadlocks.
+        gate = threading.Event()
+        releases = []
+
+        class _GatedInner:
+            def __init__(self):
+                self.finished = False
+
+            def process_batch(self, cells, logits, last_index):
+                if int(last_index) == 0:
+                    gate.wait(3.0)
+                    raise ValueError("boom 0")
+
+            def finish(self):
+                self.finished = True
+                return (0, 0)
+
+        inner = _GatedInner()
+        acc = _AsyncStreamingAccumulator(
+            inner, max_queue_size=5, on_batch_done=lambda: releases.append(1)
+        )
+        acc.submit(["c"], None, 0)  # worker starts batch 0, blocks on the gate
+        acc.submit(["c"], None, 1)  # enqueued while the worker is busy on 0
+        acc.submit(["c"], None, 2)
+        gate.set()  # batch 0 now raises -> 1 and 2 are drained
+
+        with self.assertRaises(RuntimeError):
+            _call_with_timeout(acc.finish)
+        # every enqueued batch released its buffer (0 on raise, 1 and 2 on drain)
+        self.assertEqual(len(releases), 3)
+        self.assertFalse(inner.finished)  # finish() skipped because of the error
+
+
+class _PooledMockForward:
+    """CPU stand-in for the Level-B CUDA forward.
+
+    Returns views into an ``_OutputBufferPool`` and exposes
+    ``release_output_buffer`` -- the same contract ``build_torch_minivol_forward``
+    exposes on CUDA.  If the pipeline ever reused a buffer before the accumulator
+    finished reading it, the accumulated output would diverge from the dense
+    reference, so this exercises the full acquire -> hand-off -> process -> release
+    cycle (and the producer's blocking acquire) without a GPU.
+    """
+
+    def __init__(self, num_classes, minivol_size, batch_size, pool_size=2):
+        shape = (batch_size, num_classes) + (minivol_size,) * 3
+        buffers = [np.zeros(shape, dtype=np.float32) for _ in range(pool_size)]
+        self._pool = _OutputBufferPool(buffers)
+        self.release_output_buffer = self._pool.release
+
+    def __call__(self, batch):
+        logits = _mock_forward(batch)
+        buf = self._pool.acquire()
+        view = buf[: batch.shape[0]]
+        view[...] = logits
+        return view
+
+
+class StreamingPooledOutputBufferTest(unittest.TestCase):
+    def test_pooled_forward_release_cycle_matches_dense(self):
+        raw_shape = (80, 80, 80)
+        bounds = ((5, 75), (5, 75), (5, 75))
+        arr = _random_volume(raw_shape, seed=6)
+        plan = build_streaming_inference_plan(
+            requested_bounds=bounds, raw_volume_shape=raw_shape, minivol_size=MINIVOL
+        )
+        batch_size = 4
+        # Pool smaller than the in-flight bound (queue 2 + 2 = 4): the producer
+        # must block on acquire and depend on the accumulator's release.  A
+        # premature reuse would corrupt the output vs the dense reference.
+        forward = _PooledMockForward(NUM_CLASSES, MINIVOL, batch_size, pool_size=2)
+        writer = _ArrayWriter(raw_shape, np.uint8, fill=LABEL_VALUES[0])
+        _call_with_timeout(
+            lambda: run_streaming_inference(
+                plan=plan,
+                raw_volume=_FakeVolume(arr),
+                normalization=StreamingNormalizationStats(4.0, 2.0, 1),
+                label_values=LABEL_VALUES,
+                output_dtype=np.uint8,
+                forward_minivol_batch=forward,
+                writer=writer,
+                batch_size=batch_size,
+            ),
+            timeout=30.0,
+        )
+        dense = _dense_reference(
+            plan, arr, mean=4.0, std=2.0, forward=_mock_forward,
+            minivol_size=MINIVOL, label_values=LABEL_VALUES,
+        )
+        out = writer.array[
+            bounds[0][0] : bounds[0][1],
+            bounds[1][0] : bounds[1][1],
+            bounds[2][0] : bounds[2][1],
+        ]
+        np.testing.assert_array_equal(out, dense)
+        # every leased buffer was returned to the pool
+        self.assertEqual(forward._pool.free_count, 2)
+        self.assertEqual(forward._pool.leased_count, 0)
+
+
+class TorchPinnedPoolGpuSmokeTest(unittest.TestCase):
+    def test_pinned_pool_forward_runs_on_gpu(self):
+        import torch
+
+        if not torch.cuda.is_available():
+            self.skipTest("CUDA not available")
+
+        class _TinyNet(torch.nn.Module):
+            def __init__(self, num_classes):
+                super().__init__()
+                self.conv = torch.nn.Conv3d(1, num_classes, kernel_size=3, padding=1)
+
+            def forward(self, x):
+                return self.conv(x)
+
+        torch.manual_seed(0)
+        net = _TinyNet(NUM_CLASSES).eval().cuda()
+        runtime = type("RT", (), {"model": net})()
+        forward = build_torch_minivol_forward(
+            runtime, device="cuda:0", autocast=True, output_buffer_pool_size=3
+        )
+        self.assertTrue(hasattr(forward, "release_output_buffer"))
+
+        raw_shape = (60, 60, 60)
+        bounds = ((0, 60), (0, 60), (0, 60))
+        arr = _random_volume(raw_shape, seed=2)
+        plan = build_streaming_inference_plan(
+            requested_bounds=bounds, raw_volume_shape=raw_shape, minivol_size=MINIVOL
+        )
+        writer = _ArrayWriter(raw_shape, np.uint8, fill=LABEL_VALUES[0])
+        result = _call_with_timeout(
+            lambda: run_streaming_inference(
+                plan=plan,
+                raw_volume=_FakeVolume(arr),
+                normalization=StreamingNormalizationStats(5.0, 3.0, 1),
+                label_values=LABEL_VALUES,
+                output_dtype=np.uint8,
+                forward_minivol_batch=forward,
+                writer=writer,
+                batch_size=4,
+            ),
+            timeout=60.0,
+        )
+        # far more batches than the pool size (3) -> buffers genuinely cycled
+        self.assertEqual(result.processed_minivol_count, plan.run_cell_count)
+        self.assertGreater(plan.run_cell_count, 3 * 4)
+        self.assertTrue(set(np.unique(writer.array)).issubset(set(LABEL_VALUES)))
+        self.assertGreater(int(forward.timing_stats["count"]), 3)
 
 
 class TorchMinivolForwardTest(unittest.TestCase):
